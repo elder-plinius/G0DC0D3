@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Linux bubblewrap sandbox
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --ro-bind / / -- true
+
+      - name: Syntax check all runtime, frontend, bench, and script modules
+        run: |
+          for f in src/*.mjs public/*.js bench/*.mjs scripts/*.mjs; do
+            node --check "$f"
+          done
+
+      - name: Run full test suite
+        run: npm test
+
+      - name: Run self-optimization & overseer benchmark
+        run: npm run bench:self-opt
+
+      - name: Build & verify macOS Hardened Runtime app
+        if: runner.os == 'macOS'
+        run: npm run desktop:build

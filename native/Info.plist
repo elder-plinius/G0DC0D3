@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleName</key><string>G0DM0D3</string>
+  <key>CFBundleDisplayName</key><string>G0DM0D3</string>
+  <key>CFBundleIdentifier</key><string>local.g0dc0d3.operator</string>
+  <key>CFBundleExecutable</key><string>G0DM0D3</string>
+  <key>CFBundleIconFile</key><string>GodModeIcon</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>0.2.0</string>
+  <key>CFBundleVersion</key><string>6</string>
+  <key>NSHumanReadableCopyright</key><string>GNU AGPL-3.0 · Experimental Research Demo · Provided AS IS without warranty.</string>
+  <key>LSMinimumSystemVersion</key><string>12.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>ATSApplicationFontsPath</key><string>Fonts</string>
+  <key>NSPrincipalClass</key><string>NSApplication</string>
+  <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
+  <key>NSMicrophoneUsageDescription</key><string>Use the microphone when you choose to dictate a message.</string>
+  <key>NSSpeechRecognitionUsageDescription</key><string>Transcribe dictated drafts using Apple speech recognition. On-device recognition is preferred when available.</string>
+</dict></plist>

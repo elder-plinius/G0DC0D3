@@ -1,0 +1,6 @@
+.DS_Store
+.env
+.g0dc0d3/
+node_modules/
+*.bak
+/dist/

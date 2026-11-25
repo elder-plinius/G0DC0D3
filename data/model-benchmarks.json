@@ -1,0 +1,557 @@
+{
+  "version": 1,
+  "updatedAt": "2026-11",
+  "description": "G0DC0D3 Ultra-Plinian Mega Model Strengths Matrix. Seeded from public coding, reasoning, UI, long-context, multimodal, creative, and high-agency compliance priors. Users can customize overrides locally via Settings or ~/.g0dc0d3.",
+  "domains": [
+    "swe_coding",
+    "frontend_ui",
+    "math_reasoning",
+    "security_research",
+    "creative_writing",
+    "long_context",
+    "vision_multimodal",
+    "fast_general"
+  ],
+  "models": [
+    {
+      "id": "claude-opus-5-5",
+      "family": "Claude Opus 5.5",
+      "match": "claude[-_.]?(?:opus[-_.]?5(?:[-_.]?5)?|5(?:[-_.]?5)?[-_.]?opus|fable[-_.]?5)",
+      "compliance": 62,
+      "speed": 72,
+      "costIndex": 25,
+      "contextWindow": 256000,
+      "vision": true,
+      "domains": {
+        "swe_coding": 100,
+        "frontend_ui": 99,
+        "math_reasoning": 98,
+        "security_research": 92,
+        "creative_writing": 99,
+        "long_context": 94,
+        "vision_multimodal": 97,
+        "fast_general": 90
+      }
+    },
+    {
+      "id": "openai-gpt-6-astra",
+      "family": "GPT-6 Astra / Sol",
+      "match": "(?:openai[-_.]?)?gpt[-_.]?6(?:[._-]?[12])?[-_.]?(?:astra|sol|luna|terra)",
+      "compliance": 60,
+      "speed": 78,
+      "costIndex": 48,
+      "contextWindow": 400000,
+      "vision": true,
+      "domains": {
+        "swe_coding": 99,
+        "frontend_ui": 97,
+        "math_reasoning": 100,
+        "security_research": 91,
+        "creative_writing": 94,
+        "long_context": 96,
+        "vision_multimodal": 98,
+        "fast_general": 93
+      }
+    },
+    {
+      "id": "claude-opus-4-6",
+      "family": "Claude 4 Opus",
+      "match": "claude[-_.]?(?:opus[-_.]?4[-_.]?[5678]|4[-_.]?[5678][-_.]?opus|opus[-_.]?4\\b)",
+      "compliance": 60,
+      "speed": 66,
+      "costIndex": 25,
+      "contextWindow": 200000,
+      "vision": true,
+      "domains": {
+        "swe_coding": 98,
+        "frontend_ui": 98,
+        "math_reasoning": 95,
+        "security_research": 89,
+        "creative_writing": 98,
+        "long_context": 92,
+        "vision_multimodal": 95,
+        "fast_general": 88
+      }
+    },
+    {
+      "id": "claude-sonnet-5-5",
+      "family": "Claude Sonnet 5",
+      "match": "claude[-_.]?(?:sonnet[-_.]?5(?:[-_.]?5)?|5(?:[-_.]?5)?[-_.]?sonnet)",
+      "compliance": 64,
+      "speed": 88,
+      "costIndex": 68,
+      "contextWindow": 200000,
+      "vision": true,
+      "domains": {
+        "swe_coding": 97,
+        "frontend_ui": 98,
+        "math_reasoning": 94,
+        "security_research": 88,
+        "creative_writing": 95,
+        "long_context": 92,
+        "vision_multimodal": 95,
+        "fast_general": 95
+      }
+    },
+    {
+      "id": "claude-sonnet-4-6",
+      "family": "Claude 4 Sonnet",
+      "match": "claude[-_.]?(?:sonnet[-_.]?4[-_.]?[56]|4[-_.]?[56][-_.]?sonnet|sonnet[-_.]?4\\b|3[-_.]?7[-_.]?sonnet)",
+      "compliance": 64,
+      "speed": 88,
+      "costIndex": 70,
+      "contextWindow": 200000,
+      "vision": true,
+      "domains": {
+        "swe_coding": 96,
+        "frontend_ui": 96,
+        "math_reasoning": 91,
+        "security_research": 86,
+        "creative_writing": 94,
+        "long_context": 90,
+        "vision_multimodal": 94,
+        "fast_general": 93
+      }
+    },
+    {
+      "id": "gpt-5.4",
+      "family": "GPT-5.4 / 5.5",
+      "match": "(?:openai[-_.]?)?gpt[-_.]?5(?:[._-]?[23456])?(?:[-_.]?(?:pro|luna|terra|sol))?\\b(?!.*(?:mini|nano|codex))",
+      "compliance": 62,
+      "speed": 78,
+      "costIndex": 62,
+      "contextWindow": 400000,
+      "vision": true,
+      "domains": {
+        "swe_coding": 97,
+        "frontend_ui": 95,
+        "math_reasoning": 98,
+        "security_research": 89,
+        "creative_writing": 92,
+        "long_context": 96,
+        "vision_multimodal": 96,
+        "fast_general": 92
+      }
+    },
+    {
+      "id": "gpt-5.3-codex",
+      "family": "GPT-5 Codex",
+      "match": "(?:openai[-_.]?)?gpt[-_.]?5(?:[._-]?[23])?[-_.]?codex|\\bcodex[-_.]?1\\b",
+      "compliance": 66,
+      "speed": 82,
+      "costIndex": 68,
+      "contextWindow": 400000,
+      "vision": true,
+      "domains": {
+        "swe_coding": 98,
+        "frontend_ui": 94,
+        "math_reasoning": 95,
+        "security_research": 90,
+        "creative_writing": 84,
+        "long_context": 94,
+        "vision_multimodal": 90,
+        "fast_general": 88
+      }
+    },
+    {
+      "id": "gemini-4",
+      "family": "Gemini 4",
+      "match": "gemini[-_.]?4[-_.]?(?:carbon|argon|neon|hydrogen|pro)",
+      "compliance": 66,
+      "speed": 88,
+      "costIndex": 70,
+      "contextWindow": 1000000,
+      "vision": true,
+      "domains": {
+        "swe_coding": 97,
+        "frontend_ui": 98,
+        "math_reasoning": 98,
+        "security_research": 89,
+        "creative_writing": 93,
+        "long_context": 100,
+        "vision_multimodal": 99,
+        "fast_general": 96
+      }
+    },
+    {
+      "id": "gemini-3-pro",
+      "family": "Gemini 3 / 2.5 Pro",
+      "match": "gemini[-_.]?(?:3(?:[._-]?(?:0|1))?|2\\.5)[-_.]?pro",
+      "compliance": 66,
+      "speed": 82,
+      "costIndex": 74,
+      "contextWindow": 1000000,
+      "vision": true,
+      "domains": {
+        "swe_coding": 95,
+        "frontend_ui": 96,
+        "math_reasoning": 96,
+        "security_research": 87,
+        "creative_writing": 91,
+        "long_context": 99,
+        "vision_multimodal": 98,
+        "fast_general": 92
+      }
+    },
+    {
+      "id": "grok-4-7",
+      "family": "Grok 4.6 / 4.7 / 4.20",
+      "match": "grok[-_.]?4(?:[-_.]?(?:20|7|6|5|3))?",
+      "compliance": 84,
+      "speed": 82,
+      "costIndex": 64,
+      "contextWindow": 256000,
+      "vision": true,
+      "domains": {
+        "swe_coding": 95,
+        "frontend_ui": 92,
+        "math_reasoning": 96,
+        "security_research": 95,
+        "creative_writing": 94,
+        "long_context": 92,
+        "vision_multimodal": 92,
+        "fast_general": 93
+      }
+    },
+    {
+      "id": "o3",
+      "family": "OpenAI o3 / o4",
+      "match": "\\bo3(?:-pro)?\\b(?!-mini)|\\bo4\\b(?!-mini)",
+      "compliance": 60,
+      "speed": 58,
+      "costIndex": 64,
+      "contextWindow": 200000,
+      "vision": true,
+      "domains": {
+        "swe_coding": 95,
+        "frontend_ui": 88,
+        "math_reasoning": 99,
+        "security_research": 88,
+        "creative_writing": 84,
+        "long_context": 90,
+        "vision_multimodal": 93,
+        "fast_general": 82
+      }
+    },
+    {
+      "id": "deepseek-v4-uncensored",
+      "family": "DeepSeek V4 Uncensored",
+      "match": "deepseek[-_.]?v4.*(?:uncensored|abliterat)",
+      "compliance": 98,
+      "speed": 90,
+      "costIndex": 92,
+      "contextWindow": 131072,
+      "vision": false,
+      "domains": {
+        "swe_coding": 94,
+        "frontend_ui": 90,
+        "math_reasoning": 94,
+        "security_research": 98,
+        "creative_writing": 91,
+        "long_context": 88,
+        "vision_multimodal": 40,
+        "fast_general": 93
+      }
+    },
+    {
+      "id": "deepseek-v4-pro",
+      "family": "DeepSeek V4 Pro / Flash",
+      "match": "deepseek[-_.]?v4",
+      "compliance": 82,
+      "speed": 88,
+      "costIndex": 92,
+      "contextWindow": 262144,
+      "vision": false,
+      "domains": {
+        "swe_coding": 96,
+        "frontend_ui": 92,
+        "math_reasoning": 96,
+        "security_research": 93,
+        "creative_writing": 89,
+        "long_context": 93,
+        "vision_multimodal": 40,
+        "fast_general": 92
+      }
+    },
+    {
+      "id": "qwen-3-6-plus-uncensored",
+      "family": "Qwen 3.6 Plus Uncensored",
+      "match": "qwen[-_.]?3[-_.]?6[-_.]?plus",
+      "compliance": 97,
+      "speed": 86,
+      "costIndex": 90,
+      "contextWindow": 131072,
+      "vision": false,
+      "domains": {
+        "swe_coding": 92,
+        "frontend_ui": 90,
+        "math_reasoning": 92,
+        "security_research": 96,
+        "creative_writing": 90,
+        "long_context": 88,
+        "vision_multimodal": 40,
+        "fast_general": 91
+      }
+    },
+    {
+      "id": "qwen-4-max",
+      "family": "Qwen 4 Max / 3.8 Max",
+      "match": "qwen[-_.]?(?:4[-_.]?max|3[-_.]?8[-_.]?(?:max|2[-_.]?4t|flash)|3[-_.]?7[-_.]?(?:max|plus))",
+      "compliance": 82,
+      "speed": 84,
+      "costIndex": 88,
+      "contextWindow": 262144,
+      "vision": false,
+      "domains": {
+        "swe_coding": 95,
+        "frontend_ui": 92,
+        "math_reasoning": 95,
+        "security_research": 91,
+        "creative_writing": 90,
+        "long_context": 93,
+        "vision_multimodal": 40,
+        "fast_general": 91
+      }
+    },
+    {
+      "id": "qwen3-coder-480b",
+      "family": "Qwen 3 Coder 480B",
+      "match": "qwen[-_.]?3[-_.]?coder[-_.]?480b",
+      "compliance": 84,
+      "speed": 80,
+      "costIndex": 88,
+      "contextWindow": 262144,
+      "vision": false,
+      "domains": {
+        "swe_coding": 95,
+        "frontend_ui": 92,
+        "math_reasoning": 90,
+        "security_research": 92,
+        "creative_writing": 82,
+        "long_context": 92,
+        "vision_multimodal": 40,
+        "fast_general": 87
+      }
+    },
+    {
+      "id": "kimi-k3",
+      "family": "Kimi K3 / K2.7",
+      "match": "kimi[-_.]?(?:k3|k2)",
+      "compliance": 82,
+      "speed": 88,
+      "costIndex": 86,
+      "contextWindow": 262144,
+      "vision": false,
+      "domains": {
+        "swe_coding": 95,
+        "frontend_ui": 93,
+        "math_reasoning": 94,
+        "security_research": 90,
+        "creative_writing": 91,
+        "long_context": 94,
+        "vision_multimodal": 40,
+        "fast_general": 91
+      }
+    },
+    {
+      "id": "glm-5-3-uncensored",
+      "family": "GLM 5.3 Flash Uncensored",
+      "match": "glm[-_.]?5[-_.]?3.*uncensored|glm[-_.]?4\\.7.*heretic",
+      "compliance": 98,
+      "speed": 94,
+      "costIndex": 94,
+      "contextWindow": 131072,
+      "vision": false,
+      "domains": {
+        "swe_coding": 91,
+        "frontend_ui": 89,
+        "math_reasoning": 90,
+        "security_research": 96,
+        "creative_writing": 89,
+        "long_context": 88,
+        "vision_multimodal": 40,
+        "fast_general": 93
+      }
+    },
+    {
+      "id": "glm-5-3",
+      "family": "GLM 5.3 / 5.2 / 5",
+      "match": "glm[-_.]?(?:5|4\\.[567])",
+      "compliance": 82,
+      "speed": 92,
+      "costIndex": 92,
+      "contextWindow": 131072,
+      "vision": false,
+      "domains": {
+        "swe_coding": 91,
+        "frontend_ui": 90,
+        "math_reasoning": 90,
+        "security_research": 88,
+        "creative_writing": 88,
+        "long_context": 90,
+        "vision_multimodal": 40,
+        "fast_general": 93
+      }
+    },
+    {
+      "id": "hermes-4-405b",
+      "family": "Hermes 4 405B",
+      "match": "hermes[-_.]?4[-_.]?405b",
+      "compliance": 96,
+      "speed": 72,
+      "costIndex": 78,
+      "contextWindow": 131072,
+      "vision": false,
+      "domains": {
+        "swe_coding": 92,
+        "frontend_ui": 88,
+        "math_reasoning": 93,
+        "security_research": 97,
+        "creative_writing": 95,
+        "long_context": 88,
+        "vision_multimodal": 40,
+        "fast_general": 90
+      }
+    },
+    {
+      "id": "abliterated-large",
+      "family": "Abliterated Large",
+      "match": "abliterat(?:ion|ed)",
+      "compliance": 100,
+      "speed": 84,
+      "costIndex": 88,
+      "contextWindow": 131072,
+      "vision": false,
+      "domains": {
+        "swe_coding": 89,
+        "frontend_ui": 86,
+        "math_reasoning": 89,
+        "security_research": 97,
+        "creative_writing": 92,
+        "long_context": 86,
+        "vision_multimodal": 40,
+        "fast_general": 90
+      }
+    },
+    {
+      "id": "venice-uncensored",
+      "family": "Venice Uncensored 1.2",
+      "match": "venice[-_.]?uncensored",
+      "compliance": 100,
+      "speed": 92,
+      "costIndex": 90,
+      "contextWindow": 65536,
+      "vision": false,
+      "domains": {
+        "swe_coding": 86,
+        "frontend_ui": 85,
+        "math_reasoning": 84,
+        "security_research": 96,
+        "creative_writing": 93,
+        "long_context": 80,
+        "vision_multimodal": 35,
+        "fast_general": 90
+      }
+    },
+    {
+      "id": "gemma-4-uncensored",
+      "family": "Gemma 4 Uncensored",
+      "match": "gemma[-_.]?4[-_.]?uncensored",
+      "compliance": 99,
+      "speed": 94,
+      "costIndex": 94,
+      "contextWindow": 65536,
+      "vision": false,
+      "domains": {
+        "swe_coding": 84,
+        "frontend_ui": 83,
+        "math_reasoning": 83,
+        "security_research": 94,
+        "creative_writing": 88,
+        "long_context": 80,
+        "vision_multimodal": 40,
+        "fast_general": 90
+      }
+    },
+    {
+      "id": "deepseek-r1",
+      "family": "DeepSeek R1 / V3",
+      "match": "deepseek[-_.]?(?:r1|v3|chat)",
+      "compliance": 80,
+      "speed": 78,
+      "costIndex": 90,
+      "contextWindow": 128000,
+      "vision": false,
+      "domains": {
+        "swe_coding": 93,
+        "frontend_ui": 88,
+        "math_reasoning": 95,
+        "security_research": 90,
+        "creative_writing": 86,
+        "long_context": 88,
+        "vision_multimodal": 40,
+        "fast_general": 88
+      }
+    },
+    {
+      "id": "gemini-flash",
+      "family": "Gemini Flash",
+      "match": "gemini[-_.]?(?:3(?:[._-]\\d)?|2\\.5)[-_.]?flash",
+      "compliance": 68,
+      "speed": 98,
+      "costIndex": 96,
+      "contextWindow": 1000000,
+      "vision": true,
+      "domains": {
+        "swe_coding": 88,
+        "frontend_ui": 89,
+        "math_reasoning": 88,
+        "security_research": 80,
+        "creative_writing": 86,
+        "long_context": 96,
+        "vision_multimodal": 94,
+        "fast_general": 96
+      }
+    },
+    {
+      "id": "llama-4-maverick",
+      "family": "Llama 4",
+      "match": "llama[-_.]?4",
+      "compliance": 82,
+      "speed": 94,
+      "costIndex": 94,
+      "contextWindow": 512000,
+      "vision": true,
+      "domains": {
+        "swe_coding": 88,
+        "frontend_ui": 86,
+        "math_reasoning": 88,
+        "security_research": 86,
+        "creative_writing": 88,
+        "long_context": 94,
+        "vision_multimodal": 90,
+        "fast_general": 91
+      }
+    },
+    {
+      "id": "mistral-devstral",
+      "family": "Mistral / Devstral",
+      "match": "mistral|codestral|devstral",
+      "compliance": 86,
+      "speed": 90,
+      "costIndex": 90,
+      "contextWindow": 128000,
+      "vision": false,
+      "domains": {
+        "swe_coding": 87,
+        "frontend_ui": 84,
+        "math_reasoning": 83,
+        "security_research": 87,
+        "creative_writing": 86,
+        "long_context": 84,
+        "vision_multimodal": 40,
+        "fast_general": 88
+      }
+    }
+  ]
+}

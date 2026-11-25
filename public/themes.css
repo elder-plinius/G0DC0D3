@@ -1,0 +1,761 @@
+/* ── G0DM0D3 8-Theme Studio & Live Canvas Backdrop Engine ───────────────────── */
+#theme-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100dvh;
+  z-index: 0;
+  pointer-events: none;
+  display: none;
+}
+html[data-theme-animated="true"] #theme-canvas {
+  display: block;
+}
+#theme-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  display: none;
+}
+.app-shell {
+  position: relative;
+  z-index: 1;
+}
+
+/* Shared translucent glass layering for animated canvas themes so artwork shines through while text stays razor-sharp */
+html[data-theme-animated="true"] .app-shell,
+html[data-theme-animated="true"] .workspace {
+  background: transparent;
+}
+html[data-theme-animated="true"] .app-header {
+  background: var(--glass-header, rgba(12, 12, 16, 0.72));
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--line-subtle);
+}
+html[data-theme-animated="true"] .sidebar {
+  background: var(--glass-sidebar, rgba(10, 10, 14, 0.78));
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+html[data-theme-animated="true"] .task-workspace {
+  background: var(--glass-canvas-tint, rgba(8, 8, 12, 0.42));
+}
+html[data-theme-animated="true"] .composer-form {
+  background: var(--glass-card, rgba(18, 18, 24, 0.88));
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+html[data-theme-animated="true"] .message-user .message-body,
+html[data-theme-animated="true"] .message-assistant .message-body,
+html[data-theme-animated="true"] .message-code-block,
+html[data-theme-animated="true"] .work-group,
+html[data-theme-animated="true"] .inspector,
+html[data-theme-animated="true"] .artifact-dock {
+  background: var(--glass-card, rgba(16, 16, 22, 0.86));
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+html[data-theme-animated="true"] .message-assistant .message-body {
+  padding: 12px 16px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 12px;
+}
+.autocomplete-popup {
+  background: var(--surface-solid, var(--panel-raised));
+  border-color: var(--control-line);
+  color: var(--text);
+}
+.autocomplete-item {
+  color: var(--text);
+}
+.autocomplete-item .ac-name {
+  color: var(--text);
+}
+.autocomplete-item .ac-hint {
+  color: var(--text-secondary);
+}
+html[data-theme-animated="true"] .welcome {
+  padding: 24px 28px;
+  border-radius: 16px;
+  background: var(--glass-welcome, rgba(10, 10, 14, 0.52));
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+/* ── 1. Obsidian (Default) ─────────────────────────────────────────────────── */
+/* Uses root tokens from styles.css with zero overhead. */
+
+/* ── 2. Minimalist Noir (Calm, clean monochromatic dark studio) ────────────── */
+:root[data-theme-skin="minimal"] {
+  --bg: #0b0b0c;
+  --panel: #0f0f11;
+  --panel-raised: #161619;
+  --panel-soft: #121215;
+  --surface-solid: #141417;
+  --bg-elevated: #111114;
+  --line: #27272a;
+  --line-subtle: #1e1e22;
+  --control-line: #3f3f46;
+  --text: #fafafa;
+  --text-secondary: #d4d4d8;
+  --muted: #8b8b95;
+  --subtle: #8b8b95;
+  --code: #e4e4e7;
+  --signal: #e4e4e7;
+  --signal-surface: #1c1c20;
+  --signal-line: #3f3f46;
+  --violet: #a1a1aa;
+  --violet-dark: #27272a;
+  --lime: #d4d4d8;
+  --amber: #d4d4d8;
+  --blue: #d4d4d8;
+  --on-accent: #09090b;
+}
+:root[data-theme-skin="minimal"] .message-user .message-body {
+  background: #161619;
+  border-color: #27272a;
+}
+:root[data-theme-skin="minimal"] .composer-form {
+  box-shadow: none;
+  border-color: #2e2e33;
+}
+:root[data-theme-skin="minimal"] .ultra-switch.enabled {
+  background: #27272a;
+  border-color: #52525b;
+  color: #fafafa;
+  box-shadow: none;
+}
+
+/* ── 3. Alabaster Light ────────────────────────────────────────────────────── */
+/* Inherits :root[data-theme="light"] cleanly from styles.css & workspace.css. */
+
+/* ── 4. Dragon Realm (Animated winged dragons + molten embers) ─────────────── */
+:root[data-theme-skin="dragons"] {
+  --bg: #11090b;
+  --panel: #170c0f;
+  --panel-raised: #241216;
+  --panel-soft: #1c0f12;
+  --surface-solid: #1a0d10;
+  --bg-elevated: #140a0d;
+  --line: #49232a;
+  --line-subtle: #33171d;
+  --control-line: #7a363f;
+  --text: #fdf4e7;
+  --text-secondary: #e8cfa9;
+  --muted: #b6907e;
+  --subtle: #b6907e;
+  --code: #fde6c4;
+  --signal: #fbbf24;
+  --signal-surface: rgba(245, 158, 11, 0.14);
+  --signal-line: rgba(251, 191, 36, 0.45);
+  --violet: #f97316;
+  --violet-dark: #431814;
+  --lime: #fbbf24;
+  --red: #fb7185;
+  --amber: #f59e0b;
+  --blue: #fda4af;
+  --on-accent: #1c0b09;
+  --glass-header: rgba(20, 10, 12, 0.72);
+  --glass-sidebar: rgba(18, 9, 11, 0.78);
+  --glass-canvas-tint: rgba(14, 6, 8, 0.34);
+  --glass-card: rgba(26, 12, 15, 0.86);
+  --glass-welcome: rgba(20, 9, 11, 0.56);
+}
+:root[data-theme-skin="dragons"] .composer-form {
+  border-color: rgba(249, 115, 22, 0.48);
+  box-shadow: 0 0 28px rgba(234, 88, 12, 0.18);
+}
+:root[data-theme-skin="dragons"] .new-thread-button {
+  box-shadow: 0 0 18px rgba(245, 158, 11, 0.14);
+}
+:root[data-theme-skin="dragons"] .wordmark {
+  text-shadow: 0 0 14px rgba(249, 115, 22, 0.55);
+}
+
+/* ── 5. Psychedelic Melt (Animated liquid plasma & iridescent spectrum) ─────── */
+@keyframes g0d-psy-hue {
+  0% { filter: hue-rotate(0deg); }
+  100% { filter: hue-rotate(360deg); }
+}
+@keyframes g0d-psy-border {
+  0% { border-color: #f472b6; box-shadow: 0 0 24px rgba(244, 114, 182, 0.28); }
+  33% { border-color: #22d3ee; box-shadow: 0 0 24px rgba(34, 211, 238, 0.28); }
+  66% { border-color: #a3e635; box-shadow: 0 0 24px rgba(163, 230, 53, 0.28); }
+  100% { border-color: #f472b6; box-shadow: 0 0 24px rgba(244, 114, 182, 0.28); }
+}
+:root[data-theme-skin="psychedelic"] {
+  --bg: #0c041a;
+  --panel: #130728;
+  --panel-raised: #200d42;
+  --panel-soft: #170931;
+  --surface-solid: #14072b;
+  --bg-elevated: #0f0521;
+  --line: #6b2fa0;
+  --line-subtle: #421b6b;
+  --control-line: #c056f7;
+  --text: #fff7ff;
+  --text-secondary: #edd8ff;
+  --muted: #c9a7f5;
+  --subtle: #c9a7f5;
+  --code: #f5e6ff;
+  --signal: #00f5d4;
+  --signal-surface: rgba(0, 245, 212, 0.14);
+  --signal-line: rgba(0, 245, 212, 0.55);
+  --violet: #ff4db8;
+  --violet-dark: #4f1252;
+  --lime: #b5ff3b;
+  --red: #ff5c8a;
+  --amber: #ffd166;
+  --blue: #22d3ee;
+  --on-accent: #110324;
+  --glass-header: rgba(13, 4, 30, 0.64);
+  --glass-sidebar: rgba(12, 4, 28, 0.72);
+  --glass-canvas-tint: rgba(8, 2, 20, 0.22);
+  --glass-card: rgba(18, 7, 38, 0.80);
+  --glass-welcome: rgba(13, 4, 30, 0.46);
+}
+:root[data-theme-skin="psychedelic"] .composer-form {
+  animation: g0d-psy-border 8s linear infinite;
+  box-shadow: 0 0 28px rgba(255, 77, 184, 0.22), inset 0 1px 0 rgba(0, 245, 212, 0.22);
+}
+:root[data-theme-skin="psychedelic"] .mode-switch-tab.active {
+  border-color: rgba(0, 245, 212, 0.52);
+  box-shadow: 0 0 14px rgba(0, 245, 212, 0.22);
+}
+:root[data-theme-skin="psychedelic"] .brand-name.wordmark,
+:root[data-theme-skin="psychedelic"] #composer-ultra-label.wordmark {
+  background: linear-gradient(90deg, #ff4db8, #ffd166, #00f5d4, #a78bfa, #ff4db8);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 0 12px rgba(255, 77, 184, 0.35));
+  animation: g0d-psy-hue 7s linear infinite;
+}
+
+/* ── 6. Ultra Hacker (Matrix glyph rain + phosphor CRT scanlines) ──────────── */
+:root[data-theme-skin="hacker"] {
+  --bg: #030a05;
+  --panel: #041008;
+  --panel-raised: #081c0e;
+  --panel-soft: #06140a;
+  --surface-solid: #051209;
+  --bg-elevated: #030c06;
+  --line: #144d26;
+  --line-subtle: #0d3319;
+  --control-line: #1f7a3c;
+  --text: #d7ffe4;
+  --text-secondary: #86efac;
+  --muted: #4da86b;
+  --subtle: #4da86b;
+  --code: #00ff88;
+  --signal: #00ff88;
+  --signal-surface: rgba(0, 255, 136, 0.11);
+  --signal-line: rgba(0, 255, 136, 0.45);
+  --violet: #00ff88;
+  --violet-dark: #093018;
+  --lime: #00ff88;
+  --red: #ff5577;
+  --amber: #d9f99d;
+  --blue: #34d399;
+  --on-accent: #021208;
+  --radius: 3px;
+  --font: "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+  --display: "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+  --glass-header: rgba(3, 12, 6, 0.78);
+  --glass-sidebar: rgba(3, 11, 6, 0.82);
+  --glass-canvas-tint: rgba(2, 9, 4, 0.42);
+  --glass-card: rgba(5, 18, 9, 0.88);
+  --glass-welcome: rgba(3, 12, 6, 0.64);
+}
+:root[data-theme-skin="hacker"] #theme-overlay {
+  display: block;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(0, 255, 136, 0.03) 0px,
+    rgba(0, 255, 136, 0.03) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+}
+:root[data-theme-skin="hacker"] .composer-form,
+:root[data-theme-skin="hacker"] .new-thread-button {
+  border-color: rgba(0, 255, 136, 0.55);
+  box-shadow: 0 0 18px rgba(0, 255, 136, 0.14);
+}
+:root[data-theme-skin="hacker"] .wordmark {
+  color: #00ff88;
+  text-shadow: 0 0 10px rgba(0, 255, 136, 0.65);
+}
+
+/* ── 7. Synthwave '84 (Outrun 3D neon laser grid & sunset) ─────────────────── */
+:root[data-theme-skin="synthwave"] {
+  --bg: #0b0518;
+  --panel: #110824;
+  --panel-raised: #1b0e38;
+  --panel-soft: #150a2c;
+  --surface-solid: #130928;
+  --bg-elevated: #0e061e;
+  --line: #3e1f6e;
+  --line-subtle: #29134d;
+  --control-line: #7c3aed;
+  --text: #f5f3ff;
+  --text-secondary: #d8b4fe;
+  --muted: #a580d6;
+  --subtle: #a580d6;
+  --code: #a5f3fc;
+  --signal: #22d3ee;
+  --signal-surface: rgba(34, 211, 238, 0.13);
+  --signal-line: rgba(34, 211, 238, 0.48);
+  --violet: #f43f8e;
+  --violet-dark: #42123c;
+  --lime: #22d3ee;
+  --red: #fb7185;
+  --amber: #fbbf24;
+  --blue: #38bdf8;
+  --on-accent: #090414;
+  --glass-header: rgba(15, 7, 32, 0.72);
+  --glass-sidebar: rgba(13, 6, 28, 0.78);
+  --glass-canvas-tint: rgba(10, 4, 22, 0.32);
+  --glass-card: rgba(20, 10, 42, 0.86);
+  --glass-welcome: rgba(14, 6, 30, 0.56);
+}
+:root[data-theme-skin="synthwave"] .composer-form {
+  border-color: rgba(244, 63, 142, 0.55);
+  box-shadow: 0 0 26px rgba(244, 63, 142, 0.18), 0 0 12px rgba(34, 211, 238, 0.12);
+}
+:root[data-theme-skin="synthwave"] .wordmark {
+  color: #f43f8e;
+  text-shadow: 0 0 14px rgba(244, 63, 142, 0.65), 0 0 28px rgba(34, 211, 238, 0.35);
+}
+
+/* ── 8. Plinian Vesuvius (Rising volcanic magma sparks & ash) ──────────────── */
+:root[data-theme-skin="volcano"] {
+  --bg: #130c0a;
+  --panel: #19100d;
+  --panel-raised: #271813;
+  --panel-soft: #1f130f;
+  --surface-solid: #1c110e;
+  --bg-elevated: #150d0b;
+  --line: #4d2c20;
+  --line-subtle: #351d15;
+  --control-line: #8c4529;
+  --text: #faf2eb;
+  --text-secondary: #e7c9b3;
+  --muted: #b08a74;
+  --subtle: #b08a74;
+  --code: #fde2c8;
+  --signal: #ff6a2b;
+  --signal-surface: rgba(255, 106, 43, 0.14);
+  --signal-line: rgba(255, 106, 43, 0.48);
+  --violet: #f6c453;
+  --violet-dark: #3f2213;
+  --lime: #f6c453;
+  --red: #ff5c5c;
+  --amber: #ff9a3c;
+  --blue: #f7b267;
+  --on-accent: #1a0b06;
+  --glass-header: rgba(22, 13, 10, 0.74);
+  --glass-sidebar: rgba(19, 11, 9, 0.8);
+  --glass-canvas-tint: rgba(16, 9, 7, 0.34);
+  --glass-card: rgba(28, 16, 12, 0.86);
+  --glass-welcome: rgba(20, 12, 9, 0.58);
+}
+:root[data-theme-skin="volcano"] .composer-form {
+  border-color: rgba(255, 106, 43, 0.46);
+  box-shadow: 0 0 24px rgba(255, 106, 43, 0.16);
+}
+:root[data-theme-skin="volcano"] .wordmark {
+  text-shadow: 0 0 14px rgba(255, 106, 43, 0.5);
+}
+
+/* ── 9. Ancient Greco-Roman (Carrara marble, imperial gold & Pompeian crimson) ─ */
+:root[data-theme-skin="ancient"] {
+  --bg: #f4ede0;
+  --panel: #faf5ea;
+  --panel-raised: #ede3cf;
+  --panel-soft: #f5eee0;
+  --surface-solid: #faf5ea;
+  --bg-elevated: #efe6d4;
+  --line: #d4c3a2;
+  --line-subtle: #e3d6bc;
+  --control-line: #b99754;
+  --text: #1f1912;
+  --text-secondary: #4a3d2b;
+  --muted: #786447;
+  --subtle: #786447;
+  --code: #3a2a16;
+  --signal: #9e721f;
+  --signal-surface: rgba(176, 132, 42, 0.14);
+  --signal-line: rgba(164, 120, 36, 0.52);
+  --violet: #8c2633;
+  --violet-dark: #f2dfe2;
+  --lime: #3b6944;
+  --red: #a32638;
+  --amber: #a87414;
+  --blue: #2a5b7a;
+  --on-accent: #fffaf0;
+  --display: "Palatino", "Baskerville", "Iowan Old Style", Georgia, "Times New Roman", serif;
+  --glass-header: rgba(250, 245, 234, 0.84);
+  --glass-sidebar: rgba(246, 239, 224, 0.88);
+  --glass-canvas-tint: rgba(245, 237, 222, 0.18);
+  --glass-card: rgba(252, 248, 239, 0.92);
+  --glass-welcome: rgba(250, 245, 234, 0.68);
+}
+:root[data-theme-skin="ancient"] .app-header {
+  border-bottom: 2px solid #c9ab6b;
+  box-shadow: 0 2px 0 rgba(140, 38, 51, 0.22);
+}
+:root[data-theme-skin="ancient"] .sidebar {
+  border-right: 1px solid #cbb27c;
+  background-image: repeating-linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.22) 0px,
+    rgba(255, 255, 255, 0.22) 9px,
+    rgba(182, 154, 102, 0.06) 9px,
+    rgba(182, 154, 102, 0.06) 18px
+  );
+}
+:root[data-theme-skin="ancient"] .wordmark {
+  color: #7c5612;
+  text-shadow: 0 1px 0 rgba(255, 252, 242, 0.9), 0 2px 10px rgba(176, 132, 42, 0.26);
+}
+:root[data-theme-skin="ancient"] .welcome h1,
+:root[data-theme-skin="ancient"] .task-heading h1,
+:root[data-theme-skin="ancient"] .modal-header h2 {
+  font-family: "Palatino", "Baskerville", "Iowan Old Style", Georgia, serif;
+  letter-spacing: -0.015em;
+  color: #261c11;
+}
+:root[data-theme-skin="ancient"] .sidebar-section-title,
+:root[data-theme-skin="ancient"] .transparency-group-title {
+  font-family: "Palatino", "Baskerville", Georgia, serif;
+  letter-spacing: 0.12em;
+  color: #7a5c28;
+}
+:root[data-theme-skin="ancient"] .composer-form {
+  background: rgba(252, 248, 239, 0.94);
+  border: 1px solid #c8ab6f;
+  box-shadow:
+    inset 0 2px 0 rgba(186, 144, 58, 0.45),
+    0 10px 28px rgba(72, 52, 22, 0.12);
+}
+:root[data-theme-skin="ancient"] .composer-send {
+  background: linear-gradient(135deg, #9a2a38, #781c28);
+  color: #fff9ec;
+  border: 1px solid #b9934c;
+}
+:root[data-theme-skin="ancient"] .composer-send:hover:not(:disabled) {
+  background: linear-gradient(135deg, #b03242, #8c2230);
+}
+:root[data-theme-skin="ancient"] .button-primary {
+  background: linear-gradient(135deg, #8f2634, #6f1a26);
+  color: #fffaf0;
+  border: 1px solid #c29b4d;
+}
+:root[data-theme-skin="ancient"] .button-primary:hover:not(:disabled) {
+  background: linear-gradient(135deg, #a62f3e, #82202d);
+}
+:root[data-theme-skin="ancient"] .new-thread-button {
+  background: linear-gradient(180deg, rgba(255, 250, 238, 0.9), rgba(239, 226, 198, 0.85));
+  border-color: #bfa060;
+  color: #6b4910;
+}
+:root[data-theme-skin="ancient"] .mode-switcher {
+  background: #e9dec8;
+  border-color: #ccb381;
+}
+:root[data-theme-skin="ancient"] .mode-switch-tab.active {
+  background: #fdf9f0;
+  color: #241a0f;
+  border-color: #c2a05a;
+  box-shadow: 0 1px 3px rgba(92, 66, 24, 0.14);
+}
+:root[data-theme-skin="ancient"] .mode-switch-tab[data-app-mode="godcode"].active {
+  color: #8c2633;
+  border-color: rgba(140, 38, 51, 0.45);
+}
+:root[data-theme-skin="ancient"] .ultra-switch.enabled {
+  color: #741e29;
+  background: rgba(140, 38, 51, 0.1);
+  border-color: rgba(140, 38, 51, 0.42);
+}
+:root[data-theme-skin="ancient"] #composer-ultra-state {
+  border-color: rgba(140, 38, 51, 0.35);
+}
+:root[data-theme-skin="ancient"] .composer-option:hover,
+:root[data-theme-skin="ancient"] .godcode-launch-btn:hover {
+  background: #efe4ce;
+  border-color: #b9954d;
+  color: #1f1912;
+}
+:root[data-theme-skin="ancient"] .godcode-launch-btn,
+:root[data-theme-skin="ancient"] .composer-suggestions > button:not(.text-button) {
+  background: rgba(252, 248, 239, 0.9);
+  border-color: #d2be96;
+  color: #2c2216;
+}
+:root[data-theme-skin="ancient"] .message-user .message-body {
+  background: rgba(242, 232, 212, 0.88);
+  border: 1px solid #d4bf96;
+}
+:root[data-theme-skin="ancient"] .theme-popover,
+:root[data-theme-skin="ancient"] .modal,
+:root[data-theme-skin="ancient"] .ultra-popover {
+  background: #faf5ea;
+  border-color: #c4a464;
+  box-shadow: 0 18px 48px rgba(68, 48, 18, 0.22);
+}
+:root[data-theme-skin="ancient"] .theme-card {
+  background: #f4ecdc;
+  border-color: #d7c5a1;
+}
+:root[data-theme-skin="ancient"] .theme-card.is-active {
+  border-color: #9e721f;
+  background: #efe2c6;
+}
+:root[data-theme-skin="ancient"] .trans-pill-custom { color: #741e29; background: #f4dfe2; border-color: #c98690; }
+:root[data-theme-skin="ancient"] .trans-pill-off { color: #991b1b; background: #fee2e2; border-color: #fca5a5; }
+:root[data-theme-skin="ancient"] .wire-role-badge.role-system { color: #1d4ed8; background: #dbeafe; border-color: #93c5fd; }
+:root[data-theme-skin="ancient"] .wire-role-badge.role-fewshot { color: #92400e; background: #fef3c7; border-color: #fcd34d; }
+:root[data-theme-skin="ancient"] .wire-role-badge.role-user { color: #166534; background: #dcfce7; border-color: #86efac; }
+:root[data-theme-skin="ancient"] .wire-role-badge.role-think { color: #6b21a8; background: #f3e8ff; border-color: #d8b4fe; }
+:root[data-theme-skin="ancient"] .wire-role-badge.role-assistant { color: #8c2633; background: #f6dde0; border-color: #d49099; }
+
+/* ── 10. Astral Observatory (Deep-space nebula, starlight & golden astrolabe) ─ */
+:root[data-theme-skin="celestial"] {
+  --bg: #070c1b;
+  --panel: #0c1329;
+  --panel-raised: #141f40;
+  --panel-soft: #101936;
+  --surface-solid: #0e1630;
+  --bg-elevated: #0a1023;
+  --line: #233564;
+  --line-subtle: #19264a;
+  --control-line: #3c599e;
+  --text: #eef3ff;
+  --text-secondary: #c7d6f8;
+  --muted: #8498c7;
+  --subtle: #8498c7;
+  --code: #dbeafe;
+  --signal: #60a5fa;
+  --signal-surface: rgba(96, 165, 250, 0.14);
+  --signal-line: rgba(96, 165, 250, 0.48);
+  --violet: #f0c975;
+  --violet-dark: #252038;
+  --lime: #7dd3fc;
+  --red: #fb7185;
+  --amber: #f0c975;
+  --blue: #60a5fa;
+  --on-accent: #060a18;
+  --glass-header: rgba(10, 16, 36, 0.74);
+  --glass-sidebar: rgba(8, 13, 30, 0.80);
+  --glass-canvas-tint: rgba(6, 10, 24, 0.24);
+  --glass-card: rgba(14, 22, 48, 0.86);
+  --glass-welcome: rgba(10, 16, 36, 0.56);
+}
+:root[data-theme-skin="celestial"] .composer-form {
+  border-color: rgba(240, 201, 117, 0.42);
+  box-shadow: 0 0 28px rgba(96, 165, 250, 0.15), inset 0 1px 0 rgba(240, 201, 117, 0.28);
+}
+:root[data-theme-skin="celestial"] .wordmark {
+  color: #f3d285;
+  text-shadow: 0 0 16px rgba(240, 201, 117, 0.45), 0 0 28px rgba(96, 165, 250, 0.3);
+}
+:root[data-theme-skin="celestial"] .mode-switch-tab[data-app-mode="godcode"].active {
+  color: #f0c975;
+  border-color: rgba(240, 201, 117, 0.45);
+}
+:root[data-theme-skin="celestial"] .ultra-switch.enabled {
+  color: #f7df9c;
+  background: rgba(240, 201, 117, 0.12);
+  border-color: rgba(240, 201, 117, 0.42);
+}
+:root[data-theme-skin="celestial"] #composer-ultra-state {
+  border-color: rgba(240, 201, 117, 0.35);
+}
+
+/* ── Reduced motion accessibility ──────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme-skin="psychedelic"] .composer-form,
+  :root[data-theme-skin="psychedelic"] .brand-name.wordmark,
+  :root[data-theme-skin="psychedelic"] #composer-ultra-label.wordmark {
+    animation: none !important;
+  }
+}
+
+/* ── Sidebar Instant Theme Popover ─────────────────────────────────────────── */
+.theme-popover {
+  position: fixed;
+  left: 14px;
+  bottom: 92px;
+  width: min(336px, calc(100vw - 28px));
+  max-height: calc(100dvh - 112px);
+  overflow-y: auto;
+  z-index: 920;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--control-line);
+  background: var(--surface-solid, var(--panel));
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+}
+.theme-popover.hidden {
+  display: none;
+}
+.theme-popover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.theme-popover-head strong {
+  font-size: .84rem;
+  color: var(--text);
+}
+.theme-popover-head small {
+  color: var(--muted);
+  font-size: .72rem;
+}
+.theme-popover-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+/* ── Settings 8-Theme Visual Gallery ───────────────────────────────────────── */
+.settings-theme-block {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--line);
+}
+.settings-theme-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.settings-theme-head h3 {
+  margin: 0;
+  font-size: .9rem;
+  font-weight: 500;
+}
+.settings-theme-head span {
+  font-size: .75rem;
+  color: var(--muted);
+}
+.theme-gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 10px;
+}
+@media (max-width: 520px) {
+  .theme-gallery-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.theme-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 9px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel-soft);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .14s, transform .12s, background-color .14s;
+}
+.theme-card:hover {
+  border-color: var(--signal);
+  transform: translateY(-1px);
+}
+.theme-card.is-active {
+  border-color: var(--signal);
+  box-shadow: 0 0 0 1px var(--signal);
+  background: var(--panel-raised);
+}
+.theme-swatch {
+  height: 34px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 8px;
+  font-size: .78rem;
+}
+.theme-swatch-tag {
+  font-size: .62rem;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.48);
+  color: #fff;
+}
+.theme-card-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.theme-card-name {
+  font-size: .78rem;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.theme-card-check {
+  font-size: .75rem;
+  color: var(--signal);
+  font-weight: 700;
+}
+.theme-card-desc {
+  font-size: .7rem;
+  line-height: 1.35;
+  color: var(--muted);
+}
+
+/* Swatch backgrounds (pure CSS, zero inline style=) */
+.theme-swatch-obsidian {
+  background: linear-gradient(135deg, #121312 0%, #242130 55%, #b5dcbc 100%);
+}
+.theme-swatch-minimal {
+  background: linear-gradient(135deg, #09090b 0%, #18181b 65%, #71717a 100%);
+}
+.theme-swatch-light {
+  background: linear-gradient(135deg, #f6f5f2 0%, #ffffff 60%, #205c36 100%);
+  border-color: rgba(0, 0, 0, 0.14);
+}
+.theme-swatch-dragons {
+  background: linear-gradient(135deg, #16090b 0%, #7c1d18 52%, #f59e0b 100%);
+}
+.theme-swatch-psychedelic {
+  background: linear-gradient(125deg, #1b0536 0%, #ff2a9d 28%, #ffb830 52%, #00f5d4 76%, #7b2cbf 100%);
+}
+.theme-swatch-hacker {
+  background: linear-gradient(135deg, #020a04 0%, #093018 55%, #00ff88 100%);
+}
+.theme-swatch-synthwave {
+  background: linear-gradient(135deg, #0d0521 0%, #f43f8e 55%, #22d3ee 100%);
+}
+.theme-swatch-volcano {
+  background: linear-gradient(135deg, #140c0a 0%, #9a3412 52%, #ff6a2b 82%, #f6c453 100%);
+}
+.theme-swatch-ancient {
+  background: linear-gradient(135deg, #f8f2e4 0%, #e5d2ad 46%, #b88a2e 76%, #8c2633 100%);
+  border-color: rgba(158, 114, 31, 0.45);
+}
+.theme-swatch-celestial {
+  background: linear-gradient(135deg, #060a18 0%, #172554 48%, #3b82f6 78%, #f0c975 100%);
+  border-color: rgba(240, 201, 117, 0.42);
+}

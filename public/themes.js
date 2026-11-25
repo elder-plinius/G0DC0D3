@@ -1,0 +1,1336 @@
+'use strict';
+
+(function initG0DThemes() {
+  const THEMES = [
+    {
+      id: 'obsidian',
+      name: 'Obsidian',
+      short: 'Obsidian',
+      emoji: '',
+      base: 'dark',
+      animated: false,
+      badge: 'Default',
+      desc: 'Classic G0DM0D3 dark obsidian, violet & sage.'
+    },
+    {
+      id: 'minimal',
+      name: 'Minimalist Noir',
+      short: 'Minimal',
+      emoji: '',
+      base: 'dark',
+      animated: false,
+      badge: 'Calm',
+      desc: 'Ultra-clean matte monochrome dark studio UI.'
+    },
+    {
+      id: 'light',
+      name: 'Alabaster Light',
+      short: 'Light',
+      emoji: '',
+      base: 'light',
+      animated: false,
+      badge: 'Daylight',
+      desc: 'Crisp warm paper & ink daylight workspace.'
+    },
+    {
+      id: 'dragons',
+      name: 'Dragon Realm',
+      short: 'Dragons',
+      emoji: '',
+      base: 'dark',
+      animated: true,
+      badge: 'Live',
+      desc: 'Animated winged dragons soaring through molten embers.'
+    },
+    {
+      id: 'psychedelic',
+      name: 'Psychedelic Melt',
+      short: 'Psychedelic',
+      emoji: '',
+      base: 'dark',
+      animated: true,
+      badge: 'Live',
+      desc: 'Domain-warped liquid oil projector, chromatic melt droplets & sacred geometry.'
+    },
+    {
+      id: 'hacker',
+      name: 'Ultra Hacker',
+      short: 'Hacker',
+      emoji: '',
+      base: 'dark',
+      animated: true,
+      badge: 'Live',
+      desc: 'Matrix katakana/hex rain, monospace & CRT scanlines.'
+    },
+    {
+      id: 'synthwave',
+      name: "Synthwave '84",
+      short: 'Synthwave',
+      emoji: '',
+      base: 'dark',
+      animated: true,
+      badge: 'Live',
+      desc: 'Scrolling 3D Outrun neon laser grid & retrowave sunset.'
+    },
+    {
+      id: 'volcano',
+      name: 'Plinian Vesuvius',
+      short: 'Vesuvius',
+      emoji: '',
+      base: 'dark',
+      animated: true,
+      badge: 'Live',
+      desc: 'Rising volcanic magma sparks & incandescent ash.'
+    },
+    {
+      id: 'ancient',
+      name: 'Ancient Greco-Roman',
+      short: 'Ancient',
+      emoji: '',
+      base: 'light',
+      animated: true,
+      badge: 'Live',
+      desc: 'Carrara marble colonnade, gold leaf, Pompeian crimson & Pantheon sunbeams.'
+    },
+    {
+      id: 'celestial',
+      name: 'Astral Observatory',
+      short: 'Astral',
+      emoji: '',
+      base: 'dark',
+      animated: true,
+      badge: 'Live',
+      desc: 'Deep-space nebula, twinkling constellations, golden astrolabe rings & meteors.'
+    }
+  ];
+
+  const byId = new Map(THEMES.map(t => [t.id, t]));
+  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+  let motionPaused = (() => {
+    try { return JSON.parse(localStorage.getItem('g0dc0d3.qol.v1') || '{}')?.pauseBackdrop === true; } catch { return false; }
+  })();
+  let activeId = 'obsidian';
+  let rafId = null;
+  let canvas = null;
+  let ctx = null;
+  let engine = null;
+  let width = 0;
+  let height = 0;
+  let dpr = 1;
+
+  function ensureCanvas() {
+    if (!canvas) {
+      canvas = document.getElementById('theme-canvas');
+      if (!canvas) {
+        canvas = document.createElement('canvas');
+        canvas.id = 'theme-canvas';
+        canvas.setAttribute('aria-hidden', 'true');
+        document.body.prepend(canvas);
+      }
+      ctx = canvas.getContext('2d', { alpha: false });
+    }
+    if (!document.getElementById('theme-overlay')) {
+      const ov = document.createElement('div');
+      ov.id = 'theme-overlay';
+      ov.setAttribute('aria-hidden', 'true');
+      canvas.after(ov);
+    }
+    resizeCanvas();
+  }
+
+  function resizeCanvas() {
+    if (!canvas) return;
+    dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    width = Math.max(320, window.innerWidth);
+    height = Math.max(240, window.innerHeight);
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (engine?.resize) engine.resize(width, height);
+    if (engine && rafId === null) engine.step(0.05, 1.2);
+  }
+
+  /* ── 1. Dragon Realm Engine: articulated winged dragons + fire breath + embers ── */
+  function createDragonsEngine() {
+    const dragons = [];
+    const embers = [];
+    const flames = [];
+
+    function spawnDragon(initial = false) {
+      const dir = Math.random() < 0.5 ? 1 : -1;
+      const scale = 0.52 + Math.random() * 0.72;
+      const speed = (48 + Math.random() * 58) * scale;
+      return {
+        x: initial ? Math.random() * width : (dir === 1 ? -180 * scale : width + 180 * scale),
+        y: 70 + Math.random() * Math.max(120, height - 180),
+        baseY: 0,
+        dir,
+        scale,
+        speed,
+        phase: Math.random() * Math.PI * 2,
+        wingSpeed: 4.8 + Math.random() * 2.4,
+        amp: 16 + Math.random() * 28,
+        hue: Math.random() < 0.35 ? 12 : (Math.random() < 0.5 ? 28 : 352),
+        breathCooldown: 2.5 + Math.random() * 5,
+        breathTimer: 0
+      };
+    }
+
+    function init() {
+      dragons.length = 0;
+      embers.length = 0;
+      flames.length = 0;
+      for (let i = 0; i < 6; i++) {
+        const d = spawnDragon(true);
+        d.baseY = d.y;
+        dragons.push(d);
+      }
+      for (let i = 0; i < 65; i++) {
+        embers.push({
+          x: Math.random() * width,
+          y: Math.random() * height,
+          vx: (Math.random() - 0.5) * 18,
+          vy: -(16 + Math.random() * 38),
+          r: 1 + Math.random() * 2.4,
+          life: Math.random()
+        });
+      }
+    }
+    init();
+
+    function drawDragon(d, t) {
+      const s = d.scale;
+      const wingCycle = Math.sin(t * d.wingSpeed + d.phase);
+      const bob = Math.sin(t * 1.4 + d.phase) * d.amp;
+      const headX = d.x;
+      const headY = d.baseY + bob;
+
+      ctx.save();
+      // Undulating spine from head backward
+      const segs = 13;
+      const pts = [];
+      for (let i = 0; i < segs; i++) {
+        const lag = i * 0.38;
+        const sx = headX - d.dir * i * 11.5 * s;
+        const sy = headY + Math.sin(t * 3.1 + d.phase - lag) * (5 + i * 0.8) * s + (i > 2 ? Math.sin(t * d.wingSpeed + d.phase - 0.4) * 3 * s : 0);
+        pts.push({ x: sx, y: sy });
+      }
+
+      // Back wing (far side, darker)
+      const shoulder = pts[2];
+      const flapBack = wingCycle * 36 * s;
+      ctx.fillStyle = `hsla(${d.hue}, 70%, 16%, 0.72)`;
+      ctx.strokeStyle = `hsla(${d.hue + 18}, 90%, 56%, 0.45)`;
+      ctx.lineWidth = 1.4 * s;
+      ctx.beginPath();
+      ctx.moveTo(shoulder.x, shoulder.y);
+      ctx.quadraticCurveTo(shoulder.x - d.dir * 18 * s, shoulder.y - 46 * s + flapBack * 0.8, shoulder.x - d.dir * 54 * s, shoulder.y - 26 * s + flapBack);
+      ctx.quadraticCurveTo(shoulder.x - d.dir * 32 * s, shoulder.y - 6 * s + flapBack * 0.35, pts[5].x, pts[5].y);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      // Serpentine torso & tail
+      for (let i = segs - 1; i >= 1; i--) {
+        const p0 = pts[i];
+        const p1 = pts[i - 1];
+        const thickness = (i < 4 ? (8 + i * 1.6) : Math.max(2, 13 - i * 0.92)) * s;
+        ctx.strokeStyle = `hsla(${d.hue}, 62%, ${14 + (segs - i) * 0.8}%, 0.92)`;
+        ctx.lineWidth = thickness;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(p0.x, p0.y);
+        ctx.lineTo(p1.x, p1.y);
+        ctx.stroke();
+
+        // Dorsal glowing scale ridge
+        if (i % 2 === 1 && i < 10) {
+          ctx.fillStyle = `hsla(${d.hue + 22}, 95%, 60%, 0.72)`;
+          ctx.beginPath();
+          ctx.moveTo(p1.x, p1.y - thickness * 0.45);
+          ctx.lineTo(p1.x - d.dir * 5 * s, p1.y - thickness * 0.95);
+          ctx.lineTo(p0.x, p0.y - thickness * 0.4);
+          ctx.closePath();
+          ctx.fill();
+        }
+      }
+
+      // Tail spade
+      const tail = pts[segs - 1];
+      ctx.fillStyle = `hsla(${d.hue + 16}, 88%, 52%, 0.85)`;
+      ctx.beginPath();
+      ctx.moveTo(tail.x, tail.y);
+      ctx.lineTo(tail.x - d.dir * 14 * s, tail.y - 7 * s);
+      ctx.lineTo(tail.x - d.dir * 9 * s, tail.y);
+      ctx.lineTo(tail.x - d.dir * 14 * s, tail.y + 7 * s);
+      ctx.closePath();
+      ctx.fill();
+
+      // Front wing (articulated bat-wing with ribs)
+      const flapFront = wingCycle * 48 * s;
+      const tipX = shoulder.x - d.dir * 66 * s;
+      const tipY = shoulder.y - 34 * s + flapFront;
+      const elbowX = shoulder.x - d.dir * 22 * s;
+      const elbowY = shoulder.y - 54 * s + flapFront * 0.75;
+      const wingGrad = ctx.createLinearGradient(shoulder.x, shoulder.y, tipX, tipY);
+      wingGrad.addColorStop(0, `hsla(${d.hue}, 74%, 22%, 0.92)`);
+      wingGrad.addColorStop(1, `hsla(${d.hue + 18}, 92%, 42%, 0.68)`);
+      ctx.fillStyle = wingGrad;
+      ctx.strokeStyle = `hsla(${d.hue + 26}, 96%, 64%, 0.78)`;
+      ctx.lineWidth = 1.8 * s;
+      ctx.beginPath();
+      ctx.moveTo(shoulder.x, shoulder.y);
+      ctx.lineTo(elbowX, elbowY);
+      ctx.lineTo(tipX, tipY);
+      ctx.quadraticCurveTo(shoulder.x - d.dir * 46 * s, shoulder.y - 4 * s + flapFront * 0.45, shoulder.x - d.dir * 34 * s, shoulder.y + 8 * s + flapFront * 0.25);
+      ctx.quadraticCurveTo(shoulder.x - d.dir * 18 * s, shoulder.y + 2 * s, pts[5].x, pts[5].y);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      // Head, snout, horns & molten eye
+      ctx.fillStyle = `hsla(${d.hue}, 66%, 18%, 0.96)`;
+      ctx.strokeStyle = `hsla(${d.hue + 22}, 94%, 58%, 0.78)`;
+      ctx.lineWidth = 1.4 * s;
+      ctx.beginPath();
+      ctx.moveTo(headX + d.dir * 22 * s, headY + 1 * s);
+      ctx.lineTo(headX + d.dir * 6 * s, headY - 9 * s);
+      ctx.lineTo(headX - d.dir * 12 * s, headY - 14 * s); // horn
+      ctx.lineTo(headX - d.dir * 4 * s, headY - 5 * s);
+      ctx.lineTo(headX - d.dir * 10 * s, headY + 6 * s);
+      ctx.lineTo(headX + d.dir * 16 * s, headY + 7 * s);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      // Glowing eye
+      ctx.fillStyle = '#fde047';
+      ctx.shadowColor = '#f97316';
+      ctx.shadowBlur = 10 * s;
+      ctx.beginPath();
+      ctx.arc(headX + d.dir * 8 * s, headY - 2 * s, 2.3 * s, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      return { mouthX: headX + d.dir * 22 * s, mouthY: headY + 2 * s };
+    }
+
+    return {
+      resize() {},
+      step(dt, t) {
+        const bg = ctx.createLinearGradient(0, 0, 0, height);
+        bg.addColorStop(0, '#0a0507');
+        bg.addColorStop(0.65, '#17090d');
+        bg.addColorStop(1, '#2b0d10');
+        ctx.fillStyle = bg;
+        ctx.fillRect(0, 0, width, height);
+
+        // Ambient volcanic moon / glow
+        const glow = ctx.createRadialGradient(width * 0.72, height * 0.28, 12, width * 0.72, height * 0.28, Math.max(width, height) * 0.45);
+        glow.addColorStop(0, 'rgba(249, 115, 22, 0.2)');
+        glow.addColorStop(0.5, 'rgba(185, 28, 28, 0.08)');
+        glow.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        ctx.fillStyle = glow;
+        ctx.fillRect(0, 0, width, height);
+
+        // Rising embers
+        for (const e of embers) {
+          e.x += (e.vx + Math.sin(t * 1.5 + e.life * 10) * 10) * dt;
+          e.y += e.vy * dt;
+          e.life += dt * 0.25;
+          if (e.y < -12) { e.y = height + 10; e.x = Math.random() * width; }
+          const alpha = 0.25 + 0.55 * Math.abs(Math.sin(e.life * 4));
+          ctx.fillStyle = `rgba(251, 146, 60, ${alpha.toFixed(2)})`;
+          ctx.beginPath();
+          ctx.arc(e.x, e.y, e.r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // Update & draw dragons
+        for (let i = 0; i < dragons.length; i++) {
+          const d = dragons[i];
+          d.x += d.dir * d.speed * dt;
+          d.breathCooldown -= dt;
+          if (d.breathCooldown <= 0) {
+            d.breathTimer = 0.75;
+            d.breathCooldown = 3.5 + Math.random() * 5.5;
+          }
+          const mouth = drawDragon(d, t);
+          if (d.breathTimer > 0) {
+            d.breathTimer -= dt;
+            for (let k = 0; k < 2; k++) {
+              flames.push({
+                x: mouth.mouthX,
+                y: mouth.mouthY,
+                vx: d.dir * (110 + Math.random() * 110) * d.scale,
+                vy: (Math.random() - 0.5) * 44 * d.scale,
+                r: (3 + Math.random() * 4.5) * d.scale,
+                life: 1
+              });
+            }
+          }
+          if ((d.dir === 1 && d.x > width + 240 * d.scale) || (d.dir === -1 && d.x < -240 * d.scale)) {
+            const next = spawnDragon(false);
+            next.baseY = next.y;
+            dragons[i] = next;
+          }
+        }
+
+        // Render fire-breath particles
+        for (let i = flames.length - 1; i >= 0; i--) {
+          const f = flames[i];
+          f.x += f.vx * dt;
+          f.y += f.vy * dt;
+          f.life -= dt * 1.7;
+          if (f.life <= 0) { flames.splice(i, 1); continue; }
+          const g = Math.round(90 + f.life * 145);
+          ctx.fillStyle = `rgba(255, ${g}, 28, ${(f.life * 0.75).toFixed(2)})`;
+          ctx.beginPath();
+          ctx.arc(f.x, f.y, f.r * (1.4 - f.life * 0.5), 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    };
+  }
+
+  /* ── 2. Psychedelic Melt Engine: domain-warped liquid oil projection + chromatic melt + sacred mandala ── */
+  function createPsychedelicEngine() {
+    const pw = 180;
+    const ph = 112;
+    const off = document.createElement('canvas');
+    off.width = pw;
+    off.height = ph;
+    const octx = off.getContext('2d');
+    const img = octx.createImageData(pw, ph);
+    const data = img.data;
+
+    // Drifting liquid-mercury / oil-projector lava blobs that slowly melt downward
+    const blobs = Array.from({ length: 7 }, (_, i) => ({
+      x: (i + 0.5) / 7,
+      y: (i * 0.19) % 1,
+      rx: 0.11 + (i % 3) * 0.045,
+      ry: 0.14 + ((i + 1) % 3) * 0.055,
+      vy: 0.012 + (i % 4) * 0.005,
+      hueOff: i * 51,
+      phase: i * 1.17
+    }));
+
+    return {
+      resize() {},
+      step(dt, t) {
+        let idx = 0;
+        const tt = t * 0.48;
+        const drip = t * 0.18; // gentle downward gravitational melt
+        for (let y = 0; y < ph; y++) {
+          const ny = y / ph;
+          const yw = (ny - 0.5) * 2.2;
+          for (let x = 0; x < pw; x++) {
+            const nx = x / pw;
+            const xw = (nx - 0.5) * 3.2;
+
+            // Stage 1 domain warp (organic oil-slick folding)
+            const qx = Math.sin(xw * 1.9 + tt * 0.9) + Math.cos(yw * 2.3 - drip * 1.4);
+            const qy = Math.cos(xw * 1.7 - tt * 0.7) + Math.sin(yw * 2.1 + tt * 0.6);
+
+            // Stage 2 recursive warp (liquid bismuth / lava-lamp ribbons)
+            const wx = xw + 0.55 * qx;
+            const wy = yw + 0.55 * qy - drip * 0.65;
+            const r2 = wx * wx + wy * wy;
+            const swirl = Math.sin(Math.sqrt(r2 + 0.08) * 4.8 - tt * 1.35 + Math.atan2(wy, wx) * 2.0);
+            const fold = Math.sin(wx * 2.4 + Math.cos(wy * 2.8 + tt * 0.8)) * Math.cos(wy * 1.9 - Math.sin(wx * 2.1 - tt * 0.5));
+            const field = swirl * 0.62 + fold * 0.78 + 0.25 * Math.sin(qx - qy + tt);
+
+            // Iridescent contour filaments (thin glowing oil-film ridges)
+            const contour = Math.pow(Math.max(0, 1 - Math.abs(Math.sin(field * 3.14159)) * 4.2), 2.2);
+
+            // Deep ultraviolet velvet valleys with electric iridescent crests (keeps UI ultra-legible)
+            const phase = field * 1.55 + tt * 0.35;
+            const crest = 0.38 + 0.62 * Math.pow(0.5 + 0.5 * Math.sin(field * 1.4), 1.35);
+            const baseR = (0.48 + 0.52 * Math.cos(phase + 0.0)) * crest;
+            const baseG = (0.34 + 0.56 * Math.cos(phase + 2.15)) * crest;
+            const baseB = (0.55 + 0.45 * Math.cos(phase + 4.05)) * crest;
+
+            const r = Math.min(255, Math.round(11 + baseR * 138 + contour * 120));
+            const g = Math.min(255, Math.round(5 + baseG * 102 + contour * 115));
+            const b = Math.min(255, Math.round(24 + baseB * 158 + contour * 110));
+            data[idx++] = r;
+            data[idx++] = g;
+            data[idx++] = b;
+            data[idx++] = 255;
+          }
+        }
+        octx.putImageData(img, 0, 0);
+        ctx.imageSmoothingEnabled = true;
+        ctx.drawImage(off, 0, 0, width, height);
+
+        // Soft melting chromatic oil-lamp droplets
+        ctx.save();
+        ctx.globalCompositeOperation = 'screen';
+        for (const b of blobs) {
+          b.y = (b.y + b.vy * dt) % 1.28;
+          const bx = (b.x + 0.06 * Math.sin(t * 0.55 + b.phase)) * width;
+          const by = (b.y - 0.14) * height;
+          const stretch = 1 + 0.22 * Math.sin(t * 1.1 + b.phase);
+          const rad = Math.min(width, height) * b.rx * stretch;
+          const hue = (t * 28 + b.hueOff) % 360;
+          const hue2 = (hue + 95) % 360;
+          const g = ctx.createRadialGradient(bx, by, rad * 0.05, bx, by, rad);
+          g.addColorStop(0, `hsla(${hue}, 100%, 66%, 0.24)`);
+          g.addColorStop(0.55, `hsla(${hue2}, 96%, 54%, 0.11)`);
+          g.addColorStop(1, 'rgba(0,0,0,0)');
+          ctx.fillStyle = g;
+          ctx.beginPath();
+          ctx.ellipse(bx, by, rad, rad * (1.28 / stretch), Math.sin(t * 0.4 + b.phase) * 0.35, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.restore();
+
+        // Counter-rotating sacred-geometry lotus mandala & kaleidoscope ribbons
+        ctx.save();
+        ctx.translate(width * 0.56, height * 0.49);
+        ctx.globalCompositeOperation = 'screen';
+        const maxR = Math.hypot(width, height) * 0.44;
+        for (let layer = 0; layer < 2; layer++) {
+          ctx.save();
+          ctx.rotate(t * (layer === 0 ? 0.09 : -0.065));
+          const petals = layer === 0 ? 8 : 12;
+          for (let ring = 0; ring < 4; ring++) {
+            const hue = (t * 42 + ring * 68 + layer * 130) % 360;
+            const r = maxR * (0.16 + ring * 0.17 + 0.028 * Math.sin(t * 0.9 + ring + layer));
+            ctx.strokeStyle = `hsla(${hue}, 98%, 68%, ${layer === 0 ? '0.16' : '0.11'})`;
+            ctx.lineWidth = layer === 0 ? 1.8 : 1.25;
+            ctx.beginPath();
+            for (let s = 0; s <= 120; s++) {
+              const a = (s / 120) * Math.PI * 2;
+              const mod = 1 + 0.16 * Math.sin(a * petals + t * 1.15 + ring) + 0.05 * Math.cos(a * (petals * 2) - t * 1.7);
+              const px = Math.cos(a) * r * mod;
+              const py = Math.sin(a) * r * mod;
+              if (s === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+            }
+            ctx.closePath();
+            ctx.stroke();
+          }
+          ctx.restore();
+        }
+        ctx.restore();
+      }
+    };
+  }
+
+  /* ── 3. Ultra Hacker Engine: Matrix katakana/hex rain ── */
+  function createHackerEngine() {
+    const glyphs = 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン0123456789ABCDEFG0DM0D3$#><';
+    const fontSize = 15;
+    let cols = 0;
+    let drops = [];
+    let speeds = [];
+
+    function setup() {
+      cols = Math.max(12, Math.ceil(width / fontSize));
+      drops = Array.from({ length: cols }, () => Math.random() * (height / fontSize));
+      speeds = Array.from({ length: cols }, () => 7 + Math.random() * 14);
+      ctx.fillStyle = '#020904';
+      ctx.fillRect(0, 0, width, height);
+    }
+    setup();
+
+    return {
+      resize: setup,
+      step(dt) {
+        ctx.fillStyle = 'rgba(2, 9, 4, 0.14)';
+        ctx.fillRect(0, 0, width, height);
+        ctx.font = `600 ${fontSize}px SFMono-Regular, Menlo, Consolas, monospace`;
+        for (let i = 0; i < cols; i++) {
+          const prevRow = Math.floor(drops[i]);
+          drops[i] += speeds[i] * dt;
+          const curRow = Math.floor(drops[i]);
+          if (curRow !== prevRow || dt > 0.2) {
+            const x = i * fontSize;
+            const y = curRow * fontSize;
+            const ch = glyphs[Math.floor(Math.random() * glyphs.length)];
+            // Bright phosphor head
+            ctx.fillStyle = '#d9ffe9';
+            ctx.fillText(ch, x, y);
+            // Glowing emerald trail right behind
+            if (curRow > 0) {
+              const ch2 = glyphs[Math.floor(Math.random() * glyphs.length)];
+              ctx.fillStyle = '#00e676';
+              ctx.fillText(ch2, x, (curRow - 1) * fontSize);
+            }
+          }
+          if (drops[i] * fontSize > height + 30 && Math.random() > 0.96) {
+            drops[i] = -Math.random() * 8;
+          }
+        }
+      }
+    };
+  }
+
+  /* ── 4. Synthwave '84 Engine: 3D neon laser grid + Outrun sun + stars ── */
+  function createSynthwaveEngine() {
+    let stars = [];
+    function initStars() {
+      stars = Array.from({ length: 75 }, () => ({
+        x: Math.random() * width,
+        y: Math.random() * height * 0.56,
+        r: 0.7 + Math.random() * 1.5,
+        p: Math.random() * Math.PI * 2
+      }));
+    }
+    initStars();
+
+    return {
+      resize: initStars,
+      step(_dt, t) {
+        const horizon = height * 0.58;
+        const sky = ctx.createLinearGradient(0, 0, 0, horizon);
+        sky.addColorStop(0, '#070312');
+        sky.addColorStop(0.55, '#190838');
+        sky.addColorStop(1, '#4c1054');
+        ctx.fillStyle = sky;
+        ctx.fillRect(0, 0, width, horizon);
+
+        // Twinkling stars
+        for (const s of stars) {
+          const a = 0.3 + 0.65 * Math.abs(Math.sin(t * 1.6 + s.p));
+          ctx.fillStyle = `rgba(224, 242, 254, ${a.toFixed(2)})`;
+          ctx.beginPath();
+          ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // Sliced Outrun sun
+        const sunX = width * 0.56;
+        const sunR = Math.min(width, height) * 0.16;
+        const sunY = horizon - sunR * 0.35;
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(sunX, sunY, sunR, 0, Math.PI * 2);
+        ctx.clip();
+        const sunGrad = ctx.createLinearGradient(sunX, sunY - sunR, sunX, sunY + sunR);
+        sunGrad.addColorStop(0, '#fde047');
+        sunGrad.addColorStop(0.45, '#fb7185');
+        sunGrad.addColorStop(1, '#c026d3');
+        ctx.fillStyle = sunGrad;
+        ctx.fillRect(sunX - sunR, sunY - sunR, sunR * 2, sunR * 2);
+        ctx.fillStyle = '#24093d';
+        for (let i = 0; i < 6; i++) {
+          const cutY = sunY + sunR * (0.08 + i * 0.15) + ((t * 10) % 12) * 0.4;
+          ctx.fillRect(sunX - sunR, cutY, sunR * 2, 2 + i * 1.4);
+        }
+        ctx.restore();
+
+        // Neon mountain range silhouette
+        ctx.fillStyle = '#120526';
+        ctx.strokeStyle = 'rgba(244, 63, 142, 0.72)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(0, horizon);
+        const peaks = [0.08, 0.18, 0.29, 0.42, 0.56, 0.71, 0.84, 0.94, 1.0];
+        const heights = [0.1, 0.04, 0.13, 0.05, 0.09, 0.14, 0.06, 0.11, 0.03];
+        for (let i = 0; i < peaks.length; i++) {
+          ctx.lineTo(width * peaks[i], horizon - height * heights[i]);
+        }
+        ctx.lineTo(width, horizon);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+
+        // Ground plane + 3D perspective laser grid
+        const ground = ctx.createLinearGradient(0, horizon, 0, height);
+        ground.addColorStop(0, '#1e0836');
+        ground.addColorStop(1, '#070312');
+        ctx.fillStyle = ground;
+        ctx.fillRect(0, horizon, width, height - horizon);
+
+        ctx.strokeStyle = 'rgba(34, 211, 238, 0.36)';
+        ctx.lineWidth = 1.2;
+        const vpX = width * 0.56;
+        for (let i = -12; i <= 12; i++) {
+          ctx.beginPath();
+          ctx.moveTo(vpX + i * 24, horizon);
+          ctx.lineTo(vpX + i * 190, height);
+          ctx.stroke();
+        }
+        const scroll = (t * 0.55) % 1;
+        ctx.strokeStyle = 'rgba(244, 63, 142, 0.45)';
+        for (let i = 0; i < 14; i++) {
+          const p = (i + scroll) / 14;
+          const y = horizon + Math.pow(p, 2.2) * (height - horizon);
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(width, y);
+          ctx.stroke();
+        }
+        // Horizon glow bar
+        ctx.strokeStyle = '#22d3ee';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(0, horizon);
+        ctx.lineTo(width, horizon);
+        ctx.stroke();
+      }
+    };
+  }
+
+  /* ── 5. Plinian Vesuvius Engine: rising volcanic sparks, lava glow & ash ── */
+  function createVolcanoEngine() {
+    const sparks = [];
+    const ash = [];
+    function init() {
+      sparks.length = 0;
+      ash.length = 0;
+      for (let i = 0; i < 95; i++) {
+        sparks.push({
+          x: Math.random() * width,
+          y: Math.random() * height,
+          vx: (Math.random() - 0.5) * 26,
+          vy: -(24 + Math.random() * 68),
+          r: 1.1 + Math.random() * 2.6,
+          phase: Math.random() * Math.PI * 2
+        });
+      }
+      for (let i = 0; i < 45; i++) {
+        ash.push({
+          x: Math.random() * width,
+          y: Math.random() * height,
+          vx: 10 + Math.random() * 18,
+          vy: -(8 + Math.random() * 18),
+          r: 1.5 + Math.random() * 3.2
+        });
+      }
+    }
+    init();
+
+    return {
+      resize() {},
+      step(dt, t) {
+        const bg = ctx.createLinearGradient(0, 0, 0, height);
+        bg.addColorStop(0, '#0d0706');
+        bg.addColorStop(0.68, '#1b0d09');
+        bg.addColorStop(1, '#3a1409');
+        ctx.fillStyle = bg;
+        ctx.fillRect(0, 0, width, height);
+
+        // Pulsing magma caldera glow along bottom
+        const pulse = 0.24 + 0.08 * Math.sin(t * 1.8);
+        const caldera = ctx.createRadialGradient(width * 0.52, height * 1.05, 30, width * 0.52, height * 1.05, Math.max(width, height) * 0.65);
+        caldera.addColorStop(0, `rgba(255, 106, 43, ${pulse.toFixed(2)})`);
+        caldera.addColorStop(0.45, 'rgba(185, 48, 16, 0.14)');
+        caldera.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        ctx.fillStyle = caldera;
+        ctx.fillRect(0, 0, width, height);
+
+        // Ash flakes
+        ctx.fillStyle = 'rgba(200, 172, 154, 0.16)';
+        for (const a of ash) {
+          a.x += a.vx * dt;
+          a.y += a.vy * dt;
+          if (a.y < -10) { a.y = height + 10; a.x = Math.random() * width; }
+          if (a.x > width + 10) a.x = -10;
+          ctx.beginPath();
+          ctx.arc(a.x, a.y, a.r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // Magma sparks
+        for (const s of sparks) {
+          s.x += (s.vx + Math.sin(t * 2.1 + s.phase) * 18) * dt;
+          s.y += s.vy * dt;
+          if (s.y < -12) {
+            s.y = height + 8;
+            s.x = Math.random() * width;
+          }
+          const heat = Math.max(0, Math.min(1, s.y / height));
+          const g = Math.round(90 + heat * 145);
+          ctx.fillStyle = `rgba(255, ${g}, 42, ${(0.3 + heat * 0.65).toFixed(2)})`;
+          ctx.beginPath();
+          ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    };
+  }
+
+  /* ── 6. Ancient Greco-Roman Engine: Carrara marble atrium, fluted columns, Pantheon sunbeams & gold leaf ── */
+  function createAncientEngine() {
+    const motes = [];
+    const leaves = [];
+    const veins = [];
+
+    function init() {
+      motes.length = 0;
+      leaves.length = 0;
+      veins.length = 0;
+      for (let i = 0; i < 65; i++) {
+        motes.push({
+          x: Math.random() * width,
+          y: Math.random() * height,
+          vx: 5 + Math.random() * 11,
+          vy: -(3 + Math.random() * 8),
+          r: 0.9 + Math.random() * 2.1,
+          phase: Math.random() * Math.PI * 2,
+          gold: Math.random() < 0.72
+        });
+      }
+      for (let i = 0; i < 8; i++) {
+        leaves.push({
+          x: Math.random() * width,
+          y: Math.random() * height,
+          vx: 10 + Math.random() * 14,
+          vy: 6 + Math.random() * 9,
+          rot: Math.random() * Math.PI * 2,
+          vrot: (Math.random() - 0.5) * 0.9,
+          size: 5 + Math.random() * 5,
+          phase: Math.random() * Math.PI * 2
+        });
+      }
+      for (let i = 0; i < 7; i++) {
+        veins.push({
+          y0: (i + 0.4) * (height / 7),
+          amp: 18 + Math.random() * 34,
+          freq: 0.002 + Math.random() * 0.003,
+          phase: Math.random() * Math.PI * 2
+        });
+      }
+    }
+    init();
+
+    function drawColumn(cx, colW) {
+      const topY = 0;
+      const colGrad = ctx.createLinearGradient(cx - colW / 2, 0, cx + colW / 2, 0);
+      colGrad.addColorStop(0, 'rgba(182, 160, 122, 0.24)');
+      colGrad.addColorStop(0.28, 'rgba(255, 250, 238, 0.34)');
+      colGrad.addColorStop(0.62, 'rgba(222, 205, 174, 0.20)');
+      colGrad.addColorStop(1, 'rgba(155, 132, 95, 0.26)');
+      ctx.fillStyle = colGrad;
+      ctx.fillRect(cx - colW / 2, topY, colW, height);
+
+      // Fluted vertical grooves
+      const flutes = 5;
+      ctx.strokeStyle = 'rgba(150, 124, 82, 0.14)';
+      ctx.lineWidth = 1;
+      for (let f = 1; f < flutes; f++) {
+        const fx = cx - colW / 2 + (colW * f) / flutes;
+        ctx.beginPath();
+        ctx.moveTo(fx, 44);
+        ctx.lineTo(fx, height - 34);
+        ctx.stroke();
+      }
+      // Capital echinus & abacus crown
+      ctx.fillStyle = 'rgba(188, 152, 88, 0.22)';
+      ctx.fillRect(cx - colW * 0.68, 22, colW * 1.36, 10);
+      ctx.fillRect(cx - colW * 0.58, 32, colW * 1.16, 8);
+      // Base plinth
+      ctx.fillRect(cx - colW * 0.66, height - 26, colW * 1.32, 10);
+      ctx.fillRect(cx - colW * 0.76, height - 16, colW * 1.52, 16);
+    }
+
+    function drawMeanderStrip(y, alpha) {
+      const unit = 18;
+      ctx.strokeStyle = `rgba(168, 126, 46, ${alpha})`;
+      ctx.lineWidth = 1.25;
+      ctx.beginPath();
+      for (let x = 0; x < width + unit; x += unit) {
+        ctx.moveTo(x, y + 8);
+        ctx.lineTo(x + 12, y + 8);
+        ctx.lineTo(x + 12, y + 2);
+        ctx.lineTo(x + 5, y + 2);
+        ctx.lineTo(x + 5, y + 5);
+        ctx.lineTo(x + 8, y + 5);
+        ctx.moveTo(x + 12, y + 8);
+        ctx.lineTo(x + unit, y + 8);
+      }
+      ctx.stroke();
+    }
+
+    return {
+      resize() { init(); },
+      step(dt, t) {
+        // Warm Carrara marble gradient backdrop
+        const bg = ctx.createLinearGradient(0, 0, width * 0.35, height);
+        bg.addColorStop(0, '#f7f1e3');
+        bg.addColorStop(0.52, '#f1e7d3');
+        bg.addColorStop(1, '#e6d7bc');
+        ctx.fillStyle = bg;
+        ctx.fillRect(0, 0, width, height);
+
+        // Subtle Carrara marble mineral veining
+        ctx.lineWidth = 1.2;
+        for (let i = 0; i < veins.length; i++) {
+          const v = veins[i];
+          ctx.strokeStyle = i % 2 === 0 ? 'rgba(172, 152, 120, 0.12)' : 'rgba(140, 38, 51, 0.045)';
+          ctx.beginPath();
+          for (let x = 0; x <= width; x += 28) {
+            const y = v.y0 + Math.sin(x * v.freq + v.phase) * v.amp + Math.cos(x * v.freq * 2.1 - v.phase) * (v.amp * 0.35);
+            if (x === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+        }
+
+        // Pantheon oculus sunbeams drifting diagonally
+        ctx.save();
+        for (let b = 0; b < 3; b++) {
+          const bx = width * (0.28 + b * 0.24) + Math.sin(t * 0.22 + b * 1.7) * 32;
+          const beamW = 90 + b * 36;
+          const beamGrad = ctx.createLinearGradient(bx, 0, bx + 180, height);
+          const alpha = 0.085 + 0.03 * Math.sin(t * 0.65 + b);
+          beamGrad.addColorStop(0, `rgba(255, 222, 148, ${(alpha * 1.5).toFixed(3)})`);
+          beamGrad.addColorStop(0.6, `rgba(246, 206, 122, ${alpha.toFixed(3)})`);
+          beamGrad.addColorStop(1, 'rgba(246, 206, 122, 0)');
+          ctx.fillStyle = beamGrad;
+          ctx.beginPath();
+          ctx.moveTo(bx - beamW * 0.4, 0);
+          ctx.lineTo(bx + beamW * 0.6, 0);
+          ctx.lineTo(bx + beamW * 1.55, height);
+          ctx.lineTo(bx + beamW * 0.25, height);
+          ctx.closePath();
+          ctx.fill();
+        }
+        ctx.restore();
+
+        // Architectural flanking Doric columns
+        const colW = Math.max(32, Math.min(54, width * 0.036));
+        drawColumn(colW * 0.9, colW);
+        drawColumn(width - colW * 0.9, colW);
+        if (width > 1100) {
+          drawColumn(width - colW * 3.1, colW * 0.78);
+        }
+
+        // Subtle Greek key (meander) frieze along bottom edge
+        drawMeanderStrip(height - 14, 0.22);
+
+        // Gently drifting golden laurel leaves
+        for (const lf of leaves) {
+          lf.x += (lf.vx + Math.sin(t * 0.9 + lf.phase) * 6) * dt;
+          lf.y += (lf.vy + Math.cos(t * 0.7 + lf.phase) * 3) * dt;
+          lf.rot += lf.vrot * dt;
+          if (lf.x > width + 24) lf.x = -20;
+          if (lf.y > height + 24) { lf.y = -18; lf.x = Math.random() * width; }
+          ctx.save();
+          ctx.translate(lf.x, lf.y);
+          ctx.rotate(lf.rot);
+          ctx.fillStyle = 'rgba(164, 124, 46, 0.22)';
+          ctx.beginPath();
+          ctx.ellipse(0, 0, lf.size, lf.size * 0.38, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+
+        // Shimmering gold-leaf dust motes
+        for (const m of motes) {
+          m.x += (m.vx + Math.sin(t * 1.3 + m.phase) * 6) * dt;
+          m.y += m.vy * dt;
+          if (m.y < -10) { m.y = height + 8; m.x = Math.random() * width; }
+          if (m.x > width + 10) m.x = -8;
+          const glint = 0.28 + 0.42 * (0.5 + 0.5 * Math.sin(t * 2.4 + m.phase));
+          ctx.fillStyle = m.gold
+            ? `rgba(186, 138, 36, ${glint.toFixed(2)})`
+            : `rgba(140, 38, 51, ${(glint * 0.55).toFixed(2)})`;
+          ctx.beginPath();
+          ctx.arc(m.x, m.y, m.r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    };
+  }
+
+  /* ── 7. Astral Observatory Engine: deep-space nebula, golden astrolabe, constellations & meteors ── */
+  function createCelestialEngine() {
+    const stars = [];
+    const constellations = [];
+    const meteors = [];
+    let meteorTimer = 1.6;
+
+    function init() {
+      stars.length = 0;
+      constellations.length = 0;
+      meteors.length = 0;
+      const count = Math.min(220, Math.max(110, Math.round((width * height) / 7200)));
+      for (let i = 0; i < count; i++) {
+        const tier = Math.random();
+        stars.push({
+          x: Math.random() * width,
+          y: Math.random() * height,
+          r: tier > 0.92 ? 1.8 + Math.random() * 1.1 : tier > 0.65 ? 1.0 + Math.random() * 0.7 : 0.55 + Math.random() * 0.5,
+          phase: Math.random() * Math.PI * 2,
+          speed: 0.8 + Math.random() * 2.2,
+          tint: tier > 0.86 ? 'gold' : tier > 0.58 ? 'blue' : 'white'
+        });
+      }
+      // Build 3 subtle star constellations in the upper & outer sky
+      const anchors = [
+        [[0.18, 0.18], [0.24, 0.24], [0.31, 0.20], [0.36, 0.29], [0.27, 0.34]],
+        [[0.68, 0.14], [0.75, 0.20], [0.83, 0.16], [0.88, 0.25], [0.79, 0.28]],
+        [[0.74, 0.68], [0.81, 0.74], [0.89, 0.71], [0.84, 0.82]]
+      ];
+      for (const poly of anchors) {
+        constellations.push(poly.map(([px, py]) => ({ x: px * width, y: py * height })));
+      }
+    }
+    init();
+
+    function spawnMeteor() {
+      const startX = width * (0.25 + Math.random() * 0.7);
+      const startY = height * (0.04 + Math.random() * 0.35);
+      const speed = 520 + Math.random() * 340;
+      const angle = Math.PI * (0.68 + Math.random() * 0.14);
+      meteors.push({
+        x: startX,
+        y: startY,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        len: 75 + Math.random() * 65,
+        life: 0,
+        maxLife: 0.65 + Math.random() * 0.45
+      });
+    }
+
+    function drawAstrolabe(cx, cy, radius, t) {
+      ctx.save();
+      ctx.translate(cx, cy);
+
+      // Outer celestial ring with fine degree ticks
+      ctx.save();
+      ctx.rotate(t * 0.03);
+      ctx.strokeStyle = 'rgba(240, 201, 117, 0.16)';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(0, 0, radius, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.strokeStyle = 'rgba(240, 201, 117, 0.11)';
+      ctx.lineWidth = 1;
+      for (let deg = 0; deg < 360; deg += 10) {
+        const rad = (deg * Math.PI) / 180;
+        const inner = deg % 30 === 0 ? radius - 12 : radius - 6;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(rad) * inner, Math.sin(rad) * inner);
+        ctx.lineTo(Math.cos(rad) * radius, Math.sin(rad) * radius);
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // Inner counter-rotating ecliptic ellipse
+      ctx.save();
+      ctx.rotate(-t * 0.045 + 0.42);
+      ctx.strokeStyle = 'rgba(96, 165, 250, 0.14)';
+      ctx.lineWidth = 1.1;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, radius * 0.78, radius * 0.42, 0, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.strokeStyle = 'rgba(240, 201, 117, 0.13)';
+      ctx.beginPath();
+      ctx.arc(0, 0, radius * 0.56, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Cardinal crosshair meridians
+      ctx.strokeStyle = 'rgba(147, 197, 253, 0.08)';
+      ctx.beginPath();
+      ctx.moveTo(-radius * 0.85, 0); ctx.lineTo(radius * 0.85, 0);
+      ctx.moveTo(0, -radius * 0.85); ctx.lineTo(0, radius * 0.85);
+      ctx.stroke();
+      ctx.restore();
+
+      // Glowing astrolabe orbital node
+      const orbitA = t * 0.16;
+      const ox = Math.cos(orbitA) * radius * 0.78;
+      const oy = Math.sin(orbitA) * radius * 0.78;
+      ctx.fillStyle = 'rgba(240, 201, 117, 0.65)';
+      ctx.beginPath();
+      ctx.arc(ox, oy, 2.8, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.restore();
+    }
+
+    return {
+      resize() { init(); },
+      step(dt, t) {
+        // Deep midnight cosmic backdrop
+        const bg = ctx.createLinearGradient(0, 0, width * 0.4, height);
+        bg.addColorStop(0, '#050814');
+        bg.addColorStop(0.55, '#091026');
+        bg.addColorStop(1, '#0d1532');
+        ctx.fillStyle = bg;
+        ctx.fillRect(0, 0, width, height);
+
+        // Soft drifting nebula clouds (sapphire, violet, teal-gold)
+        const n1x = width * 0.74 + Math.sin(t * 0.12) * 28;
+        const n1y = height * 0.34 + Math.cos(t * 0.1) * 18;
+        const neb1 = ctx.createRadialGradient(n1x, n1y, 16, n1x, n1y, Math.max(width, height) * 0.42);
+        neb1.addColorStop(0, 'rgba(99, 102, 241, 0.22)');
+        neb1.addColorStop(0.45, 'rgba(56, 189, 248, 0.10)');
+        neb1.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        ctx.fillStyle = neb1;
+        ctx.fillRect(0, 0, width, height);
+
+        const n2x = width * 0.26 + Math.cos(t * 0.09) * 24;
+        const n2y = height * 0.74 + Math.sin(t * 0.11) * 20;
+        const neb2 = ctx.createRadialGradient(n2x, n2y, 12, n2x, n2y, Math.max(width, height) * 0.38);
+        neb2.addColorStop(0, 'rgba(240, 201, 117, 0.11)');
+        neb2.addColorStop(0.42, 'rgba(139, 92, 246, 0.13)');
+        neb2.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        ctx.fillStyle = neb2;
+        ctx.fillRect(0, 0, width, height);
+
+        // Golden Ptolemaic astrolabe rings
+        const astroR = Math.min(width, height) * 0.34;
+        drawAstrolabe(width * 0.76, height * 0.44, astroR, t);
+
+        // Constellation lines & anchor nodes
+        ctx.lineWidth = 0.85;
+        for (const pts of constellations) {
+          ctx.strokeStyle = 'rgba(147, 197, 253, 0.14)';
+          ctx.beginPath();
+          pts.forEach((p, idx) => idx === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
+          ctx.stroke();
+          for (const p of pts) {
+            ctx.fillStyle = 'rgba(240, 201, 117, 0.65)';
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, 2.0, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+
+        // Twinkling multi-tint starfield
+        for (const s of stars) {
+          const tw = 0.38 + 0.62 * (0.5 + 0.5 * Math.sin(t * s.speed + s.phase));
+          ctx.fillStyle = s.tint === 'gold'
+            ? `rgba(253, 224, 152, ${tw.toFixed(2)})`
+            : s.tint === 'blue'
+              ? `rgba(165, 216, 255, ${tw.toFixed(2)})`
+              : `rgba(240, 245, 255, ${tw.toFixed(2)})`;
+          ctx.beginPath();
+          ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // Periodic shooting stars / meteors
+        meteorTimer -= dt;
+        if (meteorTimer <= 0 && meteors.length < 2) {
+          spawnMeteor();
+          meteorTimer = 3.2 + Math.random() * 4.5;
+        }
+        for (let i = meteors.length - 1; i >= 0; i--) {
+          const m = meteors[i];
+          m.life += dt;
+          m.x += m.vx * dt;
+          m.y += m.vy * dt;
+          if (m.life >= m.maxLife) { meteors.splice(i, 1); continue; }
+          const fade = Math.sin((m.life / m.maxLife) * Math.PI);
+          const mag = Math.hypot(m.vx, m.vy) || 1;
+          const tx = m.x - (m.vx / mag) * m.len;
+          const ty = m.y - (m.vy / mag) * m.len;
+          const grad = ctx.createLinearGradient(m.x, m.y, tx, ty);
+          grad.addColorStop(0, `rgba(255, 248, 220, ${(fade * 0.9).toFixed(2)})`);
+          grad.addColorStop(0.35, `rgba(147, 197, 253, ${(fade * 0.55).toFixed(2)})`);
+          grad.addColorStop(1, 'rgba(96, 165, 250, 0)');
+          ctx.strokeStyle = grad;
+          ctx.lineWidth = 1.6;
+          ctx.beginPath();
+          ctx.moveTo(m.x, m.y);
+          ctx.lineTo(tx, ty);
+          ctx.stroke();
+        }
+      }
+    };
+  }
+
+  function startEngine(id) {
+    stopEngine();
+    const theme = byId.get(id);
+    if (!theme || !theme.animated) return;
+    ensureCanvas();
+    if (id === 'dragons') engine = createDragonsEngine();
+    else if (id === 'psychedelic') engine = createPsychedelicEngine();
+    else if (id === 'hacker') engine = createHackerEngine();
+    else if (id === 'synthwave') engine = createSynthwaveEngine();
+    else if (id === 'volcano') engine = createVolcanoEngine();
+    else if (id === 'ancient') engine = createAncientEngine();
+    else if (id === 'celestial') engine = createCelestialEngine();
+    if (!engine) return;
+
+    // Always paint an immediate initial frame (even under prefers-reduced-motion or user pause!)
+    engine.step(0.05, 1.2);
+    document.documentElement.dataset.themeMotion = (reducedMotion.matches || motionPaused) ? 'paused' : 'live';
+    if (reducedMotion.matches || motionPaused) return;
+
+    let last = performance.now();
+    const loop = now => {
+      rafId = requestAnimationFrame(loop);
+      if (document.hidden) { last = now; return; }
+      const dt = Math.min(0.06, Math.max(0.008, (now - last) / 1000));
+      // Pace psychedelic & hacker smoothly around ~30fps to stay feather-light on laptops
+      if ((id === 'psychedelic' || id === 'hacker') && now - last < 30) return;
+      last = now;
+      engine.step(dt, now / 1000);
+    };
+    rafId = requestAnimationFrame(loop);
+  }
+
+  function stopEngine() {
+    if (rafId !== null) {
+      cancelAnimationFrame(rafId);
+      rafId = null;
+    }
+    engine = null;
+  }
+
+  function cardMarkup(t) {
+    const active = t.id === activeId;
+    return `<button type="button" class="theme-card${active ? ' is-active' : ''}" data-select-theme="${t.id}" aria-pressed="${active ? 'true' : 'false'}">
+      <div class="theme-swatch theme-swatch-${t.id}">
+        <span class="theme-swatch-tag">${t.badge}</span>
+      </div>
+      <div class="theme-card-meta">
+        <span class="theme-card-name">${t.name}</span>
+        ${active ? '<span class="theme-card-check" aria-hidden="true">✓</span>' : ''}
+      </div>
+      <span class="theme-card-desc">${t.desc}</span>
+    </button>`;
+  }
+
+  function syncThemeUI() {
+    const theme = byId.get(activeId) || THEMES[0];
+    const label = document.getElementById('theme-label');
+    if (label) label.textContent = `Theme · ${theme.short}`;
+    const iconDark = document.getElementById('theme-icon-dark');
+    const iconLight = document.getElementById('theme-icon-light');
+    if (iconDark) iconDark.classList.toggle('hidden', theme.base === 'dark');
+    if (iconLight) iconLight.classList.toggle('hidden', theme.base !== 'dark');
+
+    const popGrid = document.getElementById('theme-popover-grid');
+    if (popGrid) popGrid.innerHTML = THEMES.map(cardMarkup).join('');
+    const settingsGrid = document.getElementById('settings-theme-grid');
+    if (settingsGrid) settingsGrid.innerHTML = THEMES.map(cardMarkup).join('');
+    const activeTag = document.getElementById('settings-theme-active');
+    if (activeTag) activeTag.textContent = theme.name;
+  }
+
+  function apply(id, { persist = true, notify = false } = {}) {
+    const resolved = byId.has(id) ? id : 'obsidian';
+    const theme = byId.get(resolved);
+    activeId = resolved;
+
+    const root = document.documentElement;
+    root.dataset.theme = theme.base;
+    root.dataset.themeSkin = theme.id;
+    root.dataset.themeAnimated = theme.animated ? 'true' : 'false';
+
+    const meta = document.querySelector('meta[name="color-scheme"]');
+    if (meta) meta.content = theme.base;
+    const icon = document.getElementById('brand-icon');
+    if (icon) icon.setAttribute('href', theme.base === 'dark' ? '/lysios-mark-reverse-white.svg' : '/lysios-mark-canonical-ink.svg');
+    const metaTheme = document.querySelector('meta[name="theme-color"]');
+    if (metaTheme) metaTheme.content = getComputedStyle(root).getPropertyValue('--bg').trim() || '#171817';
+
+    if (theme.animated) startEngine(theme.id);
+    else stopEngine();
+
+    if (persist) {
+      try {
+        localStorage.setItem('g0dc0d3.themeSkin', theme.id);
+        localStorage.setItem('g0dc0d3.theme', theme.base);
+      } catch {}
+    }
+
+    syncThemeUI();
+    if (notify && typeof window.toast === 'function') {
+      window.toast(`Theme: ${theme.name}`);
+    }
+    return theme;
+  }
+
+  function resolveSavedTheme() {
+    try {
+      const skin = localStorage.getItem('g0dc0d3.themeSkin');
+      if (skin && byId.has(skin)) return skin;
+      const legacy = localStorage.getItem('g0dc0d3.theme');
+      if (legacy === 'light') return 'light';
+      if (legacy === 'dark') return 'obsidian';
+    } catch {}
+    return matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'obsidian';
+  }
+
+  function togglePopover(force) {
+    const pop = document.getElementById('theme-popover');
+    const btn = document.getElementById('theme-toggle');
+    if (!pop) return;
+    const open = typeof force === 'boolean' ? force : pop.classList.contains('hidden');
+    pop.classList.toggle('hidden', !open);
+    btn?.setAttribute('aria-expanded', String(open));
+    if (open) syncThemeUI();
+  }
+
+  function wireControls() {
+    const btn = document.getElementById('theme-toggle');
+    if (btn && !btn.dataset.themesWired) {
+      btn.dataset.themesWired = '1';
+      btn.setAttribute('aria-haspopup', 'dialog');
+      btn.setAttribute('aria-expanded', 'false');
+      btn.addEventListener('click', event => {
+        event.stopPropagation();
+        togglePopover();
+      });
+    }
+
+    document.addEventListener('click', event => {
+      const card = event.target.closest('[data-select-theme]');
+      if (card) {
+        const chosen = apply(card.dataset.selectTheme, { persist: true, notify: true });
+        if (typeof window.settingsFeedback === 'function' && document.getElementById('settings-dialog')?.open) {
+          window.settingsFeedback(`Theme switched to ${chosen.name}.`);
+        }
+        if (card.closest('#theme-popover')) togglePopover(false);
+        return;
+      }
+      if (event.target.closest('[data-close-theme-popover]')) {
+        togglePopover(false);
+        return;
+      }
+      const pop = document.getElementById('theme-popover');
+      if (pop && !pop.classList.contains('hidden') && !pop.contains(event.target) && !event.target.closest('#theme-toggle')) {
+        togglePopover(false);
+      }
+    });
+
+    window.addEventListener('keydown', event => {
+      if (event.key === 'Escape') {
+        const pop = document.getElementById('theme-popover');
+        if (pop && !pop.classList.contains('hidden')) togglePopover(false);
+      }
+    });
+
+    window.addEventListener('resize', resizeCanvas);
+    reducedMotion.addEventListener('change', () => {
+      if (byId.get(activeId)?.animated) startEngine(activeId);
+    });
+  }
+
+  window.G0DThemes = {
+    list: () => THEMES.slice(),
+    current: () => byId.get(activeId) || THEMES[0],
+    apply,
+    togglePopover,
+    syncUI: syncThemeUI,
+    setMotionPaused(paused) {
+      motionPaused = Boolean(paused);
+      const theme = byId.get(activeId);
+      document.documentElement.dataset.themeMotion = (reducedMotion.matches || motionPaused) ? 'paused' : 'live';
+      if (theme?.animated) startEngine(theme.id);
+    },
+    matchByQuery(q) {
+      const s = String(q || '').trim().toLowerCase();
+      if (!s) return null;
+      if (['roman', 'greek', 'greco', 'greco-roman', 'marble', 'classical', 'rome', 'athens', 'spqr'].includes(s)) return byId.get('ancient');
+      if (['astral', 'cosmos', 'cosmic', 'space', 'stars', 'galaxy', 'nebula', 'observatory', 'astrolabe'].includes(s)) return byId.get('celestial');
+      return THEMES.find(t => t.id === s || t.short.toLowerCase() === s || t.name.toLowerCase().includes(s)) || null;
+    }
+  };
+
+  wireControls();
+  apply(resolveSavedTheme(), { persist: false, notify: false });
+})();
