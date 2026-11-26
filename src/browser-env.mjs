@@ -361,7 +361,7 @@ class CdpSession {
     this.proc = spawn(this.binaryPath, args, { stdio: ['ignore', 'ignore', 'pipe'], detached: process.platform !== 'win32' });
     let stderrBuf = '';
     const debugPort = await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(fault('BROWSER_LAUNCH_TIMEOUT', 'Contained browser did not open its DevTools port within 10s.')), 10000);
+      const timer = setTimeout(() => reject(fault('BROWSER_LAUNCH_TIMEOUT', 'Contained browser did not open its DevTools port within 25s.')), 25000);
       const onData = chunk => {
         stderrBuf += chunk.toString('utf8');
         const m = /DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)\//.exec(stderrBuf);
