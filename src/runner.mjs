@@ -127,7 +127,7 @@ export function bwrapCommandArgs({
     '--cap-drop', 'ALL',
   ];
   if (!network) args.push('--unshare-net');
-  args.push('--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp', '--tmpfs', '/run');
+  args.push('--proc', '/proc', '--dev', '/dev', '--tmpfs', '/run');
 
   const bound = new Set();
   const addRoBind = p => {
@@ -183,6 +183,8 @@ export function bwrapCommandArgs({
     if (deniedFile) args.push('--ro-bind', deniedFile, file);
   }
 
+  // Remount the root tmpfs read-only so auto-created ancestor dirs (e.g. /tmp/...) outside workspace/homeDir/tmpDir return EROFS.
+  args.push('--remount-ro', '/');
   args.push('--chdir', cwd || workspace);
   args.push('--clearenv');
   for (const [k, v] of Object.entries(env)) {
@@ -234,6 +236,7 @@ export function bwrapWorkerArgs({ nodeFile, files = [], systemEntries = [], entr
     }
   }
   args.push(
+    '--remount-ro', '/',
     '--chdir', '/',
     '--clearenv',
     '--setenv', 'NODE_NO_WARNINGS', '1',

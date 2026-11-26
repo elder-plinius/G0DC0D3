@@ -68,7 +68,7 @@ jobs:
       - name: Resolve release version
         id: meta
         run: |
-          raw="${{ github.event.inputs.tag || github.ref_name }}"
+          raw="${{ inputs.tag || github.ref_name }}"
           ver="${raw#v}"
           if [ -z "$ver" ] || [ "$ver" = "main" ]; then
             ver="$(node -p "JSON.parse(require('node:fs').readFileSync('package.json','utf8')).version")"
@@ -76,28 +76,33 @@ jobs:
           echo "version=$ver" >> "$GITHUB_OUTPUT"
 
       - name: Import Apple Developer ID certificate (when configured)
-        if: ${{ secrets.MACOS_CERT_P12_BASE64 != '' && secrets.MACOS_CERT_PASSWORD != '' && secrets.MACOS_SIGN_IDENTITY != '' }}
         env:
           CERT_B64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
           CERT_PASS: ${{ secrets.MACOS_CERT_PASSWORD }}
-          KEYCHAIN_PASS: ${{ secrets.MACOS_KEYCHAIN_PASSWORD || 'ephemeral-release-keychain' }}
+          SIGN_ID: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          KEYCHAIN_PASS: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
         run: |
+          if [ -z "$CERT_B64" ] || [ -z "$CERT_PASS" ] || [ -z "$SIGN_ID" ]; then
+            echo "Apple Developer ID secrets not configured; building ad-hoc signed bundle."
+            exit 0
+          fi
+          kp="${KEYCHAIN_PASS:-ephemeral-release-keychain}"
           keychain="$RUNNER_TEMP/g0d-signing.keychain-db"
           cert_file="$RUNNER_TEMP/dev-id.p12"
           echo "$CERT_B64" | base64 --decode > "$cert_file"
-          security create-keychain -p "$KEYCHAIN_PASS" "$keychain"
+          security create-keychain -p "$kp" "$keychain"
           security set-keychain-settings -lut 21600 "$keychain"
-          security unlock-keychain -p "$KEYCHAIN_PASS" "$keychain"
+          security unlock-keychain -p "$kp" "$keychain"
           security import "$cert_file" -P "$CERT_PASS" -A -t cert -f pkcs12 -k "$keychain"
           security list-keychain -d user -s "$keychain"
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -k "$KEYCHAIN_PASS" "$keychain"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -k "$kp" "$keychain"
           rm -f "$cert_file"
 
       - name: Build self-contained macOS .dmg
         env:
           G0D_VERSION: ${{ steps.meta.outputs.version }}
           G0D_ARCH: ${{ matrix.arch }}
-          G0D_CODESIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY || '-' }}
+          G0D_CODESIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
@@ -141,7 +146,7 @@ jobs:
       - name: Resolve release version
         id: meta
         run: |
-          raw="${{ github.event.inputs.tag || github.ref_name }}"
+          raw="${{ inputs.tag || github.ref_name }}"
           ver="${raw#v}"
           if [ -z "$ver" ] || [ "$ver" = "main" ]; then
             ver="$(node -p "JSON.parse(require('node:fs').readFileSync('package.json','utf8')).version")"
@@ -180,7 +185,7 @@ jobs:
       - name: Resolve tag & version
         id: meta
         run: |
-          raw="${{ github.event.inputs.tag || github.ref_name }}"
+          raw="${{ inputs.tag || github.ref_name }}"
           if [ -z "$raw" ] || [ "$raw" = "main" ]; then
             ver="$(node -p "JSON.parse(require('node:fs').readFileSync('package.json','utf8')).version")"
             tag="v$ver"
@@ -211,11 +216,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.meta.outputs.tag }}
           VERSION: ${{ steps.meta.outputs.version }}
-          PRERELEASE: ${{ github.event.inputs.prerelease == true && 'true' || 'false' }}
+          PRERELEASE: ${{ inputs.prerelease }}
         run: |
           notes_file="$RUNNER_TEMP/release-notes.md"
           cat > "$notes_file" <<EOF
-          ## GODCODƎ / GODMODƎ ${TAG}
+          ## GODMODƎ ${TAG} (with GODCODƎ built in)
 
           Self-contained builds with Node.js 22 bundled — zero npm dependencies, zero telemetry.
 
