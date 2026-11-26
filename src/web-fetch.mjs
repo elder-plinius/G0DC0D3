@@ -314,17 +314,20 @@ export async function safeWebFetch({ url, maxChars = DEFAULT_MAX_CHARS } = {}, {
     onOutbound?.({ providerId: 'web.fetch', host: String(url || '').slice(0, 120), protocol: 'http', zdrClass: 'web-fetch', zdrFlags: [], secretsRedacted: 0, blocked: true, reason: 'Blocked by Local-Only privacy mode.' });
     throw fault('PRIVACY_LOCAL_ONLY', 'Local-only inference is enabled; outbound web.fetch is blocked.');
   }
-  let currentUrl = await validateSafePublicUrl(url, lookup);
+  // Enforce Rules-of-Engagement target scope BEFORE any DNS lookup
+  let initialParsed;
+  try { initialParsed = new URL(String(url || '').trim()); } catch { throw fault('INVALID_URL', 'Invalid URL.'); }
+  const initialScope = checkTargetScope(initialParsed.href, privacy);
+  if (!initialScope.allowed) {
+    onOutbound?.({ providerId: 'web.fetch', host: initialParsed.hostname, protocol: initialParsed.protocol.replace(':', ''), zdrClass: 'web-fetch', zdrFlags: ['scope-guard'], secretsRedacted: 0, blocked: true, reason: initialScope.message });
+    throw fault(initialScope.code, initialScope.message);
+  }
+  let currentUrl = await validateSafePublicUrl(initialParsed.href, lookup);
   const timeout = AbortSignal.timeout(15000);
   const combinedSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
   const reqHeaders = { 'user-agent': 'G0DC0D3/0.2 (research-harness)', 'accept': 'text/markdown, text/plain, text/html, application/json;q=0.9' };
 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    const scopeCheck = checkTargetScope(currentUrl.href, privacy);
-    if (!scopeCheck.allowed) {
-      onOutbound?.({ providerId: 'web.fetch', host: currentUrl.hostname, protocol: currentUrl.protocol.replace(':', ''), zdrClass: 'web-fetch', zdrFlags: ['scope-guard'], secretsRedacted: 0, blocked: true, reason: scopeCheck.message });
-      throw fault(scopeCheck.code, scopeCheck.message);
-    }
     onOutbound?.({ providerId: 'web.fetch', host: currentUrl.hostname, protocol: currentUrl.protocol.replace(':', ''), zdrClass: 'web-fetch', zdrFlags: ['ssrf-checked', 'dns-pinned'], secretsRedacted: 0, blocked: false });
     let status, respHeaders, buf, exceeded;
     if (fetchImpl === fetch && currentUrl._validatedAddress) {
@@ -349,7 +352,13 @@ export async function safeWebFetch({ url, maxChars = DEFAULT_MAX_CHARS } = {}, {
     if ([301, 302, 303, 307, 308].includes(status)) {
       const location = respHeaders.get('location');
       if (!location || hop === MAX_REDIRECTS) throw fault('TOO_MANY_REDIRECTS', 'Redirect limit exceeded.');
-      currentUrl = await validateSafePublicUrl(new URL(location, currentUrl).href, lookup);
+      const nextParsed = new URL(location, currentUrl);
+      const hopScope = checkTargetScope(nextParsed.href, privacy);
+      if (!hopScope.allowed) {
+        onOutbound?.({ providerId: 'web.fetch', host: nextParsed.hostname, protocol: nextParsed.protocol.replace(':', ''), zdrClass: 'web-fetch', zdrFlags: ['scope-guard'], secretsRedacted: 0, blocked: true, reason: hopScope.message });
+        throw fault(hopScope.code, hopScope.message);
+      }
+      currentUrl = await validateSafePublicUrl(nextParsed.href, lookup);
       continue;
     }
     const contentType = String(respHeaders.get('content-type') || 'text/plain').toLowerCase();

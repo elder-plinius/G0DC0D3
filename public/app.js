@@ -1673,6 +1673,11 @@ async function executeSlashCommand(raw) {
     openSettings('privacy');
     return { handled: true };
   }
+  if (cmd === '/schedules' || cmd === '/schedule' || cmd === '/cron' || cmd === '/crons') {
+    clearInput();
+    openSettings('schedules');
+    return { handled: true };
+  }
   if (cmd === '/help') {
     clearInput();
     toast('Commands: /plan, /build, /compact, /diff, /undo, /fork, /export, /remember, /memory, /skill, /model, /review, /test, /help');
@@ -2682,6 +2687,13 @@ function renderOverseerEdge() {
   const data = overseerData || state.overseer;
   const badge = $('#overseer-edge-badge');
   const btn = $('#overseer-toggle');
+  const schedBadge = $('#schedules-edge-badge');
+  if (schedBadge) {
+    const enabledCount = Number(state.schedulesSummary?.enabled || 0);
+    const runningCount = Number(state.schedulesSummary?.running || 0);
+    schedBadge.textContent = runningCount > 0 ? `${runningCount} running` : enabledCount > 0 ? String(enabledCount) : '';
+    schedBadge.className = `overseer-edge-badge${runningCount > 0 || enabledCount > 0 ? ' is-active' : ' hidden'}`;
+  }
   if (badge && btn) {
     const s = data?.settings || {};
     const active = Boolean(data?.ready);
@@ -5510,6 +5522,7 @@ function renderCommands() {
     { kind: 'action', title: 'Explore a finished change', detail: 'Offline GodCode patch review', keywords: 'example demo patch review', run: openFinishedChange },
     { kind: 'action', title: 'Open project', detail: 'Work in a local source copy', keywords: 'import folder workspace', run: () => openCreate(undefined, { source: 'project' }) },
     { kind: 'action', title: 'Prompt commands', detail: 'Create and edit ! shortcuts', keywords: 'prompts bang shortcuts', run: () => openSettings('prompts') },
+    { kind: 'action', title: 'Scheduled Jobs & Crons', detail: 'Create, run, or pause recurring & timed automations (/schedules)', keywords: 'cron schedule recurring timer automation jobs launchd /cron /schedules', run: () => openSettings('schedules') },
     ...(task ? [
       { kind: 'action', title: 'Rename conversation', detail: 'Edit the current conversation title', keywords: 'rename title name /rename', run: () => startInlineRename(task, $('#selected-title')) },
       { kind: 'action', title: 'Fork current task', detail: 'Branch into a new conversation', keywords: 'branch clone duplicate /fork', run: () => forkTaskAction(task) },
@@ -7902,6 +7915,7 @@ $('#benchmark-open')?.addEventListener('click', openBenchmark);
 $('#benchmark-run').addEventListener('click', runBenchmark);
 $('#about-open').addEventListener('click', () => { dismissDrawers(); renderAbout(); if (!$('#about-dialog').open) $('#about-dialog').showModal(); });
 $('#security-posture-pill')?.addEventListener('click', () => { toggleOverseerPopover(false); openSettings('privacy'); });
+$('#schedules-sidebar-btn')?.addEventListener('click', () => { toggleOverseerPopover(false); openSettings('schedules'); });
 $('#overseer-toggle')?.addEventListener('click', event => { event.stopPropagation(); toggleOverseerPopover(); });
 $('#overseer-popover')?.addEventListener('click', async event => {
   event.stopPropagation();

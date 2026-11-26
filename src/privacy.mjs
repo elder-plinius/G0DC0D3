@@ -93,7 +93,14 @@ function normalizeScopePatterns(raw, fieldName) {
     if (typeof item !== 'string') {
       throw Object.assign(new Error(`Invalid host pattern in ${fieldName}.`), { code: 'INVALID_PRIVACY', status: 400 });
     }
-    let clean = item.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/:\d+$/, '');
+    let clean = item.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+    const bracketedIpv6 = clean.match(/^\[([^\]]+)\](?::\d+)?$/);
+    if (bracketedIpv6) {
+      clean = bracketedIpv6[1];
+    } else if ((clean.match(/:/g) || []).length === 1) {
+      clean = clean.replace(/:\d+$/, '');
+    }
+    clean = clean.replace(/\.+$/, '');
     if (!clean) continue;
     if (clean.length > 200 || !/^[a-z0-9*._:-]+$/.test(clean)) {
       throw Object.assign(new Error(`Invalid host pattern "${item.slice(0, 60)}" in ${fieldName}. Use hostnames or *.domain wildcards.`), { code: 'INVALID_PRIVACY', status: 400 });
@@ -107,8 +114,8 @@ function normalizeScopePatterns(raw, fieldName) {
 }
 
 function hostMatchesScopePattern(host, pattern) {
-  const h = String(host || '').toLowerCase().replace(/^\[|\]$/g, '');
-  const p = String(pattern || '').toLowerCase().replace(/^\[|\]$/g, '');
+  const h = String(host || '').toLowerCase().replace(/^\[|\]$/g, '').replace(/\.+$/, '');
+  const p = String(pattern || '').toLowerCase().replace(/^\[|\]$/g, '').replace(/\.+$/, '');
   if (!h || !p) return false;
   if (p === '*') return true;
   if (p.startsWith('*.')) {
@@ -215,7 +222,7 @@ export function normalizePrivacySettings(input = {}, base = DEFAULT_PRIVACY_SETT
       ? 'hardened'
       : 'standard';
   return {
-    securityProfile: profileSeed.securityProfile || derivedProfile,
+    securityProfile: derivedProfile,
     ...merged,
   };
 }

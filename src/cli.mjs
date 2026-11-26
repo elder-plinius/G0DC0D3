@@ -14,7 +14,7 @@ import { resolveWorkflow, WORKFLOW_NAMES } from './workflows.mjs';
 import { gitDiff, gitInit, hasGit } from './git.mjs';
 
 const rawArgv = process.argv.slice(2), command = rawArgv.shift() || 'help';
-const BOOLEAN_FLAGS = new Set(['plan', 'help', 'h']);
+const BOOLEAN_FLAGS = new Set(['plan', 'help', 'h', 'respect-enabled', 'due-only']);
 const parsedOptions = new Map();
 const parsedFlags = new Set();
 const positionals = [];
@@ -261,7 +261,7 @@ async function runChat(runtime, providers) {
 }
 
 if (command === 'help' || command === '--help' || command === '-h') {
-  process.stdout.write(`G0DC0D3 — controlled coding harness\n\n  node src/cli.mjs fixtures\n  node src/cli.mjs run --fixture task-board [--providers scripted-primary,scripted-fallback] [--workflow standard] [--scenario refusal] [--plan]\n  node src/cli.mjs run --source /path/to/repo --objective "..." --providers ... [--workflow high] [--plan]\n  node src/cli.mjs chat [--source DIR] [--providers ...] [--workflow ...] [--plan]\n  node src/cli.mjs list\n  node src/cli.mjs inspect TASK_ID\n  node src/cli.mjs resume TASK_ID [--calls 30]\n  node src/cli.mjs verify TASK_ID\n  node src/cli.mjs bench [--output DIRECTORY]\n\nWorkflows: ${WORKFLOW_NAMES.join(', ')}\nAll task commands accept --data DIRECTORY. G0D_ENABLE_CODEX=1 opts in to the authenticated experimental CLI bridge.\nServer and CLI must use different data directories while running simultaneously.\n`);
+  process.stdout.write(`G0DC0D3 — controlled coding harness\n\n  node src/cli.mjs fixtures\n  node src/cli.mjs run --fixture task-board [--providers scripted-primary,scripted-fallback] [--workflow standard] [--scenario refusal] [--plan]\n  node src/cli.mjs run --source /path/to/repo --objective "..." --providers ... [--workflow high] [--plan]\n  node src/cli.mjs chat [--source DIR] [--providers ...] [--workflow ...] [--plan]\n  node src/cli.mjs list\n  node src/cli.mjs inspect TASK_ID\n  node src/cli.mjs resume TASK_ID [--calls 30]\n  node src/cli.mjs verify TASK_ID\n  node src/cli.mjs cron list|add|run|pause|resume|rm|plist ...\n  node src/cli.mjs bench [--output DIRECTORY]\n\nWorkflows: ${WORKFLOW_NAMES.join(', ')}\nAll task commands accept --data DIRECTORY. G0D_ENABLE_CODEX=1 opts in to the authenticated experimental CLI bridge.\nServer and CLI must use different data directories while running simultaneously.\n`);
 } else if (command === 'fixtures') print(fixtures.map(({ files, ...fixture }) => ({ ...fixture, files: Object.keys(files) })));
 else if (command === 'bench') {
   const { runBenchmark } = await import('../bench/run.mjs');
@@ -323,6 +323,58 @@ else if (command === 'bench') {
       const evalResult = await evaluateTask(runtime.getTask(positionals[0]));
       print(evalResult);
       process.exitCode = evalResult.status === 'pass' ? 0 : 1;
+    } else if (command === 'cron') {
+      const sub = positionals[0] || 'list';
+      if (sub === 'list') {
+        print({ jobs: runtime.listScheduledJobs(), summary: runtime.getSchedulesSummary() });
+      } else if (sub === 'add') {
+        const job = runtime.createScheduledJob({
+          name: option('name'),
+          prompt: option('prompt') || option('objective'),
+          kind: option('at') ? 'once' : 'cron',
+          expression: option('cron') || option('expr') || '0 9 * * *',
+          runAt: option('at'),
+          mode: option('mode') || (option('source') ? 'godcode' : 'godmode'),
+          sourcePath: option('source') ? path.resolve(option('source')) : null,
+          providerIds: option('providers')?.split(',').map(s => s.trim()).filter(Boolean) || [],
+          effort: option('effort') || 'medium',
+          permissionPreset: option('preset') || 'safe',
+          planMode: hasFlag('plan'),
+        });
+        print(job);
+      } else if (sub === 'run') {
+        const targetId = positionals[1];
+        if (!targetId) throw new Error('Provide a scheduled job ID: node src/cli.mjs cron run <job-id>');
+        const respectEnabled = hasFlag('respect-enabled') || hasFlag('due-only');
+        let skipNotDue = false;
+        if (hasFlag('due-only')) {
+          const job = runtime.getScheduledJob(targetId);
+          if (!job.enabled || !job.nextRunAt || Date.parse(job.nextRunAt) > Date.now()) {
+            print({ skipped: true, reason: 'Not due yet.', job });
+            process.exitCode = 0;
+            skipNotDue = true;
+          }
+        }
+        if (!skipNotDue) {
+          const result = await runtime.runScheduledJobNow(targetId, { wait: true, respectEnabled });
+          print(result);
+          process.exitCode = (result.skipped || result.run?.status === 'completed') ? 0 : 1;
+        }
+      } else if (sub === 'pause' || sub === 'resume') {
+        const targetId = positionals[1];
+        if (!targetId) throw new Error(`Provide a scheduled job ID: node src/cli.mjs cron ${sub} <job-id>`);
+        print(runtime.updateScheduledJob(targetId, { enabled: sub === 'resume' }));
+      } else if (sub === 'rm' || sub === 'delete') {
+        const targetId = positionals[1];
+        if (!targetId) throw new Error('Provide a scheduled job ID: node src/cli.mjs cron rm <job-id>');
+        print(runtime.deleteScheduledJob(targetId));
+      } else if (sub === 'plist') {
+        const targetId = positionals[1];
+        if (!targetId) throw new Error('Provide a scheduled job ID: node src/cli.mjs cron plist <job-id>');
+        process.stdout.write(runtime.getScheduledJobPlist(targetId));
+      } else {
+        throw new Error(`Unknown cron subcommand "${sub}". Expected list, add, run, pause, resume, rm, or plist.`);
+      }
     }
     else throw new Error(`Unknown command ${command}; use help`);
   } finally { await runtime.close(); }

@@ -32,11 +32,14 @@ export class Store {
       CREATE TABLE IF NOT EXISTS source_applications(id TEXT PRIMARY KEY, task_id TEXT NOT NULL, data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS source_application_backups(id TEXT PRIMARY KEY, data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS memories(id TEXT PRIMARY KEY, scope TEXT NOT NULL, title TEXT NOT NULL, content TEXT NOT NULL, tags TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS scheduled_jobs(id TEXT PRIMARY KEY, data TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS scheduled_runs(id TEXT PRIMARY KEY, job_id TEXT NOT NULL, started_at TEXT NOT NULL, data TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS events_task ON events(task_id,seq);
       CREATE INDEX IF NOT EXISTS operations_task ON operations(task_id);
       CREATE INDEX IF NOT EXISTS crews_parent ON crews(parent_id);
       CREATE INDEX IF NOT EXISTS source_applications_task ON source_applications(task_id);
-      CREATE INDEX IF NOT EXISTS memories_scope_title ON memories(scope, lower(title));`);
+      CREATE INDEX IF NOT EXISTS memories_scope_title ON memories(scope, lower(title));
+      CREATE INDEX IF NOT EXISTS scheduled_runs_job ON scheduled_runs(job_id, started_at DESC);`);
       this.hasMemoryFts = false;
       try {
         this.db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(id UNINDEXED, scope, title, content, tags);`);
@@ -409,6 +412,36 @@ export class Store {
       this.db.prepare('DELETE FROM events WHERE task_id=?').run(taskId);
       this.db.prepare('DELETE FROM tasks WHERE id=?').run(taskId);
       return { deleted: true, task };
+    });
+  }
+  listScheduledJobs() {
+    return this.db.prepare('SELECT data FROM scheduled_jobs ORDER BY rowid DESC').all().map(safeParse).filter(Boolean);
+  }
+  getScheduledJob(id) {
+    return safeParse(this.db.prepare('SELECT data FROM scheduled_jobs WHERE id=?').get(id));
+  }
+  putScheduledJob(job) {
+    return this.transaction(() => {
+      this.db.prepare('INSERT INTO scheduled_jobs(id,data) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data').run(job.id, json(job));
+      return job;
+    });
+  }
+  deleteScheduledJob(id) {
+    return this.transaction(() => {
+      this.db.prepare('DELETE FROM scheduled_runs WHERE job_id=?').run(id);
+      this.db.prepare('DELETE FROM scheduled_jobs WHERE id=?').run(id);
+      return true;
+    });
+  }
+  listScheduledRuns(jobId, limit = 25) {
+    const cap = Math.max(1, Math.min(200, Number(limit) || 25));
+    return this.db.prepare('SELECT data FROM scheduled_runs WHERE job_id=? ORDER BY started_at DESC, rowid DESC LIMIT ?').all(jobId, cap).map(safeParse).filter(Boolean);
+  }
+  putScheduledRun(run) {
+    return this.transaction(() => {
+      this.db.prepare('INSERT INTO scheduled_runs(id,job_id,started_at,data) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET started_at=excluded.started_at, data=excluded.data').run(run.id, run.jobId, run.startedAt || new Date().toISOString(), json(run));
+      this.db.prepare('DELETE FROM scheduled_runs WHERE job_id=? AND id NOT IN (SELECT id FROM scheduled_runs WHERE job_id=? ORDER BY started_at DESC, rowid DESC LIMIT 200)').run(run.jobId, run.jobId);
+      return run;
     });
   }
   close() { if (!this.closed) { this.db.close(); this.closed = true; this._releaseOwnership(); } }

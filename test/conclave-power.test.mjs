@@ -120,7 +120,9 @@ test('Conclave Power #3 & #4: Formations CRUD, Agent XP leveling, Token/Cost & M
     const localTel = estimateWorkerTelemetry({ prompt: 'hi', summary: 'ok', calls: 1, providerId: 'local:qwen-3-coder', costIndex: 90 });
     assert.equal(localTel.estimatedCostUsd, 0);
 
-    const task = await app.runtime.createTask({ objective: 'Parallel audit', providerId: stub.id, workspace: dir });
+    const wsDir = path.join(dir, 'ws');
+    await fs.mkdir(wsDir, { recursive: true });
+    const task = await app.runtime.createTask({ objective: 'Parallel audit', providerId: stub.id, workspace: wsDir });
     const t0 = new Date(Date.now() - 8000).toISOString();
     const t1 = new Date(Date.now() - 5000).toISOString();
     const t2 = new Date(Date.now() - 1000).toISOString();
