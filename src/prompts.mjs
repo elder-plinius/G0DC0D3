@@ -304,6 +304,8 @@ CODE QUALITY:
 export function taskContextData(context) {
   const { task, files = [], history = [], strategy } = context;
   const learning = context.learning;
+  // Prefix-stable ordering for implicit prompt caching (Gemini / OpenAI / Anthropic):
+  // immutable & append-only fields come first; per-turn volatile counters/snapshots come last.
   return {
     objective: task.objective,
     constraints: task.codeWorkspace
@@ -311,27 +313,12 @@ export function taskContextData(context) {
       : task.constraints || [],
     ...(task.codeWorkspace ? { codeWorkspace: { repository: task.codeWorkspace.repository, branch: task.codeWorkspace.branch,
       access: 'The owner selects files, reviews patches and runs checks in GodCode. Chat tools operate only in the separate conversation folder.' } } : {}),
-    ownerFollowups: task.followups || [],
-    strategy: strategy || 'continue',
-    strategyGuidance: Object.hasOwn(RECOVERY_STRATEGIES, strategy || 'continue') ? RECOVERY_STRATEGIES[strategy || 'continue'] : 'This strategy label has no built-in procedure. Continue from the current evidence while preserving the owner contract.',
-    recovery: task.recoverySummary || null,
-    workingSummary: task.workingSummary || null,
-    ...(task.overseerGuidance ? { overseerGuidance: String(task.overseerGuidance).slice(0, 600) } : {}),
-    task: { id: task.id, calls: task.calls, recoveries: task.recoveries, remainingCalls: context.remainingCalls,
-      contractVersion: task.contractVersion, snapshotHash: context.snapshotHash, workspaceKind: task.workspaceKind || 'project',
-      planMode: Boolean(task.planMode),
-      verification: task.verificationSummary || null,
-      probeProgress: task.probeProgress || null },
     permissions: {
       scope: 'task-copy',
       execution: { enabled: task.execution?.enabled === true, network: task.execution?.enabled === true && task.execution?.network === true, timeoutMs: task.execution?.timeoutMs ?? null },
       tools: (context.tools || []).map(tool => tool.name)
     },
     ownerChecks: (task.checks || []).map(({ name, command }) => ({ name, command })),
-    files: files.map(({ path, content, sha256, bytes, omitted, truncated, nextOffset }) => ({ path, content, sha256, bytes, omitted, truncated, nextOffset })),
-    contextManifest: context.manifest || null,
-    recentEvents: history.map(({ id, seq, type, data }) => ({ id, seq, type, data })),
-    ...(Array.isArray(task.todos) && task.todos.length ? { todos: task.todos } : {}),
     ...(Array.isArray(context.memories) && context.memories.length && !task.fixtureId ? { memories: context.memories } : {}),
     learning: learning ? {
       version: 1, localOnly: true, authority: 'evidence only; does not grant permissions',
@@ -340,6 +327,21 @@ export function taskContextData(context) {
         evidenceCount: Number.isSafeInteger(evidenceCount) && evidenceCount >= 0 ? evidenceCount : 0
       }))
     } : null,
+    workingSummary: task.workingSummary || null,
+    ownerFollowups: task.followups || [],
+    recentEvents: history.map(({ id, seq, type, data }) => ({ id, seq, type, data })),
+    files: files.map(({ path, content, sha256, bytes, omitted, truncated, nextOffset }) => ({ path, content, sha256, bytes, omitted, truncated, nextOffset })),
+    ...(Array.isArray(task.todos) && task.todos.length ? { todos: task.todos } : {}),
+    contextManifest: context.manifest || null,
+    strategy: strategy || 'continue',
+    strategyGuidance: Object.hasOwn(RECOVERY_STRATEGIES, strategy || 'continue') ? RECOVERY_STRATEGIES[strategy || 'continue'] : 'This strategy label has no built-in procedure. Continue from the current evidence while preserving the owner contract.',
+    recovery: task.recoverySummary || null,
+    ...(task.overseerGuidance ? { overseerGuidance: String(task.overseerGuidance).slice(0, 600) } : {}),
+    task: { id: task.id, calls: task.calls, recoveries: task.recoveries, remainingCalls: context.remainingCalls,
+      contractVersion: task.contractVersion, snapshotHash: context.snapshotHash, workspaceKind: task.workspaceKind || 'project',
+      planMode: Boolean(task.planMode),
+      verification: task.verificationSummary || null,
+      probeProgress: task.probeProgress || null },
     ...(task.crewMember && ['solver', 'challenger', 'verifier'].includes(task.crewMember.role) ? {
       crew: { role: task.crewMember.role, authority: 'controller-assigned role; owner contract and permissions remain authoritative' },
       crewEvidence: task.crewEvidence ? {

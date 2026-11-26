@@ -963,6 +963,18 @@ export class Runtime {
         if (cause.code === 'CREW_BUDGET' || cause.code === 'CALL_BUDGET') return this._status(id, epoch, 'paused_budget', { code: cause.code, message: cause.message });
         throw cause;
       }
+      // Closed-loop visual observation: when the previous turn captured a browser.screenshot,
+      // attach the live PNG in memory (never bloated into SQLite) so vision-capable models like Gemini 4 Neon see it directly.
+      const lastReqIdx = (context.history || []).findLastIndex(e => e.type === 'model.request');
+      const sinceLastReq = lastReqIdx >= 0 ? context.history.slice(lastReqIdx + 1) : (context.history || []);
+      const tookBrowserShot = sinceLastReq.some(e => e.type === 'tool.completed' && e.data?.name === 'browser.screenshot' && e.data?.status !== 'failed');
+      if (tookBrowserShot && typeof this.broker?.browser?.getLatestScreenshot === 'function') {
+        const shot = this.broker.browser.getLatestScreenshot(id);
+        if (shot?.buffer && shot.buffer.byteLength > 0 && shot.buffer.byteLength <= 2 * 1024 * 1024) {
+          const mediaType = shot.mimeType || 'image/png';
+          context.visualObservations = [{ dataUrl: `data:${mediaType};base64,${shot.buffer.toString('base64')}`, mediaType }];
+        }
+      }
       let response;
       this._emitStream(id, { type: 'turn_start', providerId: task.providerId, call: task.calls });
       const onDelta = delta => {

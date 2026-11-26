@@ -4,6 +4,7 @@ import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { TOOLS } from './broker.mjs';
+import { resolveCatalogEntry } from './model-catalog.mjs';
 import { classifyProviderFailure } from './outcomes.mjs';
 import { compilePrompt, compileInstructions, compileTaskContext, buildToolPlaybook, effortInstructions, PROMPT_VERSION, PERSONAS, resolvePersona } from './prompts.mjs';
 import { applyMessageInjections, buildCatalogSystemPrompt, stitchPrefillIntoText } from './prompt-transparency.mjs';
@@ -65,8 +66,31 @@ function normalizeCalls(calls, aliases, tools = canonicalTools) {
     const id=call.id||randomUUID();
     if(typeof id!=='string'||id.length>200||seen.has(id))throw Object.assign(new Error('Tool call identifiers must be unique strings of at most 200 characters'),{code:'tool_protocol'});
     seen.add(id);
-    return {id,name,args};
+    const extraContent = call.extra_content && typeof call.extra_content === 'object' ? call.extra_content
+      : call.extraContent && typeof call.extraContent === 'object' ? call.extraContent
+        : (typeof call.thought_signature === 'string' && call.thought_signature ? { google: { thought_signature: call.thought_signature } } : null);
+    const thoughtSignature = typeof call.thoughtSignature === 'string' ? call.thoughtSignature
+      : typeof call.thought_signature === 'string' ? call.thought_signature
+        : typeof extraContent?.google?.thought_signature === 'string' ? extraContent.google.thought_signature : null;
+    return {
+      id,
+      name,
+      args,
+      ...(extraContent ? { extra_content: extraContent } : {}),
+      ...(thoughtSignature ? { thoughtSignature } : {}),
+    };
   });
+}
+
+function sanitizeSchemaForGemini(schema) {
+  if (!schema || typeof schema !== 'object') return schema;
+  if (Array.isArray(schema)) return schema.map(sanitizeSchemaForGemini);
+  const out = {};
+  for (const [k, v] of Object.entries(schema)) {
+    if (k === 'additionalProperties' || k === '$schema') continue;
+    out[k] = sanitizeSchemaForGemini(v);
+  }
+  return out;
 }
 
 /**
@@ -257,7 +281,9 @@ export function catalogMessages(context, { enableTools = false, aliases = null }
           function: {
             name: aliases?.forward.get(c.name) || c.name.replace(/[^a-zA-Z0-9_-]/g, '__'),
             arguments: JSON.stringify(c.args || {})
-          }
+          },
+          ...(c.extra_content ? { extra_content: c.extra_content }
+            : c.thoughtSignature ? { extra_content: { google: { thought_signature: c.thoughtSignature } } } : {}),
         }));
         const toolResponses = calls.map(c => ({
           role: 'tool',
@@ -385,6 +411,14 @@ export class HttpProvider {
     const resolvedTier = inferProviderTier({ id, baseUrl, model, tier });
     if(credential!==undefined)httpCredentials.set(this,credential);
     Object.assign(this,{id,label:label||id,protocol,model,apiKeyEnv,headers,timeoutMs,tier:resolvedTier});
+    const catalogSpec = resolveCatalogEntry({ id, model, baseUrl: endpoint.href });
+    this.modelMetadata = {
+      contextWindow: catalogSpec?.contextWindow || 128000,
+      maxOutput: catalogSpec?.maxOutput || maxOutputTokensCeiling,
+      supportsReasoning: Boolean(catalogSpec?.capabilities?.reasoning),
+      supportsVision: catalogSpec?.capabilities?.vision !== false,
+      pricing: catalogSpec?.pricing || null,
+    };
     Object.defineProperty(this, 'baseUrl', { value: endpoint.href.replace(/\/$/, ''), enumerable: true });
     Object.defineProperties(this,{maxOutputTokens:{value:maxOutputTokens,enumerable:true},maxOutputTokensCeiling:{value:maxOutputTokensCeiling,enumerable:true}});
     this.kind='http'; this.available=credential!==undefined||!apiKeyEnv||Boolean(process.env[apiKeyEnv]);
@@ -683,6 +717,8 @@ export class HttpProvider {
             if (!toolAccum.has(idx)) toolAccum.set(idx, { id: '', function: { name: '', arguments: '' } });
             const acc = toolAccum.get(idx);
             if (tc.id && !acc.id) acc.id = tc.id;
+            if (tc.extra_content && typeof tc.extra_content === 'object') acc.extra_content = tc.extra_content;
+            if (typeof tc.thought_signature === 'string' && tc.thought_signature) acc.thought_signature = tc.thought_signature;
             if (tc.function?.name) acc.function.name += tc.function.name;
             if (tc.function?.arguments != null) {
               acc.function.arguments += typeof tc.function.arguments === 'string'
@@ -750,7 +786,13 @@ export class HttpProvider {
         : '';
     const cleanThinking = rawThinking ? (key ? rawThinking.split(key).join('[redacted credential]') : rawThinking) : '';
     const rawToolCalls = toolsActiveForParse && !declined && answer?.finish_reason !== 'length' && Array.isArray(answer?.message?.tool_calls)
-      ? answer.message.tool_calls.map(tc => ({ id: tc?.id, name: tc?.function?.name, arguments: tc?.function?.arguments }))
+      ? answer.message.tool_calls.map(tc => ({
+        id: tc?.id,
+        name: tc?.function?.name,
+        arguments: tc?.function?.arguments,
+        ...(tc?.extra_content ? { extra_content: tc.extra_content } : {}),
+        ...(tc?.thought_signature ? { thought_signature: tc.thought_signature } : {}),
+      }))
       : [];
     if (rawToolCalls.length > 0) {
       try {
@@ -854,7 +896,11 @@ export class HttpProvider {
     const headers={'content-type':'application/json',...this.headers};
     const key=httpCredentials.get(this)??(this.apiKeyEnv?process.env[this.apiKeyEnv]:null);
     let endpoint,body;
-    const attachments = context.task?.attachments;
+    const userAttachments = Array.isArray(context.task?.attachments) ? context.task.attachments : [];
+    const visualObs = this.modelMetadata?.supportsVision !== false && Array.isArray(context.visualObservations) ? context.visualObservations : [];
+    const attachments = visualObs.length ? [...userAttachments, ...visualObs] : userAttachments;
+    const isGeminiWire = /generativelanguage\.googleapis\.com/i.test(this.baseUrl) || /gemini/i.test(String(this.model || ''));
+    const toolParamsForWire = params => (isGeminiWire ? sanitizeSchemaForGemini(params) : params);
     const transparency = context.task?.fixtureId ? null : (context.transparency || null);
     let prefillMeta = null;
     const isFixtureTask = Boolean(context.task?.fixtureId);
@@ -881,11 +927,11 @@ export class HttpProvider {
       const priorCompliance = isFixtureTask ? getComplianceC(context.task?.recoveries) : [];
       const injectedC = applyMessageInjections([{role:'system',content:instructions},...priorCompliance,{role:'user',content:formatUserContent('openai-chat', prompt, attachments)}], transparency, { allowAssistantPrefill: true });
       prefillMeta = injectedC.rawPrefill ? injectedC : null;
-      body={model:this.model,messages:redactInjected(injectedC.messages),max_tokens:maxOutputTokens,...(tools.length?{tools:tools.map(t=>({type:'function',function:{name:aliases.forward.get(t.name),description:t.description,parameters:t.parameters}}))}:{})};
+      body={model:this.model,messages:redactInjected(injectedC.messages),max_tokens:maxOutputTokens,...(tools.length?{tools:tools.map(t=>({type:'function',function:{name:aliases.forward.get(t.name),description:t.description,parameters:toolParamsForWire(t.parameters)}}))}:{})};
     }
     Object.assign(body,generation);
     const taskEffort = String(context.task?.effort || 'medium').toLowerCase();
-    const isReasoningModel = Boolean(this.modelMetadata?.supportsReasoning) || /\b(?:o1|o3|o4|gpt-5|gpt-6|deepseek-r1|qwq|thinking|reasoning)\b/i.test(String(this.model || ''));
+    const isReasoningModel = Boolean(this.modelMetadata?.supportsReasoning) || /(?:o1|o3|o4|gpt-5|gpt-6|gemini[-_.]?(?:2\.5|3|4)|deepseek-r1|qwq|thinking|reasoning)/i.test(String(this.model || ''));
     if (isReasoningModel && taskEffort !== 'medium') {
       const baseApiEffort = taskEffort === 'fast' ? 'low' : 'high';
       const apiEffort = profile.reasoningCap === 'low' ? 'low' : profile.reasoningCap === 'medium' ? null : baseApiEffort;
@@ -1135,6 +1181,8 @@ export class HttpProvider {
             if(!toolCallAccum.has(tcIdx))toolCallAccum.set(tcIdx,{id:'',name:'',arguments:''});
             const a=toolCallAccum.get(tcIdx);
             if(tc.id&&!a.id)a.id=tc.id;
+            if(tc.extra_content&&typeof tc.extra_content==='object')a.extra_content=tc.extra_content;
+            if(typeof tc.thought_signature==='string'&&tc.thought_signature)a.thought_signature=tc.thought_signature;
             if(tc.function?.name)a.name+=tc.function.name;
             if(tc.function?.arguments!=null)a.arguments+=typeof tc.function.arguments==='string'?tc.function.arguments:JSON.stringify(tc.function.arguments);
           }
@@ -1156,7 +1204,11 @@ export class HttpProvider {
         if(!finishReason&&!refusal) {
           return {type:'error',code:'provider_incomplete',message:'Streaming response ended before a finish reason arrived; no tool calls were executed.',retryable:true,usage:usage||null,model:modelId,...formatThinking(thinking)};
         }
-        calls=[...toolCallAccum.entries()].sort((a,b)=>a[0]-b[0]).map(([,tc])=>({id:tc.id,name:tc.name,arguments:tc.arguments}));
+        calls=[...toolCallAccum.entries()].sort((a,b)=>a[0]-b[0]).map(([,tc])=>({
+          id:tc.id,name:tc.name,arguments:tc.arguments,
+          ...(tc.extra_content?{extra_content:tc.extra_content}:{}),
+          ...(tc.thought_signature?{thought_signature:tc.thought_signature}:{}),
+        }));
         refusal||=finishReason==='content_filter';
         incomplete=outputLimited=finishReason==='length';
       }
@@ -1217,7 +1269,12 @@ export class HttpProvider {
       if(rawThinking)thinking=appendThinking(thinking,rawThinking);
       refusal=Boolean(m.refusal)||choice.finish_reason==='content_filter';if(m.refusal)text+=m.refusal;
       incomplete=outputLimited=choice.finish_reason==='length';
-      calls=(m.tool_calls||[]).map(c=>({id:c.id,...c.function}));
+      calls=(m.tool_calls||[]).map(c=>({
+        id:c.id,
+        ...c.function,
+        ...(c.extra_content?{extra_content:c.extra_content}:{}),
+        ...(c.thought_signature?{thought_signature:c.thought_signature}:{}),
+      }));
     }
     const meta={usage:data.usage||null,model:data.model||this.model,...formatThinking(thinking)};
     // A refusal or truncated tool batch must never accidentally execute partial tool calls.

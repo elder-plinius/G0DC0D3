@@ -20,7 +20,8 @@ test('resolveContextByteLimit scales dynamically from 16K local models to 1M fro
   assert.equal(resolveContextByteLimit({ modelMetadata: { contextWindow: 65536 } }), 96 * 1024);
   assert.equal(resolveContextByteLimit({ modelMetadata: { contextWindow: 128000 } }), 160 * 1024);
   assert.equal(resolveContextByteLimit({ modelMetadata: { contextWindow: 200000 } }), 256 * 1024);
-  assert.equal(resolveContextByteLimit({ modelMetadata: { contextWindow: 1000000 } }), 384 * 1024);
+  assert.equal(resolveContextByteLimit({ modelMetadata: { contextWindow: 400000 } }), 384 * 1024);
+  assert.equal(resolveContextByteLimit({ modelMetadata: { contextWindow: 1000000 } }), 768 * 1024);
   assert.equal(resolveContextByteLimit(null), DEFAULT_CONTEXT_BYTE_LIMIT);
   assert.equal(resolveContextByteLimit({ modelMetadata: { contextWindow: 1000000 } }, { fixtureId: 'task-board' }), DEFAULT_CONTEXT_BYTE_LIMIT);
 });

@@ -38,7 +38,8 @@ export function resolveContextByteLimit(provider, task = null) {
   if (ctxWin <= 65536) return 96 * 1024;
   if (ctxWin <= 131072) return 160 * 1024;
   if (ctxWin <= 270000) return 256 * 1024;
-  return 384 * 1024;
+  if (ctxWin <= 520000) return 384 * 1024;
+  return 768 * 1024;
 }
 
 /**
