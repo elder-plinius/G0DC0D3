@@ -390,7 +390,7 @@
   <dialog id="source-review-dialog" class="modal source-review-modal" aria-labelledby="source-review-title"><div class="modal-header"><div><span class="eyebrow">ORIGINAL PROJECT</span><h2 id="source-review-title">Review source changes</h2></div><button class="icon-button dialog-close" type="button" data-close="source-review-dialog" aria-label="Close source review">×</button></div><p class="source-destination" id="source-review-destination"></p><p class="modal-intro" id="source-review-note" role="status"></p><div id="source-selection" class="source-selection hidden" role="group" aria-label="Choose files to apply"><p id="source-selection-summary" role="status" aria-live="polite"></p><div class="source-selection-actions"><button type="button" class="button button-secondary" id="source-select-all">Select conflict-free</button><button type="button" class="button button-quiet" id="source-select-none">Clear selection</button></div></div><div id="source-review-files"></div><div class="inline-error hidden" id="source-review-error" role="alert"></div><div class="modal-footer"><button type="button" class="button button-secondary" data-close="source-review-dialog">Close review</button><button type="button" class="button button-primary" id="source-review-confirm" disabled>Apply reviewed files</button></div></dialog>
   <dialog id="crew-review-dialog" class="modal source-review-modal" aria-labelledby="crew-review-title"><div class="modal-header"><div><h2 id="crew-review-title">Review candidate</h2></div><button class="icon-button dialog-close" type="button" data-close="crew-review-dialog" aria-label="Close candidate review">×</button></div><p class="modal-intro" id="crew-review-note" role="status"></p><div id="crew-review-checks"></div><div id="crew-review-files"></div><div class="inline-error hidden" id="crew-review-error" role="alert"></div><div class="modal-footer"><button type="button" class="button button-secondary" data-close="crew-review-dialog">Close</button><button type="button" class="button button-primary" id="crew-review-confirm" disabled>Use candidate</button></div></dialog>
   <div id="model-controls" class="models-stack" hidden>
-    <div class="settings-card">
+    <div class="settings-card" data-model-subtab="connections">
       <div class="settings-card-head">
         <h4>Active Model</h4>
         <p>The primary model used for new turns. Click to browse or search every connected model.</p>
@@ -399,8 +399,8 @@
       <p class="field-help" id="model-current"></p>
       <p class="form-feedback" id="model-feedback" role="status"></p>
     </div>
-    <section id="api-toggles-section" class="settings-card api-toggles-section" aria-label="Active API providers" hidden></section>
-    <section id="api-key-setup" class="settings-card api-key-setup">
+    <section id="api-toggles-section" class="settings-card api-toggles-section" data-model-subtab="connections" aria-label="Active API providers" hidden></section>
+    <section id="api-key-setup" class="settings-card api-key-setup" data-model-subtab="connections">
       <div class="settings-card-head">
         <h4>Connect a Provider or Local Server</h4>
         <p>Paste a cloud API key (auto-detected by prefix, stored in your device-only Keychain / Keyring) or register a local OpenAI-compatible server.</p>
@@ -421,16 +421,16 @@
         <form id="local-model-form" autocomplete="off"><div class="local-model-grid"><input id="local-model-url" type="url" value="http://127.0.0.1:11434/v1" placeholder="http://127.0.0.1:11434/v1" aria-label="Local model base URL" spellcheck="false" maxlength="512" required><input id="local-model-name" type="text" placeholder="qwen2.5-coder:14b" aria-label="Local model identifier" spellcheck="false" maxlength="200" required><input id="local-model-label" type="text" placeholder="Label (optional)" aria-label="Optional display label" maxlength="120"><button type="submit" class="button button-secondary" id="local-model-submit">Add local model</button></div><p class="form-feedback" id="local-model-feedback" role="status"></p></form>
       </div>
     </section>
-    <section id="connected-services-hub" class="settings-card services-hub" aria-label="Connected coding and AI services"></section>
-    <section id="ultra-router-section" class="settings-card ultra-router-section" aria-label="Ultra-Plinian Intelligent Router"></section>
-    <section id="model-groups-section" class="settings-card model-groups-section" aria-label="G0DM0D3 fallback models"></section>
-    <section id="overseer-section" class="settings-card overseer-section" aria-label="Overseer and self-optimization"></section>
-    <section id="race-options" class="settings-card" hidden><div class="race-heading"><h3>Ultra-Plinian · Manual Arena</h3><label><input id="race-enabled" type="checkbox"> Compare written answers</label></div>
-      <p class="field-help">Two Venice models draft in parallel. A judge scores the anonymous drafts for fidelity, completeness, and clarity. Each comparison uses up to three calls.</p>
+    <section id="connected-services-hub" class="settings-card services-hub" data-model-subtab="connections" aria-label="Connected coding and AI services"></section>
+    <section id="ultra-router-section" class="settings-card ultra-router-section" data-model-subtab="routing" aria-label="Ultra-Plinian Intelligent Router"></section>
+    <section id="model-groups-section" class="settings-card model-groups-section" data-model-subtab="routing" aria-label="G0DM0D3 fallback models"></section>
+    <section id="overseer-section" class="settings-card overseer-section" data-model-subtab="overseer" aria-label="Overseer and self-optimization"></section>
+    <section id="race-options" class="settings-card" data-model-subtab="routing" hidden><div class="race-heading"><h3>Ultra-Plinian · Manual Arena</h3><label><input id="race-enabled" type="checkbox"> Compare written answers</label></div>
+      <p class="field-help">Two connected models draft in parallel across any provider (OpenRouter, Venice, Anthropic, OpenAI, Gemini, Nous, or Local). A blind judge scores the drafts for fidelity, completeness, and clarity.</p>
       <div class="race-selectors"><label>First writer<select id="race-first"></select></label><label>Second writer<select id="race-second"></select></label><label>Judge<select id="race-judge"></select></label></div>
       <button type="button" class="button button-secondary" id="race-save">Apply comparison</button><p id="race-feedback" class="form-feedback" role="status"></p>
     </section>
-    <section id="openrouter-browser" class="settings-card openrouter-browser" hidden>
+    <section id="openrouter-browser" class="settings-card openrouter-browser" data-model-subtab="catalog" hidden>
       <div class="openrouter-browser-head">
         <div>
           <h3>OpenRouter Catalog</h3>
@@ -441,13 +441,13 @@
       <input id="openrouter-filter" type="search" placeholder="Search all OpenRouter models (e.g. claude, deepseek, kimi, qwen, grok, free)…" aria-label="Filter OpenRouter models" autocomplete="off" spellcheck="false">
       <div id="openrouter-list" class="openrouter-list" role="region" aria-label="OpenRouter models"></div>
     </section>
-    <section id="venice-browser" class="settings-card" hidden>
+    <section id="venice-browser" class="settings-card" data-model-subtab="catalog" hidden>
       <h3>Venice backup</h3>
       <p class="field-help" id="venice-count" role="status"></p>
       <label for="venice-backup">Outage backup (optional)</label><select id="venice-backup"><option value="">None</option></select>
       <p class="field-help">With GODMODƎ recovery on, the backup gets one turn if Venice returns a gateway outage.</p>
     </section>
-    <div class="settings-card settings-connections-card">
+    <div class="settings-card settings-connections-card" data-model-subtab="connections">
       <div class="settings-card-head">
         <h4>Connected Accounts &amp; Manual Routing</h4>
         <p>Inspect every detected provider or fine-tune manual fallback order.</p>

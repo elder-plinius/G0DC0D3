@@ -1,38 +1,83 @@
 'use strict';
 
 const choice = (name, value, label) => `<label><input type="radio" name="${name}" value="${value}"><span>${label}</span></label>`;
-const SETTINGS_TABS = [
-  { id: 'general', label: 'General', hint: 'Themes, style & recovery', icon: '⚙' },
-  { id: 'models', label: 'Models', hint: 'API keys, local LLMs & routing', icon: '✧' },
-  { id: 'tools', label: 'Tools', hint: 'Permissions, shell & checks', icon: '◈' },
-  { id: 'prompts', label: 'Prompts', hint: 'Saved !chat shortcuts', icon: '!' },
-  { id: 'system', label: 'System', hint: 'Prompts, schemas & prefills', icon: '⌘' },
-  { id: 'memory', label: 'Memory', hint: 'Saved facts & /skills', icon: '◎' },
-  { id: 'privacy', label: 'Privacy', hint: 'Zero telemetry & ZDR', icon: '❖' },
-  { id: 'advanced', label: 'Advanced', hint: 'QoL, timeouts & diagnostics', icon: '⌖' },
+const SETTINGS_ICONS = {
+  general: '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3"/><path d="M10 2.5v2M10 15.5v2M3.5 10h2M14.5 10h2M4.7 4.7l1.4 1.4M13.9 13.9l1.4 1.4M15.3 4.7l-1.4 1.4M6.1 13.9l-1.4 1.4"/></svg>',
+  shortcuts: '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="5" width="15" height="10" rx="2"/><path d="M5.5 8.5h1M8.5 8.5h1M11.5 8.5h1M14.5 8.5h.5M6.5 11.5h7"/></svg>',
+  models: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.5 12 8l5.5 2-5.5 2-2 5.5L8 12l-5.5-2L8 8z"/></svg>',
+  recovery: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 7.5A6 6 0 1 0 16 11"/><path d="M15.5 3.5v4h-4"/></svg>',
+  memory: '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6.5"/><circle cx="10" cy="10" r="2.5"/><path d="M10 3.5v2M10 14.5v2"/></svg>',
+  prompts: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 5.5h12M4 10h8M4 14.5h10"/><circle cx="15.5" cy="10" r="1.5"/></svg>',
+  tools: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="m10 2.5 6 2.8v4.8c0 3.8-2.6 6.3-6 7.4-3.4-1.1-6-3.6-6-7.4V5.3z"/></svg>',
+  privacy: '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="4.5" y="9" width="11" height="8" rx="2"/><path d="M7 9V6.5a3 3 0 0 1 6 0V9"/></svg>',
+  system: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6.5 7 3.5 10l3 3M13.5 7l3 3-3 3M11.2 5l-2.4 10"/></svg>',
+  advanced: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 6h13M3.5 10h13M3.5 14h13"/><circle cx="7" cy="6" r="1.6"/><circle cx="13" cy="10" r="1.6"/><circle cx="8.5" cy="14" r="1.6"/></svg>',
+};
+const SETTINGS_GROUPS = [
+  {
+    label: 'Workspace',
+    tabs: [
+      { id: 'general', label: 'General', hint: 'Themes, QoL & chime' },
+      { id: 'shortcuts', label: 'Shortcuts', hint: 'Hotkeys & /commands' },
+    ],
+  },
+  {
+    label: 'Intelligence',
+    tabs: [
+      { id: 'models', label: 'Models & APIs', hint: 'Keys, catalog & routing', badgeId: 'settings-badge-models' },
+      { id: 'recovery', label: 'Recovery', hint: 'GODMODƎ failover & limits', badgeId: 'settings-badge-recovery' },
+    ],
+  },
+  {
+    label: 'Customization',
+    tabs: [
+      { id: 'memory', label: 'Instructions & Memory', hint: 'Rules, facts & /skills' },
+      { id: 'prompts', label: 'Prompt Commands', hint: 'Saved !chat shortcuts' },
+    ],
+  },
+  {
+    label: 'Safety & System',
+    tabs: [
+      { id: 'tools', label: 'Tools & Permissions', hint: 'Gate, shell & hooks', badgeId: 'settings-badge-tools' },
+      { id: 'privacy', label: 'Privacy & ZDR', hint: 'Zero telemetry & airgap', badgeId: 'settings-badge-privacy' },
+      { id: 'system', label: 'System Lab', hint: 'Prompts, schemas & prefills', badgeId: 'settings-badge-system' },
+      { id: 'advanced', label: 'Diagnostics', hint: 'Export, storage & bench' },
+    ],
+  },
 ];
+const SETTINGS_TABS = SETTINGS_GROUPS.flatMap(g => g.tabs);
 document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" class="modal settings-modal" aria-labelledby="settings-title">
   <header class="modal-header settings-header">
     <div class="settings-header-copy">
       <h2 id="settings-title">Settings</h2>
-      <p class="settings-header-sub">Tune appearance, models, permissions, prompts, and privacy — changes save automatically.</p>
+      <p class="settings-header-sub">Tune workspace, models, rules, permissions, and privacy — changes save automatically.</p>
     </div>
     <div class="settings-header-actions">
-      <span class="settings-esc-hint"><kbd>Esc</kbd> to close</span>
+      <div class="settings-context" id="settings-context-bar">
+        <div id="settings-scope-choices" class="segmented" aria-label="Settings apply to"><button type="button" data-settings-scope="task" aria-pressed="true">This chat</button><button type="button" data-settings-scope="defaults" aria-pressed="false">New chats</button></div>
+        <span id="settings-scope" class="settings-scope-pill"></span>
+      </div>
+      <span class="settings-esc-hint"><kbd>Esc</kbd></span>
       <button type="button" class="icon-button" data-close="settings-dialog" aria-label="Close settings">×</button>
     </div>
   </header>
-  <div class="settings-context">
-    <span class="settings-scope-label">Applying to</span>
-    <div id="settings-scope-choices" class="segmented" aria-label="Settings apply to"><button type="button" data-settings-scope="task" aria-pressed="true">This chat</button><button type="button" data-settings-scope="defaults" aria-pressed="false">New chats</button></div>
-    <p id="settings-scope" class="field-help"></p>
-  </div>
-  <nav class="settings-tabs" role="tablist" aria-label="Settings categories">${SETTINGS_TABS.map((tab,index)=>`<button type="button" role="tab" id="settings-tab-${tab.id}" aria-controls="settings-pane-${tab.id}" aria-selected="${index===0}" tabindex="${index===0?0:-1}" data-settings-tab="${tab.id}"><span class="settings-tab-icon" aria-hidden="true">${tab.icon}</span><span class="settings-tab-text"><strong>${tab.label}</strong><small>${tab.hint}</small></span></button>`).join('')}</nav>
+  <nav class="settings-tabs" role="tablist" aria-label="Settings categories">
+    <div class="settings-search-box">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg>
+      <input type="search" id="settings-global-search" placeholder="Search settings…" aria-label="Search all settings" autocomplete="off" spellcheck="false">
+      <kbd aria-hidden="true">⌘F</kbd>
+    </div>
+    ${SETTINGS_GROUPS.map((group, gIdx) => `<div class="settings-nav-group"><span class="settings-nav-group-label">${group.label}</span>${group.tabs.map((tab, tIdx) => {
+      const first = gIdx === 0 && tIdx === 0;
+      return `<button type="button" role="tab" id="settings-tab-${tab.id}" aria-controls="settings-pane-${tab.id}" aria-selected="${first}" tabindex="${first ? 0 : -1}" data-settings-tab="${tab.id}"><span class="settings-tab-icon" aria-hidden="true">${SETTINGS_ICONS[tab.id] || ''}</span><span class="settings-tab-text"><strong>${tab.label}</strong><small>${tab.hint}</small></span>${tab.badgeId ? `<span class="settings-nav-badge hidden" id="${tab.badgeId}"></span>` : ''}</button>`;
+    }).join('')}</div>`).join('')}
+  </nav>
   <div class="settings-body">
+    <section id="settings-search-results" class="settings-search-results hidden" aria-label="Matching settings"></section>
     <section id="settings-pane-general" role="tabpanel" aria-labelledby="settings-tab-general">
       <header class="settings-pane-head">
         <h3>General</h3>
-        <p>Personalize how the app looks, sounds, and recovers when a model gets stuck.</p>
+        <p>Personalize appearance, reading comfort, everyday shortcuts, and audio alerts on this device.</p>
       </header>
 
       <div class="settings-card">
@@ -42,12 +87,91 @@ document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" clas
         </div>
         <div class="settings-theme-block">
           <div class="settings-theme-head"><h3>Theme</h3><span id="settings-theme-active">Obsidian</span></div>
-          <div id="settings-theme-grid" class="theme-gallery-grid" role="group" aria-label="Theme gallery"></div>
+          <div id="settings-theme-grid" class="theme-gallery-grid theme-gallery-compact" role="group" aria-label="Theme gallery"></div>
         </div>
         <fieldset class="setting-row plain-fieldset"><legend class="visually-hidden">Text size</legend><div><h3>Text size</h3><p>Adjusts reading size across the app on this device.</p></div><div class="segmented">${choice('settings-text-size','comfortable','Default')}${choice('settings-text-size','large','Larger')}${choice('settings-text-size','extra-large','Largest')}</div></fieldset>
         <fieldset class="setting-row plain-fieldset"><legend class="visually-hidden">Personality</legend><div><h3>Assistant personality</h3><p><strong>Plinian</strong> is expressive and direct; <strong>Focused</strong> keeps replies concise and formal.</p></div><div class="segmented">${choice('settings-persona','plinian','Plinian')}${choice('settings-persona','focused','Focused')}</div></fieldset>
       </div>
 
+      <div class="settings-card">
+        <div class="settings-card-head">
+          <h4>Quality of Life &amp; Workflow</h4>
+          <p>Everyday composer behavior, live preview canvas, diff viewer, and subtle completion alerts.</p>
+        </div>
+        <fieldset class="setting-row plain-fieldset"><legend class="visually-hidden">Send message shortcut</legend><div><h3>Send message shortcut</h3><p>Choose whether <strong>Enter</strong> sends immediately or inserts a newline (so <strong>⌘/Ctrl+Enter</strong> sends).</p></div><div class="segmented">${choice('qol-send-key','enter','Enter')}${choice('qol-send-key','mod_enter','⌘ / Ctrl + Enter')}</div></fieldset>
+        <div class="setting-row"><label for="qol-auto-preview">Auto-open Live Preview Canvas<small>Automatically slide open the split-screen preview dock when a model finishes an HTML5, SVG, or Mermaid artifact.</small></label><input type="checkbox" role="switch" class="toggle" id="qol-auto-preview" data-qol="autoOpenPreview"></div>
+        <div class="setting-row"><label for="qol-expand-thinking">Auto-expand reasoning blocks<small>Show completed model <code>Reasoning</code> sections expanded by default instead of collapsed.</small></label><input type="checkbox" role="switch" class="toggle" id="qol-expand-thinking" data-qol="expandThinking"></div>
+        <div class="setting-row"><label for="qol-completion-chime">Completion &amp; approval chime<small>Play a soft two-tone chime when a long build finishes or pauses for your approval.</small></label><div class="setting-row-controls"><button type="button" class="button button-quiet settings-test-chime" id="qol-test-chime">Test</button><input type="checkbox" role="switch" class="toggle" id="qol-completion-chime" data-qol="completionChime"></div></div>
+        <div class="setting-row"><label for="qol-pause-backdrop">Pause animated theme backdrops<small>Freeze live animated themes on a static art frame to save battery and GPU while keeping full theme colors.</small></label><input type="checkbox" role="switch" class="toggle" id="qol-pause-backdrop" data-qol="pauseBackdrop"></div>
+        <fieldset class="setting-row plain-fieldset"><legend class="visually-hidden">Default diff layout</legend><div><h3>Default diff viewer layout</h3><p>Preferred layout inside GODCODƎ’s <strong>Changes</strong> tab.</p></div><div class="segmented">${choice('qol-diff-mode','unified','Unified')}${choice('qol-diff-mode','split','Side-by-side')}</div></fieldset>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-card-head">
+          <h4>Getting Started &amp; Setup</h4>
+          <p>Quickly revisit first-run connections or take the interactive walkthrough.</p>
+        </div>
+        <div class="setting-row"><div><h3>Inference connections &amp; permissions</h3><p>Review local CLI logins, API keys, and what each connection allows.</p></div><button type="button" class="button button-secondary" data-open-setup>Review setup</button></div>
+        <div class="setting-row"><div><h3>Get to know GODMODƎ</h3><p>A 1-minute tour of GODMODƎ recovery, Ultra-Plinian, and model controls.</p></div><button type="button" class="button button-secondary" data-open-tour>Take a quick tour</button></div>
+      </div>
+    </section>
+
+    <section id="settings-pane-shortcuts" role="tabpanel" aria-labelledby="settings-tab-shortcuts" hidden>
+      <header class="settings-pane-head">
+        <h3>Keyboard Shortcuts &amp; Slash Commands</h3>
+        <p>Fast keyboard navigation and composer commands across GODMODƎ and GODCODƎ.</p>
+      </header>
+      <div class="settings-card">
+        <div class="settings-card-head">
+          <h4>Navigation &amp; Workspace</h4>
+          <p>Move between panels, tabs, and threads without lifting your hands.</p>
+        </div>
+        <div class="shortcuts-table">
+          <div class="shortcut-row"><span>Open Command Palette</span><kbd>⌘ K</kbd></div>
+          <div class="shortcut-row"><span>Focus message composer</span><kbd>/</kbd></div>
+          <div class="shortcut-row"><span>Switch GODMODƎ / GODCODƎ mode</span><kbd>⌘ ⇧ G</kbd></div>
+          <div class="shortcut-row"><span>Toggle Plan / Build mode</span><kbd>⌘ ⇧ P</kbd></div>
+          <div class="shortcut-row"><span>Cycle Permission Gate preset</span><kbd>Shift + Tab</kbd></div>
+          <div class="shortcut-row"><span>Switch workspace tabs (Conversation → Activity)</span><kbd>1 – 5</kbd></div>
+          <div class="shortcut-row"><span>Previous / next tab or changed file</span><span class="shortcut-keys"><kbd>[ ]</kbd><kbd>j / k</kbd></span></div>
+          <div class="shortcut-row"><span>Paste screenshot into composer</span><kbd>⌘ V</kbd></div>
+          <div class="shortcut-row"><span>Search inside Settings</span><kbd>⌘ F</kbd></div>
+          <div class="shortcut-row"><span>Show quick shortcuts overlay</span><kbd>?</kbd></div>
+        </div>
+      </div>
+      <div class="settings-card">
+        <div class="settings-card-head">
+          <h4>Composer Slash Commands</h4>
+          <p>Type <code>/</code> in the composer for instant autocomplete.</p>
+        </div>
+        <div class="shortcuts-table">
+          <div class="shortcut-row"><span>Switch modes &amp; reasoning effort</span><code>/godmode · /godcode · /effort · /fast</code></div>
+          <div class="shortcut-row"><span>Planning, git undo &amp; thread branching</span><code>/plan · /build · /diff · /undo · /fork</code></div>
+          <div class="shortcut-row"><span>Context compaction &amp; export</span><code>/compact · /export · /model</code></div>
+          <div class="shortcut-row"><span>Memory, skills &amp; engineering workflows</span><code>/remember · /memory · /skill · /review · /test</code></div>
+          <div class="shortcut-row"><span>Prompt transparency &amp; privacy shortcuts</span><code>/system · /schemas · /prefill · /privacy · /zdr</code></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="settings-pane-models" role="tabpanel" aria-labelledby="settings-tab-models" hidden>
+      <header class="settings-pane-head">
+        <h3>Models &amp; APIs</h3>
+        <p>Connect cloud API keys, CLI subscriptions, or local Ollama/LM Studio servers, browse catalogs, and configure intelligent routing.</p>
+      </header>
+      <div class="transparency-subtabs models-subtabs" role="tablist" aria-label="Models sections">
+        <button type="button" class="transparency-subtab active" data-models-subtab="connections" role="tab" aria-selected="true">Connections &amp; Keys</button>
+        <button type="button" class="transparency-subtab" data-models-subtab="catalog" role="tab" aria-selected="false">Catalog &amp; Backups</button>
+        <button type="button" class="transparency-subtab" data-models-subtab="routing" role="tab" aria-selected="false">Routing &amp; Arena</button>
+        <button type="button" class="transparency-subtab" data-models-subtab="overseer" role="tab" aria-selected="false">Overseer</button>
+      </div>
+    </section>
+
+    <section id="settings-pane-recovery" role="tabpanel" aria-labelledby="settings-tab-recovery" hidden>
+      <header class="settings-pane-head">
+        <h3>GODMODƎ Recovery &amp; Limits</h3>
+        <p>Unified control over automatic failover, retry budgets, timeouts, and long-output auto-continuation.</p>
+      </header>
       <div class="settings-card">
         <div class="settings-card-head">
           <h4>Automatic Recovery (GODMODƎ)</h4>
@@ -66,19 +190,22 @@ document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" clas
 
       <div class="settings-card">
         <div class="settings-card-head">
-          <h4>Getting Started &amp; Setup</h4>
-          <p>Quickly revisit first-run connections or take the interactive walkthrough.</p>
+          <h4>Behavior, Timeouts &amp; Continuations</h4>
+          <p>Fine-tune how the runtime handles declines, long-running reasoning turns, truncated replies, and stalled loops.</p>
         </div>
-        <div class="setting-row"><div><h3>Inference connections &amp; permissions</h3><p>Review local CLI logins, API keys, and what each connection allows.</p></div><button type="button" class="button button-secondary" data-open-setup>Review setup</button></div>
-        <div class="setting-row"><div><h3>Get to know GODMODƎ</h3><p>A 1-minute tour of GODMODƎ recovery, Ultra-Plinian, and model controls.</p></div><button type="button" class="button button-secondary" data-open-tour>Take a quick tour</button></div>
+        <fieldset class="plain-fieldset"><legend>Recovery behavior</legend><div class="recovery-choices">${[['adaptive','GODMODƎ enabled (Recommended — adapts strategy & model)'],['ask','Ask me before switching or retrying'],['switch_model','Switch models only'],['prompt_strategies','Change prompt approach only'],['hybrid','Change approach first, then switch model']].map(([value,label])=>choice('settings-mode',value,label)).join('')}</div></fieldset>
+        <div class="setting-row"><label for="settings-auto-continue">Auto-continue truncated replies<small>Automatically stitch follow-up continuations when a model hits its single-turn output token limit.</small></label><input type="checkbox" role="switch" class="toggle" id="settings-auto-continue" data-policy="autoContinue"></div>
+        <div class="settings-limits settings-limits-three">
+          <label>Request timeout (seconds)<span class="settings-field-hint">High scales ≥360s, Max ≥600s</span><input id="settings-timeout" data-policy="requestTimeoutMs" type="number" min="0.01" max="900" step="0.01" required></label>
+          <label>No-progress limit<span class="settings-field-hint">Turns before intervening (default 6)</span><input id="settings-stalls" data-policy="maxNoProgressTurns" type="number" min="2" max="30" required></label>
+          <label>Max continuation hops<span class="settings-field-hint">Auto-stitch passes (0–12, default 6)</span><input id="settings-max-continuations" data-policy="maxContinuations" type="number" min="0" max="12" required></label>
+        </div>
+        <div class="settings-field-block">
+          <label class="field-label" for="settings-strategies">Recovery approaches</label>
+          <input id="settings-strategies" data-policy="strategies" type="text">
+          <p class="field-help">Comma-separated strategy names. Retries preserve your original request and permissions.</p>
+        </div>
       </div>
-    </section>
-
-    <section id="settings-pane-models" role="tabpanel" aria-labelledby="settings-tab-models" hidden>
-      <header class="settings-pane-head">
-        <h3>Models &amp; Connections</h3>
-        <p>Choose your default AI model, connect cloud API keys or local Ollama/LM Studio servers, and tune multi-model routing.</p>
-      </header>
     </section>
 
     <section id="settings-pane-tools" role="tabpanel" aria-labelledby="settings-tab-tools" hidden>
@@ -297,9 +424,23 @@ document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" clas
 
     <section id="settings-pane-memory" role="tabpanel" aria-labelledby="settings-tab-memory" hidden>
       <header class="settings-pane-head">
-        <h3>Memory &amp; Skills</h3>
-        <p>Teach the assistant facts to remember across chats, and save reusable <code>/slash</code> workflows you can invoke anytime.</p>
+        <h3>Instructions, Memory &amp; Skills</h3>
+        <p>Set always-on global rules, teach the assistant facts to remember across chats, and save reusable <code>/slash</code> workflows.</p>
       </header>
+      <section class="settings-card personal-rules-section">
+        <div class="settings-card-head">
+          <h4>Personal Instructions (Global Rules)</h4>
+          <p>Appended to every live system prompt — like Cursor Rules or Claude Preferences (synced with System Lab’s <code>customAppend</code>).</p>
+        </div>
+        <form id="personal-instructions-form" autocomplete="off">
+          <textarea id="personal-instructions-input" class="transparency-code-input" rows="4" placeholder="e.g. Prefer concise TypeScript with strict types. Always write unit tests for edge cases. Never add unnecessary dependencies." aria-label="Personal global instructions" spellcheck="false"></textarea>
+          <div class="settings-card-foot">
+            <button type="submit" class="button button-primary" id="personal-instructions-save">Save instructions</button>
+            <button type="button" class="button button-secondary" id="personal-instructions-clear">Clear</button>
+            <span class="field-help" id="personal-instructions-status" role="status"></span>
+          </div>
+        </form>
+      </section>
       <section class="settings-card memory-section">
         <div class="section-header-inline">
           <div>
@@ -395,49 +536,18 @@ document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" clas
 
     <section id="settings-pane-advanced" role="tabpanel" aria-labelledby="settings-tab-advanced" hidden>
       <header class="settings-pane-head">
-        <h3>Advanced &amp; Diagnostics</h3>
-        <p>Quality-of-life preferences, runtime timeouts, continuation limits, local storage tools, and offline diagnostics.</p>
+        <h3>Diagnostics &amp; Storage</h3>
+        <p>Config export/import, local storage resets, offline fault-injection diagnostics, and sandbox fixtures.</p>
       </header>
 
       <div class="settings-card">
         <div class="settings-card-head">
-          <h4>Quality of Life &amp; Workflow</h4>
-          <p>Everyday shortcuts, preview behavior, and visual motion controls saved locally on this device.</p>
+          <h4>Workspace &amp; Config Backup</h4>
+          <p>Export or import zero-secret preferences JSON (never includes API keys or chats), or reset layout widths.</p>
         </div>
-        <fieldset class="setting-row plain-fieldset"><legend class="visually-hidden">Send message shortcut</legend><div><h3>Send message shortcut</h3><p>Choose whether <strong>Enter</strong> sends immediately or inserts a newline (so <strong>⌘/Ctrl+Enter</strong> sends).</p></div><div class="segmented">${choice('qol-send-key','enter','Enter')}${choice('qol-send-key','mod_enter','⌘ / Ctrl + Enter')}</div></fieldset>
-        <div class="setting-row"><label for="qol-auto-preview">Auto-open Live Preview Canvas<small>Automatically slide open the split-screen preview dock when a model finishes an HTML5, SVG, or Mermaid artifact.</small></label><input type="checkbox" role="switch" class="toggle" id="qol-auto-preview" data-qol="autoOpenPreview"></div>
-        <div class="setting-row"><label for="qol-expand-thinking">Auto-expand reasoning blocks<small>Show completed model <code>Reasoning</code> sections expanded by default instead of collapsed.</small></label><input type="checkbox" role="switch" class="toggle" id="qol-expand-thinking" data-qol="expandThinking"></div>
-        <div class="setting-row"><label for="qol-pause-backdrop">Pause animated theme backdrops<small>Freeze live animated themes on a static art frame to save battery and GPU while keeping full theme colors.</small></label><input type="checkbox" role="switch" class="toggle" id="qol-pause-backdrop" data-qol="pauseBackdrop"></div>
-        <fieldset class="setting-row plain-fieldset"><legend class="visually-hidden">Default diff layout</legend><div><h3>Default diff viewer layout</h3><p>Preferred layout inside GODCODƎ’s <strong>Changes</strong> tab.</p></div><div class="segmented">${choice('qol-diff-mode','unified','Unified')}${choice('qol-diff-mode','split','Side-by-side')}</div></fieldset>
-      </div>
-
-      <div class="settings-card">
-        <div class="settings-card-head">
-          <h4>Recovery Behavior, Timeouts &amp; Continuations</h4>
-          <p>Choose how the runtime handles declines, long-running reasoning turns, truncated replies, and stalled loops.</p>
-        </div>
-        <fieldset class="plain-fieldset"><legend>Recovery behavior</legend><div class="recovery-choices">${[['adaptive','GODMODƎ enabled (Recommended — adapts strategy & model)'],['ask','Ask me before switching or retrying'],['switch_model','Switch models only'],['prompt_strategies','Change prompt approach only'],['hybrid','Change approach first, then switch model']].map(([value,label])=>choice('settings-mode',value,label)).join('')}</div></fieldset>
-        <div class="setting-row"><label for="settings-auto-continue">Auto-continue truncated replies<small>Automatically stitch follow-up continuations when a model hits its single-turn output token limit.</small></label><input type="checkbox" role="switch" class="toggle" id="settings-auto-continue" data-policy="autoContinue"></div>
-        <div class="settings-limits settings-limits-three">
-          <label>Request timeout (seconds)<span class="settings-field-hint">High scales ≥360s, Max ≥600s</span><input id="settings-timeout" data-policy="requestTimeoutMs" type="number" min="0.01" max="900" step="0.01" required></label>
-          <label>No-progress limit<span class="settings-field-hint">Turns before intervening (default 6)</span><input id="settings-stalls" data-policy="maxNoProgressTurns" type="number" min="2" max="30" required></label>
-          <label>Max continuation hops<span class="settings-field-hint">Auto-stitch passes (0–12, default 6)</span><input id="settings-max-continuations" data-policy="maxContinuations" type="number" min="0" max="12" required></label>
-        </div>
-        <div class="settings-field-block">
-          <label class="field-label" for="settings-strategies">Recovery approaches</label>
-          <input id="settings-strategies" data-policy="strategies" type="text">
-          <p class="field-help">Comma-separated strategy names. Retries preserve your original request and permissions.</p>
-        </div>
-      </div>
-
-      <div class="settings-card">
-        <div class="settings-card-head">
-          <h4>Workspace &amp; Storage Maintenance</h4>
-          <p>Quick reset utilities for panel sizes, recent model history, and zero-secret preference backups.</p>
-        </div>
+        <div class="setting-row"><div><h3>Export / Import preferences JSON</h3><p>Download a backup file, import from JSON, or copy to clipboard (theme, QoL, and default recovery policy).</p></div><div class="setting-row-controls"><button type="button" class="button button-secondary" id="qol-export-prefs">Export JSON</button><button type="button" class="button button-secondary" id="qol-import-prefs">Import JSON</button><button type="button" class="button button-quiet" id="qol-copy-prefs">Copy</button><input type="file" id="qol-import-file" accept=".json,application/json" hidden></div></div>
         <div class="setting-row"><div><h3>Reset panel sizes &amp; splitters</h3><p>Restore sidebar, preview canvas, file tree, inspector, and composer heights to default widths.</p></div><button type="button" class="button button-secondary" id="qol-reset-layout">Reset layout</button></div>
         <div class="setting-row"><div><h3>Clear recent models</h3><p>Remove your recently picked model shortcuts from the quick model switcher.</p></div><button type="button" class="button button-quiet" id="qol-clear-recent">Clear recents</button></div>
-        <div class="setting-row"><div><h3>Copy local preferences JSON</h3><p>Copies theme, display, QoL, and default policy settings to clipboard (never includes API keys or chats).</p></div><button type="button" class="button button-quiet" id="qol-copy-prefs">Copy JSON</button></div>
       </div>
 
       <div class="settings-two-col">
@@ -853,10 +963,11 @@ function renderSettingsValues() {
   if ($('#settings-sticky-refusal')) $('#settings-sticky-refusal').checked = view.policy.stickyOnRefusal !== false;
   if ($('#settings-auto-continue')) $('#settings-auto-continue').checked = view.policy.autoContinue !== false;
   $('#settings-learning').checked = view.policy.learning;
-  const qol = window.G0DQol?.get?.() || { sendKey: 'enter', autoOpenPreview: true, expandThinking: false, pauseBackdrop: false };
+  const qol = window.G0DQol?.get?.() || { sendKey: 'enter', autoOpenPreview: true, expandThinking: false, pauseBackdrop: false, completionChime: true };
   $$('[name="qol-send-key"]').forEach(el => el.checked = el.value === qol.sendKey);
   if ($('#qol-auto-preview')) $('#qol-auto-preview').checked = qol.autoOpenPreview !== false;
   if ($('#qol-expand-thinking')) $('#qol-expand-thinking').checked = qol.expandThinking === true;
+  if ($('#qol-completion-chime')) $('#qol-completion-chime').checked = qol.completionChime !== false;
   if ($('#qol-pause-backdrop')) $('#qol-pause-backdrop').checked = qol.pauseBackdrop === true;
   const curDiffMode = (typeof diffViewMode === 'string' && diffViewMode === 'split') ? 'split' : 'unified';
   $$('[name="qol-diff-mode"]').forEach(el => el.checked = el.value === curDiffMode);
@@ -902,26 +1013,179 @@ async function loadHooksSettings() {
   }
 }
 
+let modelsSubtab = 'connections';
+function selectModelsSubtab(subtab) {
+  modelsSubtab = ['connections', 'catalog', 'routing', 'overseer'].includes(subtab) ? subtab : 'connections';
+  $$('[data-models-subtab]').forEach(btn => {
+    const active = btn.dataset.modelsSubtab === modelsSubtab;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-selected', String(active));
+  });
+  $$('#model-controls > [data-model-subtab]').forEach(el => {
+    el.classList.toggle('model-subtab-hidden', el.dataset.modelSubtab !== modelsSubtab);
+  });
+  let emptyEl = $('#models-catalog-empty');
+  if (modelsSubtab === 'catalog') {
+    const visibleCatalogCards = $$('#model-controls > [data-model-subtab="catalog"]').filter(el => !el.hidden && !el.classList.contains('hidden') && !el.classList.contains('model-subtab-hidden'));
+    if (visibleCatalogCards.length === 0) {
+      if (!emptyEl) {
+        emptyEl = document.createElement('div');
+        emptyEl.id = 'models-catalog-empty';
+        emptyEl.className = 'settings-card';
+        emptyEl.innerHTML = '<div class="settings-card-head"><h4>No browsable catalogs connected yet</h4><p>Connect an <strong>OpenRouter</strong> or <strong>Venice</strong> API key in <strong>Connections &amp; Keys</strong> to browse 450+ models, or add a second provider to configure automatic fallback ordering.</p></div><button type="button" class="button button-secondary" data-models-subtab="connections">Go to Connections &amp; Keys</button>';
+        $('#settings-pane-models')?.append(emptyEl);
+      }
+      emptyEl.hidden = false;
+    } else if (emptyEl) {
+      emptyEl.hidden = true;
+    }
+  } else if (emptyEl) {
+    emptyEl.hidden = true;
+  }
+}
+
+function updateSettingsNavBadges() {
+  const setBadge = (id, text, cls = '') => {
+    const el = $(`#${id}`);
+    if (!el) return;
+    el.textContent = text || '';
+    el.className = `settings-nav-badge${text ? '' : ' hidden'}${cls ? ` ${cls}` : ''}`;
+  };
+  const liveCount = (state.providers || []).filter(p => p.kind !== 'scripted' && p.available !== false).length;
+  setBadge('settings-badge-models', liveCount > 0 ? String(liveCount) : '0', liveCount > 0 ? 'is-ok' : 'is-warn');
+  const task = settingsTask();
+  const view = RecoveryUI.presentation(task, Date.now(), newConversationProviders());
+  setBadge('settings-badge-recovery', view.enabled ? 'ON' : 'OFF', view.enabled ? 'is-accent' : '');
+  const { rules } = activePermissionRulesForScope();
+  const preset = detectPermissionPreset(rules);
+  setBadge('settings-badge-tools', preset === 'permissive' ? 'Auto' : preset === 'auto' ? 'AI' : preset === 'safe' ? 'Safe' : preset === 'acceptEdits' ? 'Edits' : preset === 'dontAsk' ? 'CI' : 'Ask');
+  const ps = state.privacy?.settings;
+  if (ps) {
+    setBadge('settings-badge-privacy', ps.localOnly ? 'Airgap' : ps.strictZdr ? 'Strict' : ps.zdrRouting !== false ? 'ZDR' : '', ps.localOnly || ps.strictZdr ? 'is-ok' : '');
+  }
+  const ov = transparencyState?.overrideCount;
+  const ovTotal = (ov?.prompts || 0) + (ov?.tools || 0) + (ov?.disabledTools || 0) + (ov?.injectionsActive ? 1 : 0);
+  setBadge('settings-badge-system', ovTotal > 0 ? 'Custom' : '', ovTotal > 0 ? 'is-accent' : '');
+}
+
+function renderPersonalInstructionsFromTransparency() {
+  const input = $('#personal-instructions-input');
+  if (!input || !transparencyState) return;
+  const entry = (transparencyState.prompts || []).find(p => p.id === 'customAppend');
+  if (entry && document.activeElement !== input) input.value = entry.value || '';
+  setText('#personal-instructions-status', entry?.overridden ? `Active (${entry.value.length} chars)` : 'Using default (empty)');
+}
+
+function truncateWord(text, maxLen) {
+  const s = String(text || '').replace(/\s+/g, ' ').trim();
+  if (s.length <= maxLen) return s;
+  const cut = s.slice(0, maxLen);
+  const sp = cut.lastIndexOf(' ');
+  return `${(sp > maxLen * 0.55 ? cut.slice(0, sp) : cut).trim()}…`;
+}
+function directTextOnly(el) {
+  if (!el) return '';
+  let out = '';
+  for (const node of el.childNodes) {
+    if (node.nodeType === 3) out += node.textContent;
+  }
+  return out.replace(/\s+/g, ' ').trim();
+}
+function renderSettingsSearchResults(rawQuery) {
+  const q = String(rawQuery || '').trim().toLowerCase();
+  const box = $('#settings-search-results');
+  if (!box) return;
+  if (!q) {
+    box.classList.add('hidden');
+    box.innerHTML = '';
+    $$('#settings-dialog [role="tabpanel"]').forEach(panel => { panel.hidden = panel.id !== `settings-pane-${settingsPane}`; });
+    return;
+  }
+  $$('#settings-dialog [role="tabpanel"]').forEach(panel => { panel.hidden = true; });
+  const matches = [];
+  const seen = new Set();
+  for (const tab of SETTINGS_TABS) {
+    const paneEl = $(`#settings-pane-${tab.id}`);
+    if (!paneEl) continue;
+    const candidates = [...paneEl.querySelectorAll('.settings-card, .setting-row, .shortcut-row, .transparency-card')];
+    for (const el of candidates) {
+      if (el.classList.contains('settings-card') && el.querySelector('.setting-row')) {
+        const head = el.querySelector('.settings-card-head');
+        const hText = (head?.textContent || '').trim();
+        if (!hText || !hText.toLowerCase().includes(q)) continue;
+        const title = truncateWord(head.querySelector('h4, h3')?.textContent || tab.label, 68);
+        const desc = truncateWord(head.querySelector('p')?.textContent || '', 130);
+        const key = `${tab.id}::${title}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        matches.push({ tabId: tab.id, tabLabel: tab.label, subtab: el.dataset.modelSubtab || null, title, desc, targetEl: el });
+        continue;
+      }
+      const rawTxt = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!rawTxt || !rawTxt.toLowerCase().includes(q)) continue;
+      let title = '';
+      let desc = '';
+      const heading = el.querySelector('h3, h4, strong, legend');
+      const label = el.querySelector('label');
+      if (heading) {
+        title = heading.textContent.replace(/\s+/g, ' ').trim();
+      } else if (label) {
+        title = directTextOnly(label) || label.textContent.replace(/\s+/g, ' ').trim();
+      } else {
+        title = (el.querySelector('span')?.textContent || rawTxt).replace(/\s+/g, ' ').trim();
+      }
+      const descEl = el.querySelector('label small, p:not(.field-help), .settings-card-head p, .trans-item-desc, small');
+      if (descEl) {
+        desc = descEl.textContent.replace(/\s+/g, ' ').trim();
+      } else if (el.classList.contains('shortcut-row')) {
+        desc = [...el.querySelectorAll('kbd, code')].map(k => k.textContent.trim()).join(' · ');
+      }
+      title = truncateWord(title, 68);
+      desc = desc === title ? '' : truncateWord(desc, 130);
+      const key = `${tab.id}::${title}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const modelSub = el.closest('[data-model-subtab]')?.dataset?.modelSubtab || null;
+      matches.push({ tabId: tab.id, tabLabel: tab.label, subtab: modelSub, title, desc, targetEl: el });
+    }
+  }
+  box._targets = matches;
+  box.classList.remove('hidden');
+  box.innerHTML = `<header class="settings-pane-head"><h3>Search results</h3><p>${matches.length} matching setting${matches.length === 1 ? '' : 's'} for “${escapeHTML(rawQuery.trim())}”</p></header>` + (matches.length
+    ? `<div class="settings-search-list">${matches.slice(0, 24).map((m, idx) => `<button type="button" class="settings-search-hit" data-search-hit="${idx}"><div class="settings-search-hit-top"><strong>${escapeHTML(m.title)}</strong><span class="meta-chip">${escapeHTML(m.tabLabel)}${m.subtab ? ` · ${escapeHTML(m.subtab)}` : ''}</span></div>${m.desc ? `<p>${escapeHTML(m.desc)}</p>` : ''}</button>`).join('')}</div>`
+    : '<p class="field-help">No settings match that query. Try keywords like “theme”, “timeout”, “ZDR”, “Enter”, “Ollama”, “key”, or “chime”.</p>');
+}
+
 async function selectSettingsPane(pane, options = {}) {
+  if (!SETTINGS_TABS.some(t => t.id === pane)) pane = 'general';
+  const searchInput = $('#settings-global-search');
+  if (searchInput && searchInput.value) { searchInput.value = ''; renderSettingsSearchResults(''); }
   settingsPane = pane;
   $$('[data-settings-tab]').forEach(button => { const active = button.dataset.settingsTab === pane; button.setAttribute('aria-selected', String(active)); button.tabIndex = active ? 0 : -1; });
   $$('#settings-dialog [role="tabpanel"]').forEach(panel => panel.hidden = panel.id !== `settings-pane-${pane}`);
   $('.settings-body').scrollTop = 0;
-  $('.settings-context').classList.toggle('hidden', pane === 'prompts' || pane === 'system' || pane === 'memory' || pane === 'privacy');
-  const feedback = { prompts: 'Saved on this device for every chat.', system: 'Local prompt transparency — overrides apply on this device to live non-fixture chats.', memory: 'Saved locally across sessions.', privacy: 'Zero telemetry. ZDR & privacy controls apply immediately.', models: 'Click a model to select it. Changes save automatically.', tools: settingsTask() ? 'Permissions save automatically. Save checks after editing.' : 'Permissions and checks apply to individual tasks.' };
+  const scopedPanes = new Set(['general', 'models', 'recovery', 'tools', 'advanced']);
+  $('.settings-context')?.classList.toggle('is-muted', !scopedPanes.has(pane));
+  const feedback = { shortcuts: 'Press ? anytime outside Settings to view keyboard shortcuts.', recovery: 'GODMODƎ recovery, retry limits, and continuation controls save automatically.', prompts: 'Saved on this device for every chat.', system: 'Local prompt transparency — overrides apply on this device to live non-fixture chats.', memory: 'Personal instructions, memories, and /skills save locally on this device.', privacy: 'Zero telemetry. ZDR & privacy controls apply immediately.', models: 'Switch between Connections, Catalog, Routing, and Overseer above.', tools: settingsTask() ? 'Permissions save automatically. Save checks after editing.' : 'Permissions and checks apply to individual tasks.' };
   settingsFeedback(feedback[pane] || 'Changes save automatically.');
   if (pane === 'prompts') { try { await loadPromptLibrary(); } catch (error) { settingsFeedback(error.message, true); } }
   if (pane === 'system') {
     if (options.subtab) selectTransparencySubtab(options.subtab);
     await loadTransparencySettings();
   }
-  if (pane === 'models') { renderModelSettings(); await Promise.all([loadModelConnections(), loadVeniceCatalog(), typeof loadOpenRouterCatalog === 'function' ? loadOpenRouterCatalog() : Promise.resolve(), typeof loadServices === 'function' ? loadServices() : Promise.resolve(), typeof loadModelGroups === 'function' ? loadModelGroups() : Promise.resolve(), typeof loadOverseer === 'function' ? loadOverseer() : Promise.resolve(), typeof loadUltraRouter === 'function' ? loadUltraRouter() : Promise.resolve()]); }
+  if (pane === 'models') {
+    if (options.subtab) selectModelsSubtab(options.subtab);
+    else selectModelsSubtab(modelsSubtab);
+    renderModelSettings();
+    await Promise.all([loadModelConnections(), loadVeniceCatalog(), typeof loadOpenRouterCatalog === 'function' ? loadOpenRouterCatalog() : Promise.resolve(), typeof loadServices === 'function' ? loadServices() : Promise.resolve(), typeof loadModelGroups === 'function' ? loadModelGroups() : Promise.resolve(), typeof loadOverseer === 'function' ? loadOverseer() : Promise.resolve(), typeof loadUltraRouter === 'function' ? loadUltraRouter() : Promise.resolve()]);
+  }
   if (pane === 'tools') { await Promise.all([loadPermissionsSettings(), loadHooksSettings()]); }
-  if (pane === 'memory') { await Promise.all([loadMemorySettings(options.query), loadSkillsSettings()]); }
+  if (pane === 'memory') { await Promise.all([loadMemorySettings(options.query), loadSkillsSettings(), loadTransparencySettings().then(renderPersonalInstructionsFromTransparency)]); }
   if (pane === 'privacy') { await loadPrivacySettings(); }
   if (pane === 'advanced') {
     try { await loadLearning(); if (settingsTaskId) { const id = settingsTaskId; const prompt = await api(`/api/tasks/${encodeURIComponent(id)}/prompt`); if (settingsTaskId === id) setText('#effective-prompt', pretty({ ...prompt, tools: state.tools })); } } catch (error) { settingsFeedback(error.message, true); }
   }
+  updateSettingsNavBadges();
 }
 async function openSettings(pane = 'general', options = {}) {
   if (typeof pane !== 'string') pane = 'general';
@@ -1011,6 +1275,23 @@ $('#settings-dialog').addEventListener('close', () => {
 });
 $('#settings-dialog').addEventListener('click', async event => {
   const tab = event.target.closest('[data-settings-tab]'); if (tab) { selectSettingsPane(tab.dataset.settingsTab); return; }
+  const modelSub = event.target.closest('[data-models-subtab]'); if (modelSub) { selectModelsSubtab(modelSub.dataset.modelsSubtab); return; }
+  const hitBtn = event.target.closest('[data-search-hit]');
+  if (hitBtn) {
+    const box = $('#settings-search-results');
+    const hit = box?._targets?.[Number(hitBtn.dataset.searchHit)];
+    if (hit) {
+      await selectSettingsPane(hit.tabId, hit.subtab ? { subtab: hit.subtab } : {});
+      if (hit.targetEl) {
+        hit.targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        hit.targetEl.classList.remove('settings-jump-pulse');
+        void hit.targetEl.offsetWidth;
+        hit.targetEl.classList.add('settings-jump-pulse');
+        setTimeout(() => hit.targetEl.classList.remove('settings-jump-pulse'), 1400);
+      }
+    }
+    return;
+  }
   const scope = event.target.closest('[data-settings-scope]');
   if (scope && !settingsBusy) {
     settingsTaskId = scope.dataset.settingsScope === 'task' ? selectedData?.task?.id || null : null;
@@ -1196,14 +1477,88 @@ $('#qol-clear-recent')?.addEventListener('click', () => {
   settingsFeedback('Recent models list cleared.');
   toast('Recent models cleared.');
 });
-$('#qol-copy-prefs')?.addEventListener('click', async () => {
-  const payload = {
+$('#settings-global-search')?.addEventListener('input', event => {
+  renderSettingsSearchResults(event.target.value);
+});
+$('#settings-dialog').addEventListener('keydown', event => {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') {
+    event.preventDefault();
+    const s = $('#settings-global-search');
+    if (s) { s.focus(); s.select(); }
+  }
+});
+$('#qol-test-chime')?.addEventListener('click', () => {
+  window.G0DQol?.playChime?.('done', { force: true });
+  settingsFeedback('Played completion chime.');
+});
+$('#personal-instructions-form')?.addEventListener('submit', async event => {
+  event.preventDefault();
+  const val = $('#personal-instructions-input')?.value || '';
+  await patchTransparency({ prompts: { customAppend: val } }, val.trim() ? 'Saved personal instructions.' : 'Cleared personal instructions.');
+  renderPersonalInstructionsFromTransparency();
+  updateSettingsNavBadges();
+});
+$('#personal-instructions-clear')?.addEventListener('click', async () => {
+  if ($('#personal-instructions-input')) $('#personal-instructions-input').value = '';
+  await resetTransparencyAction({ promptId: 'customAppend' }, 'Cleared personal instructions.');
+  renderPersonalInstructionsFromTransparency();
+  updateSettingsNavBadges();
+});
+function buildPreferencesSnapshot() {
+  return {
+    version: 1,
+    exportedAt: new Date().toISOString(),
     theme: window.G0DThemes?.current?.()?.id || 'obsidian',
     textSize: document.documentElement.dataset.textSize || 'comfortable',
     qol: window.G0DQol?.get?.() || {},
     diffViewMode: localStorage.getItem('g0dc0d3.diffViewMode') || 'unified',
     defaults: RecoveryUI.preferences(),
   };
+}
+$('#qol-export-prefs')?.addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify(buildPreferencesSnapshot(), null, 2) + '\n'], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'g0dm0d3-preferences.json';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  settingsFeedback('Downloaded g0dm0d3-preferences.json (zero keys or chats).');
+  toast('Exported preferences JSON.');
+});
+$('#qol-import-prefs')?.addEventListener('click', () => $('#qol-import-file')?.click());
+$('#qol-import-file')?.addEventListener('change', async event => {
+  const file = event.target.files?.[0];
+  event.target.value = '';
+  if (!file) return;
+  try {
+    const raw = JSON.parse(await file.text());
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Invalid JSON preferences object.');
+    if (typeof raw.theme === 'string') window.G0DThemes?.apply?.(raw.theme, { persist: true, notify: false });
+    if (['comfortable', 'large', 'extra-large'].includes(raw.textSize)) {
+      applyTextSize(raw.textSize);
+      localStorage.setItem('g0dc0d3.display', JSON.stringify({ textSize: raw.textSize }));
+    }
+    if (raw.qol && typeof raw.qol === 'object') window.G0DQol?.update?.(raw.qol);
+    if (['unified', 'split'].includes(raw.diffViewMode)) {
+      localStorage.setItem('g0dc0d3.diffViewMode', raw.diffViewMode);
+      if (typeof diffViewMode !== 'undefined') diffViewMode = raw.diffViewMode;
+    }
+    if (raw.defaults && typeof raw.defaults === 'object') {
+      const merged = { ...RecoveryUI.preferences(), ...(raw.defaults.persona ? { persona: raw.defaults.persona } : {}), ...(raw.defaults.policy ? { policy: RecoveryUI.updatedPolicy(raw.defaults.policy) } : {}) };
+      localStorage.setItem('g0dc0d3.defaults', JSON.stringify(merged));
+    }
+    renderSettingsValues();
+    updateSettingsNavBadges();
+    settingsFeedback('Imported preferences from JSON.');
+    toast('Preferences imported cleanly.');
+  } catch (err) {
+    settingsFeedback(`Import failed: ${err.message}`, true);
+    toast(`Import failed: ${err.message}`);
+  }
+});
+$('#qol-copy-prefs')?.addEventListener('click', async () => {
+  const payload = buildPreferencesSnapshot();
   try {
     await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
     settingsFeedback('Preferences JSON copied to clipboard (no keys or chats included).');

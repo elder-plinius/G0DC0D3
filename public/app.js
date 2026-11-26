@@ -71,7 +71,7 @@ const APP_MODE_STARTERS = Object.freeze({
   ],
 });
 let qolPrefs = (() => {
-  const defaults = { sendKey: 'enter', autoOpenPreview: true, expandThinking: false, pauseBackdrop: false };
+  const defaults = { sendKey: 'enter', autoOpenPreview: true, expandThinking: false, pauseBackdrop: false, completionChime: true };
   try {
     const raw = JSON.parse(localStorage.getItem('g0dc0d3.qol.v1') || '{}');
     if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
@@ -80,6 +80,7 @@ let qolPrefs = (() => {
         autoOpenPreview: raw.autoOpenPreview !== false,
         expandThinking: raw.expandThinking === true,
         pauseBackdrop: raw.pauseBackdrop === true,
+        completionChime: raw.completionChime !== false,
       };
     }
   } catch {}
@@ -92,11 +93,36 @@ function updateQolPrefs(patch = {}) {
     ...(patch.autoOpenPreview !== undefined ? { autoOpenPreview: Boolean(patch.autoOpenPreview) } : {}),
     ...(patch.expandThinking !== undefined ? { expandThinking: Boolean(patch.expandThinking) } : {}),
     ...(patch.pauseBackdrop !== undefined ? { pauseBackdrop: Boolean(patch.pauseBackdrop) } : {}),
+    ...(patch.completionChime !== undefined ? { completionChime: Boolean(patch.completionChime) } : {}),
   };
   try { localStorage.setItem('g0dc0d3.qol.v1', JSON.stringify(qolPrefs)); } catch {}
   syncComposerShortcutHints();
   window.G0DThemes?.setMotionPaused?.(qolPrefs.pauseBackdrop);
   return qolPrefs;
+}
+function playCompletionChime(kind = 'done', { force = false } = {}) {
+  if (!force && qolPrefs.completionChime === false) return;
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    const ctx = new AC();
+    const now = ctx.currentTime;
+    const notes = kind === 'approval' ? [523.25, 659.25] : [587.33, 880];
+    notes.forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, now + i * 0.11);
+      gain.gain.setValueAtTime(0.0001, now + i * 0.11);
+      gain.gain.exponentialRampToValueAtTime(0.06, now + i * 0.11 + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + i * 0.11 + 0.28);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now + i * 0.11);
+      osc.stop(now + i * 0.11 + 0.3);
+    });
+    setTimeout(() => { try { ctx.close(); } catch {} }, 650);
+  } catch {}
 }
 function syncComposerShortcutHints() {
   const input = $('#composer-input');
@@ -125,6 +151,7 @@ window.G0DQol = {
   update: updateQolPrefs,
   resetLayout: resetPanelLayout,
   clearRecentModels,
+  playChime: playCompletionChime,
 };
 
 let appMode = (() => {
@@ -2595,7 +2622,7 @@ function renderUltraRouterSection() {
     ['off', 'Off', 'Use your manually selected model & waterfall.'],
     ['auto_route', 'Auto-Route (Best Model)', 'Picks the highest-scoring endpoint per task domain & routes away from refusals.'],
     ['auto_arena', 'Auto-Arena (Top-2 + Judge)', 'Races the top 2 domain contenders & trains your personal Elo from the judge.'],
-    ['manual_arena', 'Manual Arena', 'Use custom fixed Venice writers below.']
+    ['manual_arena', 'Manual Arena', 'Race any two connected models & judge below.']
   ];
   const domainTabs = domains.map(d => `<button type="button" class="ultra-domain-tab ${d.id === activeDom ? 'active' : ''}" data-router-domain="${escapeHTML(d.id)}" title="${escapeHTML(d.description)}">${escapeHTML(d.shortLabel)}</button>`).join('');
   const boardHtml = activeRows.length
@@ -5231,6 +5258,10 @@ function renderSelected(data, force = false) {
   if (!task || task.id !== selectedId) return;
   const previous = selectedData?.task;
   if (previous?.id === task.id && (Number(task.version) < Number(previous.version) || (Number(task.version) === Number(previous.version) && Number(task.eventSeq) < Number(previous.eventSeq)))) return;
+  if (previous?.id === task.id) {
+    if (ACTIVE.has(previous.status) && task.status === 'completed') playCompletionChime('done');
+    else if (!previous.pendingApproval && task.pendingApproval) playCompletionChime('approval');
+  }
   selectedData = data;
   if (isCodingWorkspaceTask(task) && appMode !== 'godcode') {
     applyAppMode('godcode', { persist: false, notify: false, switchView: false });
@@ -6592,8 +6623,8 @@ $('#plan-keep-refining')?.addEventListener('click',()=>{
   $('#composer-input')?.focus();
 });
 $('#composer-ultra').addEventListener('click',()=>toggleUltra(selectedData?.task || null));
-$('#composer-recovery-settings').addEventListener('click',()=>openSettings('general'));
-$('#inspector-recovery-settings').addEventListener('click',()=>openSettings('general'));
+$('#composer-recovery-settings').addEventListener('click',()=>openSettings('recovery'));
+$('#inspector-recovery-settings').addEventListener('click',()=>openSettings('recovery'));
 $('#composer-model').addEventListener('click', openModels);
 $('#composer-options-toggle')?.addEventListener('click', (event) => {
   event.stopPropagation();
