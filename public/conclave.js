@@ -766,13 +766,8 @@
   function open(options = {}) {
     const dock = ensureShell();
     if (!dock) return;
-    // Hide artifact dock if open so split-screen stays spacious
-    const artDock = document.getElementById('artifact-dock');
-    const artSplit = document.getElementById('artifact-splitter');
-    if (artDock && !artDock.classList.contains('hidden')) {
-      artDock.classList.add('hidden');
-      artSplit?.classList.add('hidden');
-    }
+    // Hide artifact & browser docks cleanly so split-screen stays spacious without leaking body classes
+    window.closeArtifactDock?.({ recordDismiss: false });
     if (window.G0DBrowserLive?.isOpen?.()) window.G0DBrowserLive.close();
     isOpenState = true;
     dock.classList.remove('hidden');

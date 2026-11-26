@@ -681,6 +681,13 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
           clearInterval(heartbeat);
           unsub();
           sseClients.delete(client);
+          let hasOther = false;
+          for (const c of sseClients) {
+            if (c.taskId === taskId) { hasOther = true; break; }
+          }
+          if (!hasOther) {
+            runtime.broker.browser.setScreencastWatching(taskId, false).catch(() => {});
+          }
         };
         sseClients.add(client);
         req.on('close', cleanup);

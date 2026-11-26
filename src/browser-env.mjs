@@ -354,7 +354,7 @@ const CONTAINMENT_INIT_SCRIPT = `(() => {
 })();`;
 
 class CdpSession {
-  constructor({ taskId, binaryPath, viewport = { width: 1280, height: 800 }, headless = true, profileDir = null, onEvent = null }) {
+  constructor({ taskId, binaryPath, viewport = { width: 1280, height: 800 }, headless = true, profileDir = null, onEvent = null, onUnexpectedExit = null }) {
     this.taskId = taskId;
     this.binaryPath = binaryPath;
     this.viewport = viewport;
@@ -362,6 +362,7 @@ class CdpSession {
     this.proc = null;
     this.profileDir = profileDir || null;
     this.onEvent = typeof onEvent === 'function' ? onEvent : null;
+    this.onUnexpectedExit = typeof onUnexpectedExit === 'function' ? onUnexpectedExit : null;
     this.ws = null;
     this.nextId = 1;
     this.pending = new Map();
@@ -372,6 +373,7 @@ class CdpSession {
     this.frameSeq = 0;
     this.lastFrameEmitAt = 0;
     this.screencastActive = false;
+    this.screencastDesired = false;
     this.lastAction = null;
     this.lastUrl = 'about:blank';
     this.lastTitle = '';
@@ -394,8 +396,15 @@ class CdpSession {
   }
 
   async start() {
+    if (this.closed) throw fault('BROWSER_CLOSED', 'Contained browser session closed.');
     if (!this.profileDir) {
       this.profileDir = await fs.mkdtemp(path.join(os.tmpdir(), `g0dc0d3-browser-${this.taskId.slice(0, 8)}-`));
+    }
+    if (this.closed) {
+      const dir = this.profileDir;
+      this.profileDir = null;
+      if (dir) await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+      throw fault('BROWSER_CLOSED', 'Contained browser session closed.');
     }
     const args = buildChromiumLaunchArgs({
       headless: this.headless,
@@ -403,6 +412,10 @@ class CdpSession {
       profileDir: this.profileDir,
     });
     this.proc = spawn(this.binaryPath, args, { stdio: ['ignore', 'ignore', 'pipe'], detached: process.platform !== 'win32' });
+    if (this.closed) {
+      await this.close().catch(() => {});
+      throw fault('BROWSER_CLOSED', 'Contained browser session closed.');
+    }
     let stderrBuf = '';
     const debugPort = await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(fault('BROWSER_LAUNCH_TIMEOUT', 'Contained browser did not open its DevTools port within 25s.')), 25000);
@@ -445,9 +458,13 @@ class CdpSession {
           entry.reject(fault('BROWSER_CLOSED', 'Contained browser session closed.'));
         }
         this.pending.clear();
+        if (!this.closed && this.onUnexpectedExit) this.onUnexpectedExit(this);
       });
     });
-    this.proc.once('exit', () => { this.disconnected = true; });
+    this.proc.once('exit', () => {
+      this.disconnected = true;
+      if (!this.closed && this.onUnexpectedExit) this.onUnexpectedExit(this);
+    });
 
     await this.send('Page.enable');
     const frameTree = await this.send('Page.getFrameTree').catch(() => null);
@@ -468,7 +485,9 @@ class CdpSession {
   }
 
   async startScreencast({ quality = 68, maxWidth = 1280, maxHeight = 820, everyNthFrame = 1 } = {}) {
-    if (this.closed || this.disconnected || this.screencastActive) return this.screencastActive;
+    if (this.closed || this.disconnected) return false;
+    this.screencastDesired = true;
+    if (this.screencastActive) return true;
     try {
       await this.send('Page.startScreencast', {
         format: 'jpeg',
@@ -477,6 +496,13 @@ class CdpSession {
         maxHeight: Math.max(240, Math.min(1200, Number(maxHeight) || 820)),
         everyNthFrame: Math.max(1, Math.min(4, Number(everyNthFrame) || 1)),
       }, 5000);
+      if (!this.screencastDesired || this.closed || this.disconnected) {
+        this.screencastActive = false;
+        if (!this.closed && !this.disconnected) {
+          await this.send('Page.stopScreencast', {}, 3000).catch(() => {});
+        }
+        return false;
+      }
       this.screencastActive = true;
       this._emit({ type: 'browser.status', active: true, screencastActive: true, url: this.lastUrl, title: this.lastTitle });
     } catch {
@@ -486,9 +512,10 @@ class CdpSession {
   }
 
   async stopScreencast() {
-    if (!this.screencastActive) return;
+    this.screencastDesired = false;
+    const wasActive = this.screencastActive;
     this.screencastActive = false;
-    if (!this.closed && !this.disconnected) {
+    if (wasActive && !this.closed && !this.disconnected) {
       await this.send('Page.stopScreencast', {}, 3000).catch(() => {});
     }
   }
@@ -537,6 +564,12 @@ class CdpSession {
       if (errText && !/ERR_BLOCKED_BY_CLIENT|ERR_ABORTED/i.test(errText)) {
         const resType = String(msg.params?.type || 'resource');
         this._pushConsole('network', `Failed ${resType} load: ${errText}`.slice(0, 400));
+      }
+    } else if (msg.method === 'Page.frameNavigated') {
+      const f = msg.params?.frame;
+      if (f && (!f.parentId || f.id === this.mainFrameId) && typeof f.url === 'string' && f.url) {
+        this.lastUrl = f.url;
+        this._emit({ type: 'browser.status', active: true, screencastActive: this.screencastActive, url: this.lastUrl, title: this.lastTitle });
       }
     } else if (msg.method === 'Page.screencastFrame') {
       const p = msg.params || {};
@@ -1059,7 +1092,7 @@ class CdpSession {
 export class BrowserPool {
   constructor({ getSettings = null, onEvent = null, forceHeadless = false } = {}) {
     this.sessions = new Map();
-    this.launching = new Map();
+    this.transitions = new Map();
     this.sessionVisibleOverrides = new Map();
     this.screencastWatchers = new Set();
     this.getSettings = typeof getSettings === 'function' ? getSettings : (() => DEFAULT_BROWSER_SETTINGS);
@@ -1067,6 +1100,25 @@ export class BrowserPool {
     this.forceHeadless = Boolean(forceHeadless);
     this.reapTimer = setInterval(() => this._reapIdle(), 60 * 1000);
     this.reapTimer.unref?.();
+  }
+
+  _serialize(taskId, fn) {
+    const prev = this.transitions.get(taskId) || Promise.resolve();
+    const next = prev.catch(() => {}).then(fn);
+    const wrapped = next.finally(() => {
+      if (this.transitions.get(taskId) === wrapped) this.transitions.delete(taskId);
+    });
+    this.transitions.set(taskId, wrapped);
+    return next;
+  }
+
+  async _waitTransition(taskId) {
+    const t = this.transitions.get(taskId);
+    if (t) await t.catch(() => {});
+  }
+
+  _isLive(session) {
+    return Boolean(session && !session.closed && !session.disconnected && session.ws?.readyState === WebSocket.OPEN);
   }
 
   _shouldRunHeadless(taskId) {
@@ -1085,50 +1137,58 @@ export class BrowserPool {
     }
   }
 
-  async _getOrCreate(taskId, viewport, { profileDir = null, headlessOverride = null } = {}) {
-    let session = this.sessions.get(taskId);
-    if (session && !session.closed && session.ws?.readyState === WebSocket.OPEN) {
-      session.touch();
-      return session;
+  _handleUnexpectedExit(taskId, deadSession) {
+    if (this.sessions.get(taskId) !== deadSession) return;
+    this.sessions.delete(taskId);
+    deadSession.close().catch(() => {});
+  }
+
+  async _launchSession(taskId, viewport, { profileDir = null, headlessOverride = null } = {}) {
+    const existing = this.sessions.get(taskId);
+    if (this._isLive(existing)) {
+      existing.touch();
+      return existing;
     }
-    if (this.launching.has(taskId)) return await this.launching.get(taskId);
-    const launchPromise = (async () => {
-      if (session) await this.closeSession(taskId);
-      const binaryPath = await findChromiumBinary();
-      if (!binaryPath) {
-        throw fault('BROWSER_UNAVAILABLE', 'No Chromium-compatible browser (Chrome, Brave, Chromium, Edge, Arc) was found. Set G0D_BROWSER_PATH to configure one.');
+    if (existing) {
+      this.sessions.delete(taskId);
+      await existing.close().catch(() => {});
+    }
+    const binaryPath = await findChromiumBinary();
+    if (!binaryPath) {
+      throw fault('BROWSER_UNAVAILABLE', 'No Chromium-compatible browser (Chrome, Brave, Chromium, Edge, Arc) was found. Set G0D_BROWSER_PATH to configure one.');
+    }
+    const headless = typeof headlessOverride === 'boolean' ? headlessOverride : this._shouldRunHeadless(taskId);
+    const next = new CdpSession({
+      taskId,
+      binaryPath,
+      viewport,
+      headless,
+      profileDir,
+      onEvent: this.onEvent,
+      onUnexpectedExit: (dead) => this._handleUnexpectedExit(taskId, dead),
+    });
+    this.sessions.set(taskId, next);
+    try {
+      await next.start();
+      const settings = normalizeBrowserSettings(this.getSettings?.());
+      if (this.screencastWatchers.has(taskId) && settings.liveMirror) {
+        await next.startScreencast().catch(() => {});
       }
-      const headless = typeof headlessOverride === 'boolean' ? headlessOverride : this._shouldRunHeadless(taskId);
-      const next = new CdpSession({
-        taskId,
-        binaryPath,
-        viewport,
-        headless,
-        profileDir,
-        onEvent: this.onEvent,
-      });
-      this.sessions.set(taskId, next);
-      try {
-        await next.start();
-        const settings = normalizeBrowserSettings(this.getSettings?.());
-        if (this.screencastWatchers.has(taskId) && settings.liveMirror) {
-          await next.startScreencast().catch(() => {});
-        }
-        return next;
-      } catch (err) {
-        this.sessions.delete(taskId);
-        await next.close().catch(() => {});
-        throw err;
-      }
-    })();
-    this.launching.set(taskId, launchPromise);
-    try { return await launchPromise; }
-    finally { this.launching.delete(taskId); }
+      return next;
+    } catch (err) {
+      if (this.sessions.get(taskId) === next) this.sessions.delete(taskId);
+      await next.close().catch(() => {});
+      throw err;
+    }
+  }
+
+  _getOrCreate(taskId, viewport, opts = {}) {
+    return this._serialize(taskId, () => this._launchSession(taskId, viewport, opts));
   }
 
   getLatestScreenshot(taskId) {
     const session = this.sessions.get(taskId);
-    if (!session || session.closed || !session.latestScreenshot) return null;
+    if (!this._isLive(session) || !session.latestScreenshot) return null;
     return {
       buffer: session.latestScreenshot,
       seq: session.screenshotSeq,
@@ -1139,7 +1199,7 @@ export class BrowserPool {
 
   getLatestFrame(taskId) {
     const session = this.sessions.get(taskId);
-    if (!session || session.closed) return null;
+    if (!this._isLive(session)) return null;
     if (session.latestFrame?.buffer) return session.latestFrame;
     if (session.latestScreenshot) {
       return {
@@ -1157,7 +1217,7 @@ export class BrowserPool {
   getStatus(taskId) {
     const settings = normalizeBrowserSettings(this.getSettings?.());
     const session = this.sessions.get(taskId);
-    const active = Boolean(session && !session.closed && session.ws?.readyState === WebSocket.OPEN);
+    const active = this._isLive(session);
     return {
       active,
       headless: active ? session.headless : this._shouldRunHeadless(taskId),
@@ -1177,8 +1237,9 @@ export class BrowserPool {
   async setScreencastWatching(taskId, watching) {
     if (watching) this.screencastWatchers.add(taskId);
     else this.screencastWatchers.delete(taskId);
+    await this._waitTransition(taskId);
     const session = this.sessions.get(taskId);
-    if (!session || session.closed || session.ws?.readyState !== WebSocket.OPEN) {
+    if (!this._isLive(session)) {
       return this.getStatus(taskId);
     }
     const settings = normalizeBrowserSettings(this.getSettings?.());
@@ -1190,51 +1251,62 @@ export class BrowserPool {
     return this.getStatus(taskId);
   }
 
-  async setSessionMode(taskId, { visibleWindow }, outboundOpts = {}) {
-    const wantVisible = Boolean(visibleWindow);
-    this.sessionVisibleOverrides.set(taskId, wantVisible);
-    const targetHeadless = (this.forceHeadless || process.env.G0D_FORCE_HEADLESS === '1' || process.env.NODE_ENV === 'test') ? true : !wantVisible;
-    const session = this.sessions.get(taskId);
-    if (!session || session.closed || session.ws?.readyState !== WebSocket.OPEN) {
+  async stopAllScreencasts() {
+    await Promise.all([...this.sessions.values()].map(s => s.stopScreencast().catch(() => {})));
+  }
+
+  setSessionMode(taskId, { visibleWindow }, outboundOpts = {}) {
+    return this._serialize(taskId, async () => {
+      const wantVisible = Boolean(visibleWindow);
+      this.sessionVisibleOverrides.set(taskId, wantVisible);
+      const targetHeadless = (this.forceHeadless || process.env.G0D_FORCE_HEADLESS === '1' || process.env.NODE_ENV === 'test') ? true : !wantVisible;
+      const session = this.sessions.get(taskId);
+      if (!this._isLive(session)) {
+        return this.getStatus(taskId);
+      }
+      if (session.headless === targetHeadless) return this.getStatus(taskId);
+      // Query live location.href before closing so post-login navigation in a visible window is preserved!
+      let prevUrl = session.lastUrl;
+      try {
+        const loc = await session.send('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, 1500);
+        if (typeof loc?.result?.value === 'string' && loc.result.value) prevUrl = loc.result.value;
+      } catch {}
+      const prevViewport = session.viewport;
+      const preservedProfileDir = session.profileDir;
+      this.sessions.delete(taskId);
+      await session.close({ preserveProfile: true });
+      let next;
+      try {
+        next = await this._launchSession(taskId, prevViewport, { profileDir: preservedProfileDir, headlessOverride: targetHeadless });
+        if (prevUrl && prevUrl !== 'about:blank') {
+          try {
+            assertBrowserUrlAllowed(prevUrl, outboundOpts);
+            await next.open({ url: prevUrl, waitMs: 250 }, outboundOpts);
+          } catch {}
+        } else {
+          await next.captureScreenshot().catch(() => {});
+        }
+        if (this.onEvent) {
+          try {
+            this.onEvent({
+              type: 'browser.status',
+              taskId,
+              active: true,
+              headless: next.headless,
+              visibleWindow: !next.headless,
+              url: next.lastUrl,
+              title: next.lastTitle,
+              viewport: next.viewport,
+              screencastActive: next.screencastActive,
+            });
+          } catch {}
+        }
+      } catch (err) {
+        if (preservedProfileDir) await fs.rm(preservedProfileDir, { recursive: true, force: true }).catch(() => {});
+        throw err;
+      }
       return this.getStatus(taskId);
-    }
-    if (session.headless === targetHeadless) return this.getStatus(taskId);
-    const prevUrl = session.lastUrl;
-    const prevViewport = session.viewport;
-    const preservedProfileDir = session.profileDir;
-    this.sessions.delete(taskId);
-    await session.close({ preserveProfile: true });
-    let next;
-    try {
-      next = await this._getOrCreate(taskId, prevViewport, { profileDir: preservedProfileDir, headlessOverride: targetHeadless });
-      if (prevUrl && prevUrl !== 'about:blank') {
-        try {
-          assertBrowserUrlAllowed(prevUrl, outboundOpts);
-          await next.open({ url: prevUrl, waitMs: 250 }, outboundOpts);
-        } catch {}
-      } else {
-        await next.captureScreenshot().catch(() => {});
-      }
-      if (this.onEvent) {
-        try {
-          this.onEvent({
-            type: 'browser.status',
-            taskId,
-            active: true,
-            headless: next.headless,
-            visibleWindow: !next.headless,
-            url: next.lastUrl,
-            title: next.lastTitle,
-            viewport: next.viewport,
-            screencastActive: next.screencastActive,
-          });
-        } catch {}
-      }
-    } catch (err) {
-      if (preservedProfileDir) await fs.rm(preservedProfileDir, { recursive: true, force: true }).catch(() => {});
-      throw err;
-    }
-    return this.getStatus(taskId);
+    });
   }
 
   async open(taskId, args, outboundOpts) {
@@ -1245,8 +1317,9 @@ export class BrowserPool {
   }
 
   async snapshot(taskId, args) {
+    await this._waitTransition(taskId);
     const session = this.sessions.get(taskId);
-    if (!session || session.closed) throw fault('BROWSER_NOT_OPEN', 'No contained browser session is open for this task. Call browser.open first.');
+    if (!this._isLive(session)) throw fault('BROWSER_NOT_OPEN', 'No contained browser session is open for this task. Call browser.open first.');
     session.touch();
     const snap = await session.snapshot(args);
     return {
@@ -1257,14 +1330,16 @@ export class BrowserPool {
   }
 
   async act(taskId, args, outboundOpts) {
+    await this._waitTransition(taskId);
     const session = this.sessions.get(taskId);
-    if (!session || session.closed) throw fault('BROWSER_NOT_OPEN', 'No contained browser session is open for this task. Call browser.open first.');
+    if (!this._isLive(session)) throw fault('BROWSER_NOT_OPEN', 'No contained browser session is open for this task. Call browser.open first.');
     return await session.act(args, outboundOpts);
   }
 
   async screenshot(taskId, args) {
+    await this._waitTransition(taskId);
     const session = this.sessions.get(taskId);
-    if (!session || session.closed) throw fault('BROWSER_NOT_OPEN', 'No contained browser session is open for this task. Call browser.open first.');
+    if (!this._isLive(session)) throw fault('BROWSER_NOT_OPEN', 'No contained browser session is open for this task. Call browser.open first.');
     session.touch();
     const shot = await session.captureScreenshot(args);
     return {
@@ -1278,24 +1353,29 @@ export class BrowserPool {
   }
 
   async evaluate(taskId, args) {
+    await this._waitTransition(taskId);
     const session = this.sessions.get(taskId);
-    if (!session || session.closed) throw fault('BROWSER_NOT_OPEN', 'No contained browser session is open for this task. Call browser.open first.');
+    if (!this._isLive(session)) throw fault('BROWSER_NOT_OPEN', 'No contained browser session is open for this task. Call browser.open first.');
     return await session.evaluate(args);
   }
 
-  async closeSession(taskId) {
-    this.sessionVisibleOverrides.delete(taskId);
-    this.screencastWatchers.delete(taskId);
-    const session = this.sessions.get(taskId);
-    if (!session) return { ok: true, closed: false };
-    this.sessions.delete(taskId);
-    await session.close();
-    return { ok: true, closed: true };
+  closeSession(taskId, { resetPreferences = false } = {}) {
+    return this._serialize(taskId, async () => {
+      if (resetPreferences) {
+        this.sessionVisibleOverrides.delete(taskId);
+        this.screencastWatchers.delete(taskId);
+      }
+      const session = this.sessions.get(taskId);
+      if (!session) return { ok: true, closed: false };
+      this.sessions.delete(taskId);
+      await session.close();
+      return { ok: true, closed: true };
+    });
   }
 
   async closeAll() {
     clearInterval(this.reapTimer);
-    const all = [...this.sessions.keys()];
-    await Promise.all(all.map(id => this.closeSession(id).catch(() => {})));
+    const all = [...new Set([...this.sessions.keys(), ...this.transitions.keys()])];
+    await Promise.all(all.map(id => this.closeSession(id, { resetPreferences: true }).catch(() => {})));
   }
 }

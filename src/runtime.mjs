@@ -3008,6 +3008,9 @@ export class Runtime {
   updateBrowserSettings(patch = {}) {
     const next = normalizeBrowserSettings(patch, this.getBrowserSettings());
     this.store.setLocalState('browser_settings', next);
+    if (!next.liveMirror) {
+      this.broker?.browser?.stopAllScreencasts?.().catch(() => {});
+    }
     return next;
   }
   async getBrowserInfo() {
@@ -3486,7 +3489,7 @@ export class Runtime {
     for (const key of [...this._workerSteers.keys()]) {
       if (key.startsWith(`${id}:`)) this._workerSteers.delete(key);
     }
-    await this.broker.browser.closeSession(id).catch(() => {});
+    await this.broker.browser.closeSession(id, { resetPreferences: true }).catch(() => {});
     // Only delete workspaces created inside this runtime's managed workspaces directory.
     let managedRoot = resolve(this.store.dataDir, 'workspaces') + sep;
     try { managedRoot = (await fs.realpath(resolve(this.store.dataDir, 'workspaces'))) + sep; } catch {}

@@ -4564,6 +4564,8 @@ async function openLivePreview({ taskId, entry, html, files, title, artifactKey,
     if (requestedTaskId && selectedId !== requestedTaskId) return;
 
     window.closeChatCode?.();
+    if (window.G0DBrowserLive?.isOpen?.()) window.G0DBrowserLive.close();
+    if (window.G0DConclave?.isOpen?.()) window.G0DConclave.close();
     if (typeof setInspector === 'function') setInspector(false);
     if (artifactDockState.onMessage) window.removeEventListener('message', artifactDockState.onMessage);
     if (artifactDockState.onKey) window.removeEventListener('keydown', artifactDockState.onKey);
@@ -4938,6 +4940,8 @@ function openAgentBrowserDock(view) {
   if (!dock || !view) return;
   artifactOpenSeq += 1;
   window.closeChatCode?.();
+  if (window.G0DBrowserLive?.isOpen?.()) window.G0DBrowserLive.close();
+  if (window.G0DConclave?.isOpen?.()) window.G0DConclave.close();
   setInspector(false);
   initArtifactSplitter();
   if (artifactDockState.onMessage) window.removeEventListener('message', artifactDockState.onMessage);
@@ -5017,6 +5021,8 @@ function syncArtifactDockForTask(data, taskChanged) {
   if (browserView) {
     lastDetectedArtifact = browserView;
     renderTaskMetaStrip(task);
+    // When G0DBrowserLive is loaded, avoid opening the legacy static screenshot dock on top of Live Browser Mirror!
+    if (window.G0DBrowserLive) return;
     if (artifactDockState.open && artifactDockState.key === browserView.artifactKey) return;
     if (artifactDismissedKeys.has(browserView.artifactKey)) return;
     openAgentBrowserDock(browserView);
@@ -5501,7 +5507,7 @@ function updateLiveStreamSlot() {
 }
 
 function manageStream(task) {
-  const shouldStream = task && ACTIVE.has(task.status);
+  const shouldStream = task && (ACTIVE.has(task.status) || window.G0DBrowserLive?.isOpen?.());
   if (shouldStream && streamTaskId !== task.id) {
     disconnectStream();
     streamTaskId = task.id;
@@ -5585,6 +5591,7 @@ function disconnectStream() {
   const slot = $('#stream-slot');
   if (slot) slot.innerHTML = '';
 }
+window.syncActiveTaskStream = () => manageStream(selectedData?.task || null);
 
 function renderEmpty() {
   setVisible('#initial-loading', false);

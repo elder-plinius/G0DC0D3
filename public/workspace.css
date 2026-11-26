@@ -6997,14 +6997,14 @@ body.conclave-open.sidebar-collapsed .conclave-dock {
 }
 .app-header .header-browser-btn.hidden { display: none; }
 .app-header .header-browser-btn.is-live {
-  border-color: color-mix(in srgb, var(--sage, #4ade80) 48%, var(--line));
+  border-color: color-mix(in srgb, var(--lime, #4ade80) 48%, var(--line));
 }
 .app-header .header-browser-btn.is-open {
   border-color: color-mix(in srgb, var(--violet, #a78bfa) 58%, var(--line));
   background: color-mix(in srgb, var(--violet, #a78bfa) 14%, var(--panel-soft));
 }
 .browser-btn-dot {
-  color: var(--sage, #4ade80);
+  color: var(--lime, #4ade80);
   font-size: .8rem;
   line-height: 1;
 }
@@ -7017,12 +7017,12 @@ body.conclave-open.sidebar-collapsed .conclave-dock {
   letter-spacing: .04em;
 }
 .browser-btn-tag.is-live {
-  background: color-mix(in srgb, var(--sage, #4ade80) 20%, transparent);
-  color: var(--sage, #4ade80);
+  background: color-mix(in srgb, var(--lime, #4ade80) 20%, transparent);
+  color: var(--lime, #4ade80);
 }
 .browser-btn-tag.is-win {
-  background: color-mix(in srgb, #fbbf24 22%, transparent);
-  color: #fbbf24;
+  background: color-mix(in srgb, var(--amber, #fbbf24) 22%, transparent);
+  color: var(--amber, #fbbf24);
 }
 
 body.browser-open .app-shell {
@@ -7069,6 +7069,29 @@ body.browser-open.sidebar-collapsed .browser-dock { grid-column: 2; }
   box-shadow: 0 24px 64px rgba(0, 0, 0, .55);
   z-index: 90;
 }
+@media (max-width: 1080px) {
+  body.browser-open .app-shell,
+  body.browser-open.sidebar-collapsed .app-shell {
+    grid-template-columns: var(--sidebar-width, 250px) minmax(0, 1fr);
+  }
+  body.browser-open.sidebar-collapsed .app-shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  body.browser-open .browser-dock,
+  body.browser-open.sidebar-collapsed .browser-dock {
+    position: fixed;
+    inset: 12px;
+    width: auto;
+    min-width: 0;
+    height: auto;
+    grid-column: auto;
+    grid-row: auto;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    box-shadow: 0 24px 68px rgba(0, 0, 0, .52);
+    z-index: 75;
+  }
+}
 .bl-header {
   display: flex;
   align-items: center;
@@ -7092,12 +7115,12 @@ body.browser-open.sidebar-collapsed .browser-dock { grid-column: 2; }
   flex-shrink: 0;
 }
 .bl-live-dot.is-live {
-  background: var(--sage, #4ade80);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--sage, #4ade80) 22%, transparent);
+  background: var(--lime, #4ade80);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--lime, #4ade80) 22%, transparent);
 }
 .bl-live-dot.is-win {
-  background: #fbbf24;
-  box-shadow: 0 0 0 4px rgba(251, 191, 36, .22);
+  background: var(--amber, #fbbf24);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--amber, #fbbf24) 22%, transparent);
 }
 .bl-title-copy { min-width: 0; }
 .bl-title {
@@ -7132,12 +7155,12 @@ body.browser-open.sidebar-collapsed .browser-dock { grid-column: 2; }
   background: var(--panel-soft);
 }
 .bl-mode-chip.is-live {
-  color: var(--sage, #4ade80);
-  border-color: color-mix(in srgb, var(--sage, #4ade80) 45%, var(--line));
+  color: var(--lime, #4ade80);
+  border-color: color-mix(in srgb, var(--lime, #4ade80) 45%, var(--line));
 }
 .bl-mode-chip.is-win {
-  color: #fbbf24;
-  border-color: rgba(251, 191, 36, .45);
+  color: var(--amber, #fbbf24);
+  border-color: color-mix(in srgb, var(--amber, #fbbf24) 45%, var(--line));
 }
 .bl-mode-btn {
   height: 26px;
@@ -7181,8 +7204,8 @@ body.browser-open.sidebar-collapsed .browser-dock { grid-column: 2; }
   justify-content: space-between;
   gap: 10px;
   padding: 7px 12px;
-  border-bottom: 1px solid rgba(251, 191, 36, .28);
-  background: rgba(251, 191, 36, .09);
+  border-bottom: 1px solid color-mix(in srgb, var(--amber, #fbbf24) 35%, transparent);
+  background: color-mix(in srgb, var(--amber, #fbbf24) 12%, transparent);
   font-size: .73rem;
   color: var(--text);
 }
@@ -7260,7 +7283,7 @@ body.browser-open.sidebar-collapsed .browser-dock { grid-column: 2; }
 }
 .bl-log-row.level-error .bl-log-lvl,
 .bl-log-row.level-network .bl-log-lvl { color: var(--red, #f87171); }
-.bl-log-row.level-warn .bl-log-lvl { color: #fbbf24; }
+.bl-log-row.level-warn .bl-log-lvl { color: var(--amber, #fbbf24); }
 .bl-log-row code {
   color: var(--text-secondary);
   white-space: pre-wrap;

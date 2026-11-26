@@ -111,6 +111,18 @@
     window.addEventListener('resize', () => {
       if (isOpenState) drawCanvas();
     });
+    window.addEventListener('pagehide', () => {
+      if (isOpenState && currentTaskId) {
+        try {
+          fetch(`/api/tasks/${encodeURIComponent(currentTaskId)}/browser/screencast`, {
+            method: 'POST',
+            keepalive: true,
+            headers: { 'content-type': 'application/json', 'x-g0d-request': '1' },
+            body: '{"active":false}',
+          });
+        } catch {}
+      }
+    });
 
     return dock;
   }
@@ -232,8 +244,9 @@
     }).join('');
   }
 
-  function fetchFrame(url, seq = 0) {
-    if (!url || !isOpenState) return;
+  function fetchFrame(url, seq = 0, targetTaskId = currentTaskId) {
+    if (!url || !isOpenState || !targetTaskId || targetTaskId !== currentTaskId) return;
+    if (seq && seq <= currentImgSeq && currentImg) return;
     if (frameInFlight) {
       pendingFrameUrl = url;
       pendingFrameSeq = seq;
@@ -243,16 +256,23 @@
     const img = new Image();
     img.onload = () => {
       frameInFlight = false;
-      currentImg = img;
-      if (seq > currentImgSeq) currentImgSeq = seq;
+      if (targetTaskId !== currentTaskId || !isOpenState) {
+        pendingFrameUrl = null;
+        pendingFrameSeq = 0;
+        return;
+      }
+      if (!seq || seq >= currentImgSeq) {
+        currentImg = img;
+        if (seq > currentImgSeq) currentImgSeq = seq;
+      }
       if (statusData) statusData.hasFrame = true;
       renderUI();
-      if (pendingFrameUrl) {
+      if (pendingFrameUrl && targetTaskId === currentTaskId) {
         const nextUrl = pendingFrameUrl;
         const nextSeq = pendingFrameSeq;
         pendingFrameUrl = null;
         pendingFrameSeq = 0;
-        fetchFrame(nextUrl, nextSeq);
+        fetchFrame(nextUrl, nextSeq, targetTaskId);
       }
     };
     img.onerror = () => {
@@ -379,14 +399,14 @@
   }
 
   async function loadStatus(taskId = currentTaskId) {
-    try {
-      const sRes = await fetch('/api/browser/settings');
-      if (sRes.ok) {
-        const sJson = await sRes.json();
-        if (sJson?.settings) browserSettings = sJson.settings;
-      }
-    } catch {}
     if (!taskId) {
+      try {
+        const sRes = await fetch('/api/browser/settings');
+        if (sRes.ok) {
+          const sJson = await sRes.json();
+          if (sJson?.settings) browserSettings = sJson.settings;
+        }
+      } catch {}
       statusData = null;
       renderUI();
       return null;
@@ -400,8 +420,8 @@
       if (st.settings) browserSettings = st.settings;
       if (st.lastAction) pushAction(st.lastAction);
       renderUI();
-      if (isOpenState && st.active && st.hasFrame) {
-        fetchFrame(`/api/tasks/${encodeURIComponent(taskId)}/browser/frame?v=${st.frameSeq || Date.now()}`, st.frameSeq || 0);
+      if (isOpenState && st.active && st.hasFrame && (!st.frameSeq || st.frameSeq !== currentImgSeq || !currentImg)) {
+        fetchFrame(`/api/tasks/${encodeURIComponent(taskId)}/browser/frame?v=${st.frameSeq || Date.now()}`, st.frameSeq || 0, taskId);
       }
       return st;
     } catch {
@@ -411,8 +431,7 @@
 
   function pushAction(act) {
     if (!act || !act.action) return;
-    const prev = recentActions[0];
-    if (prev && prev.time === act.time && prev.action === act.action) return;
+    if (recentActions.some(a => a.time === act.time && a.action === act.action && a.x === act.x && a.y === act.y)) return;
     recentActions.unshift(act);
     if (recentActions.length > 8) recentActions.length = 8;
   }
@@ -443,38 +462,55 @@
   }
 
   async function setWindowMode(visibleWindow, { persist = false } = {}) {
-    if (!currentTaskId || !statusData?.active) {
-      await fetch('/api/browser/settings', {
-        method: 'PATCH',
-        headers: { 'content-type': 'application/json', 'x-g0d-request': '1' },
-        body: JSON.stringify({ visibleWindow: Boolean(visibleWindow) }),
-      }).then(r => r.json()).then(j => { if (j?.settings) browserSettings = j.settings; }).catch(() => {});
+    const taskId = currentTaskId;
+    if (!taskId) {
+      modeBusy = true;
       renderUI();
-      if (typeof window.loadBrowserSettings === 'function') window.loadBrowserSettings();
-      if (typeof window.toast === 'function') {
-        window.toast(visibleWindow ? 'Next browser session will open in a visible Chromium window.' : 'Browser sessions set to headless live mirror.');
+      try {
+        const res = await fetch('/api/browser/settings', {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json', 'x-g0d-request': '1' },
+          body: JSON.stringify({ visibleWindow: Boolean(visibleWindow) }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(json.error || 'Could not update browser mode.');
+        if (json?.settings) browserSettings = json.settings;
+        if (typeof window.loadBrowserSettings === 'function') window.loadBrowserSettings();
+        if (typeof window.toast === 'function') {
+          window.toast(visibleWindow ? 'Next browser session will open in a visible Chromium window.' : 'Browser sessions set to headless live mirror.');
+        }
+      } catch (err) {
+        if (typeof window.toast === 'function') window.toast(err.message || 'Could not update browser mode.');
+      } finally {
+        modeBusy = false;
+        renderUI();
       }
       return;
     }
     modeBusy = true;
     renderUI();
     try {
-      const res = await fetch(`/api/tasks/${encodeURIComponent(currentTaskId)}/browser/mode`, {
+      const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/browser/mode`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-g0d-request': '1' },
         body: JSON.stringify({ visibleWindow: Boolean(visibleWindow), persist }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || 'Could not switch browser mode.');
+      if (taskId !== currentTaskId) return;
       statusData = json;
       if (json.settings) browserSettings = json.settings;
       if (isOpenState && json.active && json.hasFrame) {
-        fetchFrame(`/api/tasks/${encodeURIComponent(currentTaskId)}/browser/frame?v=${json.frameSeq || Date.now()}`, json.frameSeq || 0);
+        fetchFrame(`/api/tasks/${encodeURIComponent(taskId)}/browser/frame?v=${json.frameSeq || Date.now()}`, json.frameSeq || 0, taskId);
       }
       if (typeof window.toast === 'function') {
-        window.toast(json.visibleWindow
-          ? 'Popped out into a visible isolated Chromium window (session preserved).'
-          : 'Returned to headless live mirror (session preserved).');
+        window.toast(json.active
+          ? (json.visibleWindow
+            ? 'Popped out into a visible isolated Chromium window (session preserved).'
+            : 'Returned to headless live mirror (session preserved).')
+          : (json.visibleWindow
+            ? 'This chat’s browser will open in a visible Chromium window.'
+            : 'This chat’s browser will use the headless live mirror.'));
       }
     } catch (err) {
       if (typeof window.toast === 'function') window.toast(err.message || 'Mode switch failed.');
@@ -491,15 +527,18 @@
   }
 
   async function stopSession() {
-    if (!currentTaskId) return;
+    const taskId = currentTaskId;
+    if (!taskId) return;
     try {
-      const res = await fetch(`/api/tasks/${encodeURIComponent(currentTaskId)}/browser/close`, {
+      const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/browser/close`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-g0d-request': '1' },
         body: '{}',
       });
+      if (taskId !== currentTaskId) return;
       if (res.ok) statusData = await res.json();
       currentImg = null;
+      currentImgSeq = 0;
       reticle = null;
       renderUI();
       if (typeof window.toast === 'function') window.toast('Contained browser session closed.');
@@ -518,13 +557,8 @@
   function open() {
     const dock = ensureShell();
     if (!dock) return;
-    // Keep right-hand split docks mutually exclusive
-    const artDock = document.getElementById('artifact-dock');
-    const artSplit = document.getElementById('artifact-splitter');
-    if (artDock && !artDock.classList.contains('hidden')) {
-      artDock.classList.add('hidden');
-      artSplit?.classList.add('hidden');
-    }
+    // Keep right-hand split docks mutually exclusive without leaking artifact-open state
+    window.closeArtifactDock?.({ recordDismiss: false });
     if (window.G0DConclave?.isOpen?.()) window.G0DConclave.close();
     isOpenState = true;
     dock.classList.remove('hidden');
@@ -534,12 +568,15 @@
       setScreencast(currentTaskId, true);
       loadStatus(currentTaskId);
     }
+    window.syncActiveTaskStream?.();
   }
 
   function close() {
     const prevTask = currentTaskId;
     isOpenState = false;
     isExpanded = false;
+    pendingFrameUrl = null;
+    pendingFrameSeq = 0;
     if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
     const dock = dockEl();
     if (dock) {
@@ -549,6 +586,7 @@
     document.body.classList.remove('browser-open');
     if (prevTask) setScreencast(prevTask, false);
     updateHeaderButton();
+    window.syncActiveTaskStream?.();
   }
 
   function toggle() {
@@ -558,17 +596,24 @@
 
   function syncTask(task) {
     const nextId = task?.id || null;
-    if (nextId !== currentTaskId) {
+    const changed = nextId !== currentTaskId;
+    if (changed) {
       if (currentTaskId && isOpenState) setScreencast(currentTaskId, false);
       currentTaskId = nextId;
       statusData = null;
       currentImg = null;
       currentImgSeq = 0;
+      pendingFrameUrl = null;
+      pendingFrameSeq = 0;
       recentActions = [];
       reticle = null;
       if (nextId && isOpenState) setScreencast(nextId, true);
     }
-    loadStatus(nextId);
+    if (changed || (nextId && statusData === null)) {
+      loadStatus(nextId);
+    } else {
+      updateHeaderButton();
+    }
   }
 
   function ingestStreamEvent(delta) {
@@ -605,7 +650,7 @@
         }
       }
       if (delta.type === 'browser.frame' && isOpenState && delta.frameUrl) {
-        fetchFrame(delta.frameUrl, Number(delta.seq) || Date.now());
+        fetchFrame(delta.frameUrl, Number(delta.seq) || Date.now(), currentTaskId);
       } else {
         renderUI();
       }
