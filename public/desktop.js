@@ -352,8 +352,13 @@
     get('tree-folder').value = '';
     get('tree-attach').textContent = chat ? 'Attach repository' : 'Create worktree';
     if (chat) {
-      window.closeArtifactDock?.({ recordDismiss: false });
-      if (typeof setInspector === 'function') setInspector(false);
+      if (typeof window.closeAllRightDocks === 'function') window.closeAllRightDocks({ except: 'code' });
+      else {
+        window.closeArtifactDock?.({ recordDismiss: false });
+        if (typeof setInspector === 'function') setInspector(false);
+        if (window.G0DConclave?.isOpen?.()) window.G0DConclave.close();
+        if (window.G0DBrowserLive?.isOpen?.()) window.G0DBrowserLive.close();
+      }
       dialog.dataset.chat = chat.id;
       dock.append(dialog);
       dock.hidden = false;

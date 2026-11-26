@@ -224,11 +224,7 @@
             </svg>
             </div>
           </div>
-          <p class="welcome-mode-sub hidden" id="welcome-godcode-sub">Autonomous engineering workspace — attach a Git repo, run isolated worktree branches, edit files, and run tests.</p>
-          <div class="godcode-launcher godcode-only" id="godcode-launcher">
-            <button type="button" class="godcode-launch-btn" id="godcode-open-repo"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 5h5l2 2h8v9h-15z"/></svg><span>Open Repository</span></button>
-            <button type="button" class="godcode-launch-btn" id="godcode-open-worktrees"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="6" cy="5" r="2"/><circle cx="14" cy="5" r="2"/><circle cx="10" cy="15" r="2"/><path d="M6 7v2a3 3 0 0 0 3 3h2a3 3 0 0 0 3-3V7M10 12v1"/></svg><span>Worktrees &amp; Diff Race</span></button>
-          </div>
+          <p class="welcome-mode-sub hidden" id="welcome-godcode-sub" hidden></p>
         </div>
         <div class="welcome-setup hidden" id="welcome-setup">
           <form id="welcome-key-form" autocomplete="off">
@@ -318,8 +314,8 @@
         </form>
         <div class="recovery-strip"><button type="button" id="composer-recovery-settings" class="recovery-detail" aria-label="Recovery and routing settings"><span id="composer-recovery-status">Adaptive recovery and model routing</span><span aria-hidden="true">↗</span></button></div><div class="composer-caption"><span id="composer-hint"></span><span class="composer-key-hint visually-hidden" id="composer-keys">Enter to send. Shift + Enter for a new line.</span></div><div class="inline-error hidden" id="composer-error" role="alert"></div><button type="button" class="button button-secondary hidden" id="composer-connect">Connect a model</button>
       </section>
-      <div class="composer-suggestions" id="composer-suggestions"></div>
-      <div class="welcome-links godcode-only" id="welcome-links"><button class="text-button" type="button" id="welcome-example">Example diff <span aria-hidden="true">↗</span></button><span class="welcome-links-sep" aria-hidden="true">·</span><button class="text-button" type="button" data-open-tour>Quick tour</button></div>
+      <div class="composer-suggestions hidden" id="composer-suggestions" hidden></div>
+      <div class="welcome-links hidden" id="welcome-links" hidden><button class="text-button" type="button" id="welcome-example">Example diff <span aria-hidden="true">↗</span></button><span class="welcome-links-sep" aria-hidden="true">·</span><button class="text-button" type="button" data-open-tour>Quick tour</button></div>
     </main>
 
     <div id="artifact-splitter" class="artifact-splitter hidden" role="separator" aria-orientation="vertical" aria-label="Resize live preview panel" title="Drag to resize · Double-click to reset" tabindex="0"></div>
@@ -551,17 +547,19 @@
         <dt><kbd>j</kbd> <kbd>k</kbd></dt><dd>Navigate changed files</dd>
         <dt><kbd>/</kbd></dt><dd>Focus composer</dd>
         <dt><kbd>⌘K</kbd></dt><dd>Command palette</dd>
-        <dt><kbd>Esc</kbd></dt><dd>Close panel or dialog</dd></dl>
+        <dt><kbd>⌘,</kbd></dt><dd>Open Settings</dd>
+        <dt><kbd>⌘N</kbd></dt><dd>New chat / thread</dd>
+        <dt><kbd>Esc</kbd></dt><dd>Stop active turn or close panel/dialog</dd></dl>
       </section>
       <section><h3>Composer &amp; Slash Commands</h3>
         <dl><dt><kbd>Enter</kbd></dt><dd>Send message</dd>
         <dt><kbd>Shift+Enter</kbd></dt><dd>New line</dd>
         <dt><kbd>Tab</kbd></dt><dd>Accept slash or @file autocomplete</dd>
-        <dt><kbd>Shift+Tab</kbd></dt><dd>Cycle Permission Gate mode</dd>
-        <dt><kbd>⌘V</kbd></dt><dd>Paste screenshot into composer</dd>
+        <dt><kbd>Shift+Tab</kbd></dt><dd>Cycle Safe / Accept Edits / Ask All gate</dd>
+        <dt><kbd>⌘V</kbd></dt><dd>Paste screenshot or file into composer</dd>
         <dt><kbd>⌘⇧P</kbd></dt><dd>Toggle Plan / Build mode</dd>
         <dt><kbd>⌘⇧G</kbd></dt><dd>Switch GODMODƎ / GODCODƎ</dd>
-        <dt><kbd>/</kbd></dt><dd>/godmode, /godcode, /effort, /fast, /plan, /build, /compact, /diff, /undo, /fork, /export, /remember, /memory, /skill, /model, /review, /test, /help</dd>
+        <dt><kbd>/</kbd></dt><dd>/godmode, /godcode, /conclave, /browser, /schedules, /privacy, /system, /prefill, /effort, /plan, /build, /compact, /diff, /undo, /fork, /export, /remember, /memory, /skill, /model, /forge, /help</dd>
         <dt><kbd>@</kbd></dt><dd>Reference a workspace file</dd></dl>
       </section>
       <section><h3>Workspace</h3>
@@ -570,6 +568,6 @@
       </section>
     </div>
   </dialog>
-  <div class="toast hidden" id="toast" role="status"></div>
+  <div class="toast hidden" id="toast" role="status" popover="manual"></div>
 </body>
 </html>

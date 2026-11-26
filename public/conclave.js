@@ -766,9 +766,13 @@
   function open(options = {}) {
     const dock = ensureShell();
     if (!dock) return;
-    // Hide artifact & browser docks cleanly so split-screen stays spacious without leaking body classes
-    window.closeArtifactDock?.({ recordDismiss: false });
-    if (window.G0DBrowserLive?.isOpen?.()) window.G0DBrowserLive.close();
+    // Hide all other right-hand docks cleanly so split-screen never collides
+    if (typeof window.closeAllRightDocks === 'function') window.closeAllRightDocks({ except: 'conclave' });
+    else {
+      window.closeArtifactDock?.({ recordDismiss: false });
+      if (window.G0DBrowserLive?.isOpen?.()) window.G0DBrowserLive.close();
+      window.closeChatCode?.();
+    }
     isOpenState = true;
     dock.classList.remove('hidden');
     document.body.classList.add('conclave-open');
@@ -1534,7 +1538,8 @@
           ctx.fill();
         }
       } else {
-        const prog = failed ? 0.35 : (0.25 + 0.55 * ((Math.sin(animPhase * 1.9 + idx * 1.3) + 1) / 2));
+        const sweep = (animPhase * 0.28 + idx * 0.19) % 1;
+        const prog = failed ? 0.35 : (0.18 + 0.72 * sweep);
         ctx.fillStyle = failed ? pal.coral : pal.violet;
         drawRoundedRect(ctx, leftX, ly - 2, Math.max(18, trackW * prog), 14, 7);
         ctx.fill();
@@ -1577,9 +1582,10 @@
       const done = c.status === 'completed';
       const failed = c.status === 'declined' || c.status === 'failed';
       const gradeRevealed = c._replayGradeRevealed !== undefined ? c._replayGradeRevealed : Boolean(c.grade);
+      const arenaSweep = (animPhase * 0.26 + idx * 0.21) % 1;
       const prog = typeof c._replayProg === 'number'
         ? c._replayProg
-        : done ? 1 : failed ? 0.45 : (0.28 + 0.58 * ((Math.sin(animPhase * 1.8 + idx * 1.4) + 1) / 2));
+        : done ? 1 : failed ? 0.45 : (0.18 + 0.72 * arenaSweep);
       const color = c.isWinner ? pal.gold : done ? pal.sage : failed ? pal.coral : (laneColors[idx] || pal.violet);
 
       ctx.save();
@@ -1845,6 +1851,9 @@
       selectedWorkerId = null;
       replayPlaying = false;
       replayProgress = 100;
+      if (demoMode && nextId) {
+        demoMode = false;
+      }
       if (!demoMode) data = null;
     }
     if (nextId && !demoMode) {
@@ -1855,7 +1864,12 @@
   }
 
   function ingestStreamEvent(delta) {
-    if (!delta || !currentTaskId || demoMode) return;
+    if (!delta || !currentTaskId) return;
+    if (demoMode && (delta.type === 'subagent.started' || delta.type === 'race.dispatched' || delta.type === 'race.contender')) {
+      demoMode = false;
+      data = null;
+    }
+    if (demoMode) return;
     if (delta.type === 'subagent.started' || delta.type === 'subagent.progress' || delta.type === 'subagent.completed') {
       const wk = delta.worker;
       if (!wk?.workerId) return;
@@ -2178,10 +2192,13 @@
     const prompt = `Convene a parallel Conclave Squad (${agents.length} specialist${agents.length === 1 ? '' : 's'}) using agent.spawn concurrently:\n${lines.join('\n')}\n\nSynthesize their findings and deliver a verified final result for: `;
     const input = document.getElementById('composer-input');
     if (input) {
-      input.value = prompt;
+      if (isExpanded) toggleExpand();
+      const existing = input.value.trim();
+      const nextVal = existing ? `${prompt}${existing}` : prompt;
+      input.value = nextVal;
       input.dispatchEvent(new Event('input', { bubbles: true }));
       input.focus();
-      input.setSelectionRange(prompt.length, prompt.length);
+      input.setSelectionRange(nextVal.length, nextVal.length);
     }
     if (typeof window.toast === 'function') window.toast(`✦ Loaded ${agents.length}-agent Conclave Squad into composer — add your goal and press Enter!`);
   }
@@ -2254,10 +2271,13 @@
     const prompt = `Convene Conclave Formation "${f.name}" (${lines.length} specialist${lines.length === 1 ? '' : 's'}) concurrently via agent.spawn:\n${lines.join('\n')}\n\nGoal: ${f.goal || ''}`;
     const input = document.getElementById('composer-input');
     if (input) {
-      input.value = prompt;
+      if (isExpanded) toggleExpand();
+      const existing = input.value.trim();
+      const nextVal = existing ? `${prompt}${existing}` : prompt;
+      input.value = nextVal;
       input.dispatchEvent(new Event('input', { bubbles: true }));
       input.focus();
-      input.setSelectionRange(prompt.length, prompt.length);
+      input.setSelectionRange(nextVal.length, nextVal.length);
     }
     if (typeof window.toast === 'function') window.toast(`${f.sigil || '✦'} Loaded formation "${f.name}" into composer — press Enter to launch!`);
   }

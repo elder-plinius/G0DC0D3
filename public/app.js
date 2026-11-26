@@ -202,7 +202,7 @@ function applyAppMode(mode, { persist = true, notify = false, switchView = false
       ? 'What are we building<span class="welcome-punctuation">?</span>'
       : 'What can we do<span class="welcome-punctuation">?</span>';
   }
-  setVisible('#welcome-godcode-sub', isCode);
+  setVisible('#welcome-godcode-sub', false);
   renderStarterSuggestions();
   syncAdaptiveCompactUI();
   if (!isCode) {
@@ -424,10 +424,16 @@ function errorIn(selector, error) {
   target.classList.remove('hidden');
 }
 function toast(message) {
-  setText('#toast', message);
-  setVisible('#toast', true);
+  const el = $('#toast');
+  if (!el) return;
+  el.textContent = message;
+  el.classList.remove('hidden');
+  try { if (typeof el.showPopover === 'function' && !el.matches(':popover-open')) el.showPopover(); } catch {}
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => setVisible('#toast', false), 4000);
+  toastTimer = setTimeout(() => {
+    try { if (typeof el.hidePopover === 'function' && el.matches(':popover-open')) el.hidePopover(); } catch {}
+    el.classList.add('hidden');
+  }, 4000);
 }
 
 async function api(path, options = {}) {
@@ -598,9 +604,19 @@ function renderComposer() {
     : queueing ? 'Add instructions…'
     : task?.codeWorkspace ? 'Follow up, or type /build to propose an edit…' : 'Follow up…';
   const hasPayload = Boolean(input.value.trim() || composerAttachments.length || composerFileAttachments.length);
-  $('#composer-send').disabled = !online || loading || task?.draining || task?.sourceBusy || sourceActionBusy || isCrewBusy(task) || cancelled || busy || (Boolean(selectedId) && actionBusy) || !hasPayload;
-  $('#composer-send').setAttribute('aria-label', busy ? 'Sending message' : queueing ? ($('#composer-delivery')?.value === 'steer' ? 'Steer current turn' : 'Queue next message') : 'Send message');
-  $('#composer-send').setAttribute('aria-busy', String(busy));
+  const canStop = Boolean(task && ACTIVE.has(task.status) && !task.draining && !isCrewBusy(task) && !hasPayload && !busy && online);
+  const sendBtn = $('#composer-send');
+  if (sendBtn) {
+    sendBtn.dataset.composerStop = canStop ? '1' : '';
+    sendBtn.classList.toggle('is-stop-mode', canStop);
+    sendBtn.disabled = canStop ? Boolean(actionBusy) : (!online || loading || task?.draining || task?.sourceBusy || sourceActionBusy || isCrewBusy(task) || cancelled || busy || (Boolean(selectedId) && actionBusy) || !hasPayload);
+    sendBtn.setAttribute('aria-label', canStop ? 'Stop generation' : busy ? 'Sending message' : queueing ? ($('#composer-delivery')?.value === 'steer' ? 'Steer current turn' : 'Queue next message') : 'Send message');
+    sendBtn.title = canStop ? 'Stop current turn (Esc)' : 'Send message';
+    sendBtn.setAttribute('aria-busy', String(busy));
+    sendBtn.innerHTML = canStop
+      ? '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="5" y="5" width="10" height="10" rx="2" fill="currentColor" stroke="none"/></svg>'
+      : '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 15V4M5 9l5-5 5 5"/></svg>';
+  }
   $('#composer-project').disabled = loading || createBusy;
   $('#composer-model').disabled = loading || createBusy;
   const label = projectLabel(task);
@@ -1523,7 +1539,7 @@ async function executeSlashCommand(raw) {
     return { handled: true };
   }
   if (cmd === '/build') {
-    if (task?.workspaceKind === 'conversation') return { handled: false };
+    if (task?.workspaceKind === 'conversation' && !task?.planMode) return { handled: false };
     clearInput();
     await togglePlanMode(task, false);
     return { handled: true };
@@ -1776,6 +1792,18 @@ async function executeSlashCommand(raw) {
   return { handled: false };
 }
 
+function closeAllRightDocks({ except = null } = {}) {
+  if (except !== 'artifact') closeArtifactDock({ recordDismiss: false });
+  if (except !== 'code') window.closeChatCode?.();
+  if (except !== 'conclave' && window.G0DConclave?.isOpen?.()) window.G0DConclave.close();
+  if (except !== 'browser' && window.G0DBrowserLive?.isOpen?.()) window.G0DBrowserLive.close();
+  if (except !== 'inspector' && document.body.classList.contains('inspector-open')) {
+    document.body.classList.remove('inspector-open');
+    syncPanels();
+  }
+}
+window.closeAllRightDocks = closeAllRightDocks;
+
 function dismissDrawers() {
   let changed = false;
   if (document.body.classList.contains('sidebar-open')) {
@@ -1786,6 +1814,12 @@ function dismissDrawers() {
     document.body.classList.remove('inspector-open');
     changed = true;
   }
+  $('#theme-popover')?.classList.add('hidden');
+  $('#theme-toggle')?.setAttribute('aria-expanded', 'false');
+  $('#overseer-popover')?.classList.add('hidden');
+  $('#overseer-toggle')?.setAttribute('aria-expanded', 'false');
+  $('#ultra-popover')?.classList.add('hidden');
+  $('#effort-popover')?.classList.add('hidden');
   if (changed) syncPanels();
 }
 
@@ -1829,8 +1863,7 @@ function setSidebar(open) {
 
 function setInspector(open, focus = false) {
   if (open) {
-    closeArtifactDock({ recordDismiss: false });
-    window.closeChatCode?.();
+    closeAllRightDocks({ except: 'inspector' });
   }
   document.body.classList.toggle('inspector-open', open);
   if (open && narrowLayout.matches) document.body.classList.remove('sidebar-open');
@@ -1840,11 +1873,12 @@ function setInspector(open, focus = false) {
 
 function chooseTab(name) {
   if (!['timeline', 'changes', 'files', 'commands', 'activity'].includes(name)) return;
+  const changed = currentTab !== name;
   currentTab = name;
   $$('.workspace-tab').forEach((element) => { const active = element.dataset.tab === name; element.classList.toggle('active', active); element.setAttribute('aria-selected', String(active)); element.tabIndex = active ? 0 : -1; });
   ['timeline', 'changes', 'files', 'commands', 'activity'].forEach((tab) => setVisible(`#panel-${tab}`, tab === name));
   $('#task-content').setAttribute('aria-label', `${name === 'timeline' ? 'Conversation' : humanize(name)} content`);
-  $('#task-content').scrollTop = 0;
+  if (changed) $('#task-content').scrollTop = 0;
   updateLatestButton();
 }
 
@@ -1888,6 +1922,10 @@ function composeOutgoingMessage(message) {
 async function submitMessage(event) {
   event.preventDefault();
   setComposerOptionsOpen(false);
+  if ($('#composer-send')?.dataset.composerStop === '1') {
+    await taskAction('pause');
+    return;
+  }
   captureComposerDraft();
   const key = selectedId || 'welcome', raw = $('#composer-input').value;
   let message = raw.trim();
@@ -1971,7 +2009,7 @@ async function submitMessage(event) {
     if (composerScope === key && $('#composer-input').value === raw) { $('#composer-input').value = ''; resizeComposer(); }
     if (selectedId === taskId && version === selectionVersion && response.task && selectedData) {
       chooseTab('timeline');
-      renderSelected({ ...selectedData, task: response.task }, true);
+      renderSelected({ ...selectedData, task: response.task }, true, { scrollToBottom: true });
       if (buildIntent) window.openChatCode(response.task, true);
     }
     await refresh();
@@ -2016,7 +2054,12 @@ async function startConversation(raw, message = raw.trim()) {
   }
 }
 
-function openModels() { return openModelPicker(selectedId, $('#composer-model')); }
+function openModels() {
+  if (!selectedId && !liveProviders().length) {
+    return openSettings('models', { subtab: 'connections' });
+  }
+  return openModelPicker(selectedId, $('#composer-model'));
+}
 async function loadVeniceCatalog(force = false) {
   try {
     veniceCatalog = await api('/api/providers/venice-models' + (force ? '?refresh=1' : ''));
@@ -3737,8 +3780,7 @@ function renderTimeline(events, total, task) {
       }
     });
   });
-  const hasFollowups = Array.isArray(task.followups) && task.followups.length > 0;
-  const messages = [conversationMessage({ role: 'user', text: task.objective, time: task.createdAt, key: `objective-${task.id}`, attachments: !hasFollowups ? task.attachments : undefined }, openDetails)];
+  const messages = [conversationMessage({ role: 'user', text: task.objective, time: task.createdAt, key: `objective-${task.id}`, attachments: task.attachments }, openDetails)];
   const followups = Array.isArray(task.followups) ? task.followups : [];
   const followupById = new Map(followups.map((followup) => [followup.id, followup]));
   const conversationEvents = events.flatMap(event => event.type === 'user.messages.applied'
@@ -3778,7 +3820,7 @@ function renderTimeline(events, total, task) {
     if (event.type === 'user.message') {
       flush();
       const canonical = followupById.get(event.data?.id);
-      messages.push(conversationMessage({ role: 'user', text: canonical?.message ?? event.data?.message ?? '', time: canonical?.createdAt ?? event.time, key: `followup-${event.data?.id ?? event.seq}` }, openDetails));
+      messages.push(conversationMessage({ role: 'user', text: canonical?.message ?? event.data?.message ?? '', time: canonical?.createdAt ?? event.time, key: `followup-${event.data?.id ?? event.seq}`, attachments: canonical?.attachments || event.data?.attachments }, openDetails));
     } else if (event.type === 'code.intent') {
       flush();
       messages.push(conversationMessage({ role: 'user', text: event.data.message, time: event.time, key: 'code-' + event.seq }, openDetails));
@@ -5550,21 +5592,26 @@ function renderCommands() {
     { kind: 'action', title: 'Open Live Browser Mirror (/browser)', detail: 'Watch your agent navigate, click, and test apps live or pop out a real Chromium window', keywords: 'browser live watch screencast window headless non-headless chrome /browser', run: () => window.G0DBrowserLive?.open() },
     { kind: 'action', title: 'Toggle Visible Browser Window', detail: 'Switch the contained agent browser between headless mirror and a real visible Chromium window', keywords: 'browser window visible non-headless popout chrome watch', run: () => { window.G0DBrowserLive?.open(); window.G0DBrowserLive?.toggleWindowMode(); } },
     { kind: 'action', title: 'Open The Conclave (Multi-Agent Stage)', detail: 'Visualize parallel subagents, Diff Races, and Arena councils (/conclave)', keywords: 'conclave swarm multi agent subagent crew arena council stage /conclave /swarm', run: () => window.G0DConclave?.open() },
-    { kind: 'action', title: 'Open Models & Subscriptions', detail: 'CLI logins, API keys, and local models', keywords: 'claude codex gemini copilot ollama key provider /model', run: () => openSettings('models') },
-    ...(window.G0DThemes ? window.G0DThemes.list().map(t => ({
-      kind: 'action',
-      title: `Theme: ${t.name}`,
-      detail: t.desc,
-      keywords: `theme skin appearance color ${t.id} ${t.name} ${t.badge} /theme`,
-      run: () => window.G0DThemes.apply(t.id, { persist: true, notify: true })
-    })) : []),
+    { kind: 'action', title: 'Open Models & Subscriptions', detail: 'CLI logins, API keys, and local models', keywords: 'claude codex gemini copilot ollama key provider /model', run: () => openSettings('models', { subtab: 'connections' }) },
     { kind: 'action', title: 'System Prompts & Tool Schemas', detail: 'Inspect and edit every system prompt & JSON tool schema (/system)', keywords: 'system prompt tool schema transparency edit override /system /schemas', run: () => openSettings('system', { subtab: 'prompts' }) },
     { kind: 'action', title: 'Prefills & Message Shaping', detail: 'Experiment with system/user conditioning and assistant/reasoning prefills (/prefill)', keywords: 'prefill shaping conditioning think reasoning steering lab /prefill /inject', run: () => openSettings('system', { subtab: 'lab' }) },
-    { kind: 'action', title: 'Open Privacy & ZDR Shield', detail: 'Zero telemetry, Strict ZDR, Local-Only mode & outbound audit', keywords: 'privacy zdr zero telemetry airgap local only audit secret redaction /privacy /zdr', run: () => openSettings('privacy') },
+    { kind: 'action', title: 'Open Overseer Quick Controls', detail: 'Toggle Overseer auto-recovery & soft-refusal judge', keywords: 'overseer judge refusal unblock recovery', run: () => toggleOverseerPopover(true) },
+    { kind: 'action', title: 'Choose Theme…', detail: 'Switch between 10 dark & light workspace themes (/theme)', keywords: 'theme skin appearance dark light color /theme', run: () => window.G0DThemes?.togglePopover?.(true) },
+    { kind: 'action', title: 'Hardened Security Mode (Red Team / Bounty)', detail: 'Strict ZDR + secret scrubbing + Safe gate + Ephemeral Burn Bag', keywords: 'hardened security red team bounty opsec zdr privacy', run: () => { openSettings('privacy'); } },
+    { kind: 'action', title: 'Open Privacy & ZDR Shield', detail: 'Zero telemetry, Hardened/Lockdown, Target Scope & Burn Bag (/privacy)', keywords: 'privacy zdr zero telemetry airgap lockdown local only audit burn scope /privacy /zdr', run: () => openSettings('privacy') },
     { kind: 'action', title: 'Open Memory & Skills', detail: 'Cross-session memory and reusable /skills', keywords: 'remember memory skills slash commands /memory /skill', run: () => openSettings('memory') },
     { kind: 'action', title: 'Open Permission Gate', detail: 'Safe guardrails, shell commands, and checks', keywords: 'permissions approval safe permissive guardrails tools', run: () => openSettings('tools') },
-    { kind: 'action', title: 'Settings', detail: 'General preferences and adaptive recovery', keywords: 'preferences theme font recovery', run: () => openSettings('general') },
+    { kind: 'action', title: 'Keyboard Shortcuts', detail: 'View all keyboard hotkeys and slash commands (?)', keywords: 'shortcuts hotkeys keys help ?', run: () => { dismissDrawers(); if (!$('#shortcuts-dialog')?.open) $('#shortcuts-dialog')?.showModal(); } },
+    { kind: 'action', title: 'Replay Quick Tour', detail: 'Walk through GODMODƎ and GODCODƎ highlights', keywords: 'tour onboarding walkthrough guide', run: () => { window.SetupUI?.openTour?.(); } },
+    { kind: 'action', title: 'Settings (⌘,)', detail: 'General preferences and adaptive recovery', keywords: 'preferences theme font recovery settings', run: () => openSettings('general') },
   ];
+  const themeActions = window.G0DThemes ? window.G0DThemes.list().map(t => ({
+    kind: 'action',
+    title: `Theme: ${t.name}`,
+    detail: t.desc,
+    keywords: `theme skin appearance color ${t.id} ${t.name} ${t.badge} /theme`,
+    run: () => window.G0DThemes.apply(t.id, { persist: true, notify: true })
+  })) : [];
   const skills = (state.skills || []).map(skill => {
     const cmd = skill.command || `/${skill.name}`;
     return {
@@ -5592,7 +5639,7 @@ function renderCommands() {
     keywords: `${item.objective || ''} ${item.id} task thread`,
     run: () => selectTask(item.id).then(() => $('#main-content').focus({ preventScroll: true })),
   }));
-  const all = [...actions, ...skills, ...tasks];
+  const all = [...actions, ...themeActions, ...skills, ...tasks];
   if (query) {
     commandItems = all
       .map(item => ({ item, score: Math.max(fuzzyScore(query, item.title) * 1.3, fuzzyScore(query, `${item.title} ${item.detail} ${item.keywords || ''}`)) }))
@@ -5601,7 +5648,7 @@ function renderCommands() {
       .slice(0, 30)
       .map(entry => entry.item);
   } else {
-    commandItems = all.slice(0, 30);
+    commandItems = [...tasks.slice(0, 6), ...actions.slice(0, 18), ...skills.slice(0, 6)].slice(0, 30);
   }
   commandIndex = Math.max(0, Math.min(commandIndex, commandItems.length - 1));
   const kindLabelMap = { action: 'ACTION', skill: 'SKILL', task: 'TASK' };
@@ -5686,7 +5733,7 @@ function renderRouting(task) {
   $('#save-route').disabled = blocked || routeBusy || !preferred;
 }
 
-function renderSelected(data, force = false) {
+function renderSelected(data, force = false, opts = {}) {
   const task = data?.task;
   if (!task || task.id !== selectedId) return;
   const previous = selectedData?.task;
@@ -5774,9 +5821,13 @@ function renderSelected(data, force = false) {
   $('#workspace-path').title = task.workspace ?? '';
   setVisible('#workspace-expired', Boolean(data.workspaceExpired));
   renderTasks();
-  if (taskChanged) scroller.scrollTop = 0;
-  else if (nearBottom && currentTab === 'timeline') scroller.scrollTop = scroller.scrollHeight;
-  else scroller.scrollTop = oldScroll;
+  if (opts.scrollToBottom || (currentTab === 'timeline' && (taskChanged || nearBottom))) {
+    scroller.scrollTop = scroller.scrollHeight;
+  } else if (taskChanged) {
+    scroller.scrollTop = 0;
+  } else {
+    scroller.scrollTop = oldScroll;
+  }
   updateLatestButton();
   syncArtifactDockForTask(data, taskChanged);
 }
@@ -5831,13 +5882,16 @@ function updateLiveStreamSlot() {
       const tail = codeBody.length > 4000 ? '…\n' + codeBody.slice(-4000) : codeBody;
       const metaEl = $('.stream-code-meta', slot);
       if (metaEl) metaEl.textContent = `streaming · ${codeBody.length.toLocaleString()} chars`;
+      const nearInnerCode = existingCode.scrollHeight - existingCode.scrollTop - existingCode.clientHeight < 60;
       existingCode.textContent = tail;
       const span = document.createElement('span');
       span.className = 'stream-cursor';
       span.setAttribute('aria-hidden', 'true');
       existingCode.appendChild(span);
-      existingCode.scrollTop = existingCode.scrollHeight;
+      if (nearInnerCode) existingCode.scrollTop = existingCode.scrollHeight;
     } else if (existingText) {
+      const streamBody = existingText.closest('.stream-preview .message-body');
+      const nearInnerBody = !streamBody || (streamBody.scrollHeight - streamBody.scrollTop - streamBody.clientHeight < 60);
       const cursor = $('.stream-cursor', existingText);
       existingText.textContent = streamText;
       if (cursor) existingText.appendChild(cursor);
@@ -5847,14 +5901,14 @@ function updateLiveStreamSlot() {
         span.setAttribute('aria-hidden', 'true');
         existingText.appendChild(span);
       }
-      const streamBody = existingText.closest('.stream-preview .message-body');
-      if (streamBody) streamBody.scrollTop = streamBody.scrollHeight;
+      if (streamBody && nearInnerBody) streamBody.scrollTop = streamBody.scrollHeight;
     }
   }
   const scroller = $('#task-content');
   if (scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 140) {
     scroller.scrollTop = scroller.scrollHeight;
   }
+  updateLatestButton();
 }
 
 function manageStream(task) {
@@ -5947,12 +6001,12 @@ window.syncActiveTaskStream = () => manageStream(selectedData?.task || null);
 function renderEmpty() {
   setVisible('#initial-loading', false);
   setVisible('#welcome', true);
-  setVisible('#welcome-links', true);
+  setVisible('#welcome-links', false);
   setVisible('#task-workspace', false);
   setVisible('#workspace-expired', false);
   const hasProviders = liveProviders().length > 0;
   setVisible('#welcome-setup', !hasProviders);
-  setVisible('#composer-suggestions', hasProviders);
+  setVisible('#composer-suggestions', false);
   renderPolicy(null);
   $('#evidence').innerHTML = '<div class="inspector-empty"><span aria-hidden="true">◎</span><p>Select a task.</p></div>';
   loadCheckpoints(null);
@@ -6248,6 +6302,15 @@ async function createTask(event) {
 
 async function taskAction(action) {
   if (!selectedId || actionBusy || isCrewBusy()) return;
+  if (action === 'cancel') {
+    const ok = await confirmModal({
+      title: 'Cancel conversation permanently?',
+      message: 'Cancelling stops this task permanently and disables further messages. Use Stop / Pause if you want to continue later.',
+      confirmLabel: 'Cancel permanently',
+      danger: true,
+    });
+    if (!ok) return;
+  }
   actionBusy = true;
   if (selectedData?.task) renderControls(selectedData.task);
   const taskId = selectedId;
@@ -6411,7 +6474,13 @@ document.addEventListener('click', (event) => {
   }
   const restoreCp = event.target.closest('[data-restore-checkpoint]');
   if (restoreCp && selectedData?.task) {
-    restoreCheckpointAction(selectedData.task, restoreCp.dataset.restoreCheckpoint);
+    const hash = restoreCp.dataset.restoreCheckpoint;
+    confirmModal({
+      title: 'Restore Git checkpoint?',
+      message: `This runs git reset --hard and git clean -fd to ${hash.slice(0, 8)}, discarding later commits and uncommitted workspace edits.`,
+      confirmLabel: 'Restore checkpoint',
+      danger: true,
+    }).then(ok => { if (ok && selectedData?.task) restoreCheckpointAction(selectedData.task, hash); });
     return;
   }
   const commitToggle = event.target.closest('[data-commit-toggle]');
@@ -6545,10 +6614,12 @@ document.addEventListener('click', (event) => {
   }
   const copyCode = event.target.closest('[data-copy-code]');
   if (copyCode) {
+    const fullCopyText = copyCode.dataset.copyFullId && window.__g0dFileCopyStore?.get(copyCode.dataset.copyFullId);
     const codeEl = copyCode.closest('.message-code-block')?.querySelector('pre code') || copyCode.closest('.file-card')?.querySelector('pre code');
-    if (codeEl) {
+    const textToCopy = typeof fullCopyText === 'string' ? fullCopyText : codeEl?.textContent;
+    if (typeof textToCopy === 'string') {
       if (!copyCode.dataset.defaultLabel) copyCode.dataset.defaultLabel = copyCode.textContent.trim() || 'Copy';
-      navigator.clipboard.writeText(codeEl.textContent).then(() => {
+      navigator.clipboard.writeText(textToCopy).then(() => {
         copyCode.classList.add('copied');
         copyCode.textContent = 'Copied ✓';
         clearTimeout(copyCodeTimers.get(copyCode));
@@ -6584,7 +6655,9 @@ document.addEventListener('click', (event) => {
   }
   const toggleDockBtn = event.target.closest('[data-toggle-artifact-dock]');
   if (toggleDockBtn && lastDetectedArtifact) {
-    if (artifactDockState.open) {
+    if (lastDetectedArtifact.source === 'agent-browser' && window.G0DBrowserLive?.toggle) {
+      window.G0DBrowserLive.toggle();
+    } else if (artifactDockState.open) {
       closeArtifactDock({ recordDismiss: true });
     } else if (lastDetectedArtifact.source === 'agent-browser') {
       openAgentBrowserDock(lastDetectedArtifact);
@@ -6768,9 +6841,7 @@ $('#panel-changes').addEventListener('submit', event => {
   diffCommentTarget = null;
   changesSignature = '';
   if (selectedData) renderChanges(selectedData.diff || []);
-  chooseTab('timeline');
-  input?.focus();
-  toast(`Added review note for ${ref}`);
+  toast(`Queued review note for ${ref} in composer.`);
 });
 document.addEventListener('click', event => {
   const splitBtn = event.target.closest('[data-split-view]');
@@ -6835,8 +6906,18 @@ document.addEventListener('click', event => {
     const filePath = hunkBtn.dataset.hunkPath;
     const hunkIndex = parseInt(hunkBtn.dataset.hunkIndex, 10);
     const action = hunkBtn.dataset.hunkAction;
+    if (action === 'accept') {
+      const hunkEl = hunkBtn.closest('.diff-hunk');
+      const reviewed = hunkEl?.classList.toggle('is-reviewed');
+      hunkBtn.setAttribute('aria-pressed', String(Boolean(reviewed)));
+      toast(reviewed ? 'Hunk marked reviewed.' : 'Hunk review mark cleared.');
+      return;
+    }
     const entry = selectedData.diff.find(d => d.path === filePath);
-    if (!entry || entry.before == null || entry.after == null) return;
+    if (!entry || entry.before == null || entry.after == null) {
+      toast('Hunk-level reject is only available for modified files.');
+      return;
+    }
     const newContent = reconstructFileWithHunkAction(entry.before, entry.after, hunkIndex, action);
     if (newContent == null) return;
     const taskId = selectedId;
@@ -7765,6 +7846,12 @@ document.addEventListener('keydown', (event) => {
   if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'k') {
     event.preventDefault(); openCommands(); return;
   }
+  if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key === ',') {
+    event.preventDefault(); openSettings('general'); return;
+  }
+  if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'n') {
+    event.preventDefault(); newConversation(); $('#composer-input')?.focus(); return;
+  }
   if ((event.metaKey || event.ctrlKey) && event.shiftKey && !event.altKey && event.key.toLowerCase() === 'g') {
     event.preventDefault();
     applyAppMode(appMode === 'godcode' ? 'godmode' : 'godcode', { persist: true, notify: true, switchView: true });
@@ -7825,6 +7912,28 @@ document.addEventListener('keydown', (event) => {
     return;
   }
   if (event.key !== 'Escape') return;
+  if (!$('#overseer-popover')?.classList.contains('hidden')) {
+    toggleOverseerPopover(false);
+    $('#overseer-toggle')?.focus();
+    event.preventDefault();
+    return;
+  }
+  if (!$('#theme-popover')?.classList.contains('hidden')) {
+    window.G0DThemes?.togglePopover?.(false);
+    $('#theme-toggle')?.focus();
+    event.preventDefault();
+    return;
+  }
+  if ($('#conclave-dock')?.classList.contains('is-expanded')) {
+    $('#conclave-expand')?.click();
+    event.preventDefault();
+    return;
+  }
+  if ($('#browser-dock')?.classList.contains('is-expanded')) {
+    $('#bl-expand')?.click();
+    event.preventDefault();
+    return;
+  }
   if ($('#composer-shell')?.classList.contains('composer-options-open')) {
     setComposerOptionsOpen(false);
     $('#composer-options-toggle')?.focus();
@@ -7833,8 +7942,14 @@ document.addEventListener('keydown', (event) => {
   }
   const taskMenu = $('.task-more[open]');
   if(taskMenu){taskMenu.open=false;$('summary',taskMenu)?.focus();event.preventDefault();return;}
-  if (document.body.classList.contains('inspector-open')) { setInspector(false, true); event.preventDefault(); }
-  else if (narrowLayout.matches && document.body.classList.contains('sidebar-open')) { setSidebar(false); $('#sidebar-toggle').focus(); event.preventDefault(); }
+  if (document.body.classList.contains('inspector-open')) { setInspector(false, true); event.preventDefault(); return; }
+  if (narrowLayout.matches && document.body.classList.contains('sidebar-open')) { setSidebar(false); $('#sidebar-toggle').focus(); event.preventDefault(); return; }
+  if (artifactDockState.open && !artifactDockState.inspecting) { closeArtifactDock({ recordDismiss: true }); event.preventDefault(); return; }
+  const activeTaskNow = selectedData?.task?.id === selectedId ? selectedData.task : null;
+  if (activeTaskNow && ACTIVE.has(activeTaskNow.status) && !$('#composer-input')?.value?.trim()) {
+    event.preventDefault();
+    taskAction('pause');
+  }
 });
 narrowLayout.addEventListener('change', (event) => {
   if (!event.matches) document.body.classList.remove('sidebar-open');
@@ -7871,7 +7986,9 @@ $('#task-search').title = 'Find a task (⌘K / Ctrl+K)';
 $('#task-search').setAttribute('aria-keyshortcuts', 'Meta+K Control+K');
 $('#task-search').addEventListener('input', () => renderTasks(true));
 $('#task-content').addEventListener('scroll', updateLatestButton, { passive: true });
-new ResizeObserver(updateLatestButton).observe($('#task-content'));
+const latestResizeObs = new ResizeObserver(updateLatestButton);
+latestResizeObs.observe($('#task-content'));
+if ($('#panel-timeline')) latestResizeObs.observe($('#panel-timeline'));
 $('#jump-latest').addEventListener('click', () => {
   const scroller = $('#task-content');
   scroller.scrollTop = scroller.scrollHeight;
@@ -8034,6 +8151,10 @@ window.toast = toast;
     { cmd: '/memory', hint: 'Search or manage persistent memory (/memory [query])' },
     { cmd: '/skill', hint: 'Save reusable skill (/skill save <name> <instructions>)' },
     { cmd: '/privacy', hint: 'Open Privacy & ZDR Shield (zero telemetry & egress controls)' },
+    { cmd: '/schedules', hint: 'Open Scheduled Jobs & Cron Automations (/cron)' },
+    { cmd: '/cron', hint: 'Manage recurring cron jobs & timers' },
+    { cmd: '/schemas', hint: 'Inspect & edit all 27 JSON tool schemas' },
+    { cmd: '/inject', hint: 'Open Prefills & Message Shaping lab' },
     { cmd: '/model', hint: 'Choose or switch model route' },
     { cmd: '/review', hint: 'Review current changes for bugs & tests' },
     { cmd: '/test', hint: 'Run targeted tests & checks' },
@@ -8191,7 +8312,7 @@ window.toast = toast;
 
   input.addEventListener('keydown', (event) => {
     if (!acVisible || event.isComposing || event.shiftKey || event.altKey || event.metaKey || event.ctrlKey) return;
-    if (event.key === 'Tab' || (event.key === 'Enter' && ['!','/','@'].includes(acItems[acIndex]?.kind) && input.value.trim() !== acItems[acIndex].label)) {
+    if (event.key === 'Tab' || (event.key === 'Enter' && ['!','/','@','skill'].includes(acItems[acIndex]?.kind) && input.value.trim().toLowerCase() !== acItems[acIndex].label.toLowerCase())) {
       event.preventDefault(); event.stopImmediatePropagation(); acceptItem(acIndex);
     } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
@@ -8453,11 +8574,18 @@ function renderModelPicker() {
     return `<button type="button" id="model-picker-option-${i}" class="model-picker-option ${p.catalogAdd ? 'is-catalog-add' : ''}" role="option" aria-selected="${p.id === selected}" data-pick-model="${escapeHTML(p.id)}" ${lock || routeBusy ? 'disabled' : ''}><span class="model-picker-name"><strong>${escapeHTML(name)}</strong><small>${escapeHTML(detail)}</small></span><span class="model-picker-check ${p.catalogAdd ? 'is-add' : ''}" aria-hidden="true" ${badgeTitle ? `title="${escapeHTML(badgeTitle)}"` : ''}>${badge}</span></button>`;
   }).join('');
   const overflowNote = totalMatches > pickerModels.length
-    ? `<p class="model-picker-empty model-picker-more">Showing top ${pickerModels.length} of ${totalMatches} models — type to search all OpenRouter models…</p>`
+    ? `<p class="model-picker-empty model-picker-more">Showing top ${pickerModels.length} of ${totalMatches} models — type to filter…</p>`
     : '';
+  const emptyPickerHtml = pickerLoading
+    ? '<p class="model-picker-empty">Loading connected models…</p>'
+    : query && pickerProviderFilter !== 'all'
+      ? `<p class="model-picker-empty">No matches in this provider filter. <button type="button" class="text-button" data-picker-reset-filter>Search all providers</button></p>`
+      : query
+        ? '<p class="model-picker-empty">No matching models. Try another name.</p>'
+        : '<p class="model-picker-empty">Connect a provider to choose a model.</p>';
   $('#model-picker-results').innerHTML = pickerModels.length
     ? rowsHtml + overflowNote
-    : `<p class="model-picker-empty">${pickerLoading ? 'Loading connected models…' : query ? 'No matching models. Try another name.' : 'Connect a provider to choose a model.'}</p>`;
+    : emptyPickerHtml;
   highlightPickerModel(Math.max(0, pickerModels.findIndex(p => p.id === previous)));
   positionModelPicker();
 }
@@ -8484,6 +8612,14 @@ async function openModelPicker(scope = selectedId, anchor = document.activeEleme
   pickerLoading = false;
   renderModelPicker();
 }
+$('#model-picker-results')?.addEventListener('click', event => {
+  if (event.target.closest('[data-picker-reset-filter]')) {
+    pickerProviderFilter = 'all';
+    pickerIndex = 0;
+    renderModelPicker();
+    $('#model-picker-search')?.focus();
+  }
+});
 $('#model-picker-filters')?.addEventListener('click', event => {
   const chip = event.target.closest('[data-picker-filter]');
   if (!chip) return;
