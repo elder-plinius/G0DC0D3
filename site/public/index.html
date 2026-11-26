@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GODMODƎ — Local AI Workspace with GODCODƎ Built In</title>
+  <meta name="description" content="Download GODMODƎ for macOS and Linux — the local-first AI workspace with the GODCODƎ coding agent harness built in. Zero npm dependencies, zero telemetry, sandboxed execution, and verifiable GitHub Releases.">
+  <meta property="og:title" content="GODMODƎ — Local AI Workspace with GODCODƎ Built In">
+  <meta property="og:description" content="Download GODMODƎ for macOS &amp; Linux. Local-first chat, prompt transparency, and the GODCODƎ coding harness built right in. Zero telemetry, zero npm dependencies.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://godcode.gg/">
+  <meta property="og:image" content="https://godcode.gg/assets/godmode-dark.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" type="image/svg+xml" href="./assets/lysios-mark-reverse-white.svg">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="container topbar-inner">
+      <a class="brand" href="#top" aria-label="GODMODƎ Home">
+        <img class="brand-icon brand-icon-dark" src="./assets/lysios-mark-reverse-white.svg" alt="" width="24" height="24">
+        <img class="brand-icon brand-icon-light" src="./assets/lysios-mark-canonical-ink.svg" alt="" width="24" height="24">
+        <span class="wordmark">GODMODƎ</span>
+      </a>
+      <nav class="nav" aria-label="Primary navigation">
+        <a href="#features">Features</a>
+        <a href="#downloads">Downloads</a>
+        <a href="#verify">Verify</a>
+        <a href="https://github.com/elder-plinius/G0DC0D3" target="_blank" rel="noopener noreferrer">GitHub</a>
+        <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Toggle light and dark theme" title="Toggle theme">
+          <span id="theme-icon" aria-hidden="true">☀</span>
+        </button>
+      </nav>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="hero">
+      <div class="container hero-inner">
+        <div class="release-pill" id="release-pill">
+          <span class="pill-dot" aria-hidden="true"></span>
+          <span id="release-badge-text">v0.2.0 · Open Source (AGPL-3.0) · Zero Telemetry · 0 npm Dependencies</span>
+        </div>
+
+        <h1 class="hero-title">
+          Meet <span class="wordmark accent">GODMODƎ</span>.<br>
+          <span class="wordmark">GODCODƎ</span> built in.<br>
+          <span class="hero-muted">100% on your machine.</span>
+        </h1>
+
+        <p class="hero-sub">
+          One local-first desktop app for macOS and Linux — multi-model chat, prompt transparency,
+          and the <strong>GODCODƎ</strong> sandboxed coding harness built right in.
+          Bring your own API keys, subscriptions, or local models, with verifiable builds straight from public source.
+        </p>
+
+        <div class="hero-cta">
+          <a class="btn btn-primary" id="primary-download-btn" href="#downloads">
+            <span id="primary-download-label">Download for macOS / Linux</span>
+            <span class="btn-sub" id="primary-download-sub">Self-contained · Node 22 bundled</span>
+          </a>
+          <a class="btn btn-secondary" href="#downloads">All downloads &amp; checksums</a>
+          <a class="btn btn-ghost" href="https://github.com/elder-plinius/G0DC0D3" target="_blank" rel="noopener noreferrer">View source ↗</a>
+        </div>
+
+        <div class="source-quick" role="region" aria-label="Run from source">
+          <span class="source-quick-label">Or run from source (Node 22.13+):</span>
+          <div class="code-line">
+            <code id="source-cmd">git clone https://github.com/elder-plinius/G0DC0D3.git &amp;&amp; cd G0DC0D3 &amp;&amp; npm start</code>
+            <button type="button" class="copy-btn" data-copy-target="source-cmd">Copy</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="showcase" aria-label="Workspace previews">
+      <div class="container">
+        <div class="showcase-tabs" role="tablist" aria-label="Workspace views">
+          <button type="button" class="showcase-tab active" role="tab" aria-selected="true" data-shot="dark">
+            <span class="wordmark">GODMODƎ</span> · Dark Workspace
+          </button>
+          <button type="button" class="showcase-tab" role="tab" aria-selected="false" data-shot="light">
+            <span class="wordmark">GODCODƎ</span> · Light Coding Mode
+          </button>
+          <button type="button" class="showcase-tab" role="tab" aria-selected="false" data-shot="lab">
+            System Lab · Prompt Transparency
+          </button>
+        </div>
+
+        <figure class="showcase-frame">
+          <img id="showcase-img" src="./assets/godmode-dark.png" alt="GODMODƎ dark workspace showing multi-model chat and controls" width="1440" height="900">
+          <figcaption id="showcase-caption">
+            <strong>GODMODƎ Workspace</strong> — Multi-model chat, Ultra-Plinian answer racing, live HTML5/SVG preview canvas, and sticky fallback waterfalls.
+          </figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="features" id="features">
+      <div class="container">
+        <div class="section-head">
+          <h2>Built for builders who inspect the wire.</h2>
+          <p>No mystery cloud proxies, no hidden prompt wrappers, no telemetry. Everything runs locally on <code>127.0.0.1</code>.</p>
+        </div>
+
+        <div class="feature-grid">
+          <article class="card">
+            <h3>Zero Dependencies, Zero Telemetry</h3>
+            <p>Pure Node 22 (<code>node:sqlite</code>) + native macOS Swift wrapper. Prebuilt installers bundle Node 22 so you never fight runtime versions. Your chats, memories, and diffs stay on disk.</p>
+          </article>
+
+          <article class="card">
+            <h3>Every Model, Your Keys</h3>
+            <p>Full 300+ live OpenRouter catalog, Venice, Anthropic, OpenAI, Google Gemini, Nous, local Ollama / LM Studio / vLLM / MLX, plus existing Claude, Codex, Gemini, and Copilot CLI logins. Keys stay in macOS Keychain or Linux <code>libsecret</code>.</p>
+          </article>
+
+          <article class="card">
+            <h3>G0DM0D3 Recovery &amp; Ultra-Plinian</h3>
+            <p>Automatic sticky fallback waterfalls, domain-aware routing, parallel answer racing, and local self-optimization — so a rate limit, timeout, or false-positive decline never kills a long build.</p>
+          </article>
+
+          <article class="card">
+            <h3>OS-Sandboxed Coding &amp; Browser</h3>
+            <p>Scoped macOS Seatbelt and Linux <code>bubblewrap</code> command execution with explicit network grants, Git checkpoint rewind, Plan/Build mode, ephemeral headless Chromium testing, and offline Live Preview.</p>
+          </article>
+
+          <article class="card">
+            <h3>Full Prompt &amp; Privacy Transparency</h3>
+            <p>Inspect and customize every system prompt block, view live wire traces, enforce Strict Zero Data Retention (OpenRouter <code>zdr=true</code>, OpenAI <code>store=false</code>), or flip on 100% Local-Only airgap mode.</p>
+          </article>
+
+          <article class="card">
+            <h3>Verifiable Open-Source Builds</h3>
+            <p>Every macOS <code>.dmg</code> and Linux <code>.deb</code> / <code>.tar.gz</code> is built automatically in public GitHub Actions with <code>SHA256SUMS.txt</code> and GitHub Sigstore SLSA build provenance attestations. Never <code>curl | sh</code>.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="downloads" id="downloads">
+      <div class="container">
+        <div class="section-head">
+          <h2>Download <span class="wordmark">GODMODƎ</span></h2>
+          <p id="downloads-status">Includes the <span class="wordmark">GODCODƎ</span> coding harness · Direct immutable builds from GitHub Releases · <a id="releases-page-link" href="https://github.com/elder-plinius/G0DC0D3/releases" target="_blank" rel="noopener noreferrer">View all releases ↗</a></p>
+        </div>
+
+        <div class="download-grid">
+          <article class="dl-card" data-platform="macos-arm64">
+            <div class="dl-card-head">
+              <div>
+                <h3>macOS · Apple Silicon</h3>
+                <span class="dl-tag">M1 / M2 / M3 / M4 (arm64)</span>
+              </div>
+              <span class="dl-badge" data-size="macos-arm64">.dmg</span>
+            </div>
+            <p>Native Swift app with bundled Node 22 runtime, Hardened Runtime, Keychain storage, and Seatbelt sandboxing.</p>
+            <a class="btn btn-primary dl-btn" data-asset="macos-arm64" href="https://github.com/elder-plinius/G0DC0D3/releases/latest" target="_blank" rel="noopener noreferrer">Download macOS (Apple Silicon)</a>
+          </article>
+
+          <article class="dl-card" data-platform="macos-x64">
+            <div class="dl-card-head">
+              <div>
+                <h3>macOS · Intel</h3>
+                <span class="dl-tag">x86_64</span>
+              </div>
+              <span class="dl-badge" data-size="macos-x64">.dmg</span>
+            </div>
+            <p>Self-contained Intel macOS app bundle with bundled Node 22 runtime and full local workspace tooling.</p>
+            <a class="btn btn-secondary dl-btn" data-asset="macos-x64" href="https://github.com/elder-plinius/G0DC0D3/releases/latest" target="_blank" rel="noopener noreferrer">Download macOS (Intel)</a>
+          </article>
+
+          <article class="dl-card" data-platform="linux-deb">
+            <div class="dl-card-head">
+              <div>
+                <h3>Linux · Debian / Ubuntu</h3>
+                <span class="dl-tag">Recommends bubblewrap &amp; libsecret</span>
+              </div>
+              <span class="dl-badge" data-size="linux-deb-x64">.deb</span>
+            </div>
+            <p>Installs the <code>g0dm0d3</code> command, bundled Node 22, and desktop launcher with automatic sandbox recommendations.</p>
+            <div class="dl-btn-row">
+              <a class="btn btn-primary dl-btn" data-asset="linux-deb-x64" href="https://github.com/elder-plinius/G0DC0D3/releases/latest" target="_blank" rel="noopener noreferrer">Download .deb (x64)</a>
+              <a class="btn btn-secondary dl-btn" data-asset="linux-deb-arm64" href="https://github.com/elder-plinius/G0DC0D3/releases/latest" target="_blank" rel="noopener noreferrer">.deb (arm64)</a>
+            </div>
+          </article>
+
+          <article class="dl-card" data-platform="linux-tar">
+            <div class="dl-card-head">
+              <div>
+                <h3>Linux · Portable Archive</h3>
+                <span class="dl-tag">Fedora / Arch / Nix / Any Distro</span>
+              </div>
+              <span class="dl-badge" data-size="linux-tar-x64">.tar.gz</span>
+            </div>
+            <p>Extract anywhere and run <code>./bin/g0dm0d3</code> or <code>./bin/g0dm0d3 cli</code>. Zero system Node install required.</p>
+            <div class="dl-btn-row">
+              <a class="btn btn-secondary dl-btn" data-asset="linux-tar-x64" href="https://github.com/elder-plinius/G0DC0D3/releases/latest" target="_blank" rel="noopener noreferrer">Download .tar.gz (x64)</a>
+              <a class="btn btn-secondary dl-btn" data-asset="linux-tar-arm64" href="https://github.com/elder-plinius/G0DC0D3/releases/latest" target="_blank" rel="noopener noreferrer">.tar.gz (arm64)</a>
+            </div>
+          </article>
+        </div>
+
+        <div class="callout">
+          <strong>macOS first launch note:</strong> Early pre-notarization community builds may trigger a macOS Gatekeeper prompt on first open — control-click <code>G0DM0D3.app</code> → <em>Open</em> (or build locally from source with <code>npm run desktop:build</code>). Every prebuilt binary can be verified cryptographically below.
+        </div>
+      </div>
+    </section>
+
+    <section class="verify" id="verify">
+      <div class="container">
+        <div class="verify-card">
+          <div class="verify-head">
+            <div>
+              <h2>Verify your download</h2>
+              <p>Check both the SHA-256 hash and the GitHub Sigstore SLSA build provenance proving your binary was compiled verbatim from public source in GitHub Actions.</p>
+            </div>
+            <a class="btn btn-secondary" id="checksums-link" href="https://github.com/elder-plinius/G0DC0D3/releases/latest" target="_blank" rel="noopener noreferrer">SHA256SUMS.txt ↗</a>
+          </div>
+
+          <div class="verify-blocks">
+            <div class="verify-block">
+              <div class="verify-block-head">
+                <span>1. Verify SHA-256 checksum</span>
+                <button type="button" class="copy-btn" data-copy-target="verify-sha-cmd">Copy</button>
+              </div>
+              <pre><code id="verify-sha-cmd">shasum -a 256 -c SHA256SUMS.txt --ignore-missing   # macOS
+sha256sum -c SHA256SUMS.txt --ignore-missing       # Linux</code></pre>
+            </div>
+
+            <div class="verify-block">
+              <div class="verify-block-head">
+                <span>2. Verify GitHub Sigstore SLSA build provenance</span>
+                <button type="button" class="copy-btn" data-copy-target="verify-attest-cmd">Copy</button>
+              </div>
+              <pre><code id="verify-attest-cmd">gh attestation verify G0DM0D3-0.2.0-macos-arm64.dmg --repo elder-plinius/G0DC0D3</code></pre>
+            </div>
+          </div>
+
+          <div class="digest-table-wrap" id="digest-wrap" hidden>
+            <h3>Latest release SHA-256 digests</h3>
+            <div class="digest-list" id="digest-list"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="container footer-inner">
+      <div class="footer-brand">
+        <span class="wordmark">GODMODƎ</span>
+        <span class="footer-sep">·</span>
+        <span>Includes GODCODƎ · Dual-licensed GNU AGPL-3.0 / Commercial · Experimental research software provided AS IS.</span>
+      </div>
+      <div class="footer-links">
+        <a href="https://github.com/elder-plinius/G0DC0D3" target="_blank" rel="noopener noreferrer">GitHub</a>
+        <a href="https://github.com/elder-plinius/G0DC0D3/releases" target="_blank" rel="noopener noreferrer">Releases</a>
+        <a href="https://github.com/elder-plinius/G0DC0D3/blob/main/SECURITY.md" target="_blank" rel="noopener noreferrer">Security</a>
+        <a href="https://godmod3.ai" target="_blank" rel="noopener noreferrer">GODMODƎ</a>
+      </div>
+    </div>
+  </footer>
+
+  <script src="./app.js" defer></script>
+</body>
+</html>
