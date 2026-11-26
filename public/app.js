@@ -1712,6 +1712,22 @@ async function executeSlashCommand(raw) {
     }
     return { handled: true };
   }
+  if (cmd === '/browser') {
+    clearInput();
+    const sub = (arg || '').trim().toLowerCase();
+    if (sub === 'window' || sub === 'visible' || sub === 'popout') {
+      window.G0DBrowserLive?.open();
+      window.G0DBrowserLive?.setWindowMode(true, { persist: false });
+    } else if (sub === 'headless' || sub === 'mirror') {
+      window.G0DBrowserLive?.open();
+      window.G0DBrowserLive?.setWindowMode(false, { persist: false });
+    } else if (sub === 'close' || sub === 'stop') {
+      window.G0DBrowserLive?.stopSession();
+    } else {
+      window.G0DBrowserLive?.toggle();
+    }
+    return { handled: true };
+  }
   if (cmd === '/conclave' || cmd === '/swarm') {
     clearInput();
     if (arg && /^(demo|preview)$/i.test(arg.trim())) window.G0DConclave?.open({ demo: true });
@@ -5174,6 +5190,8 @@ function renderCommands() {
     ]),
     { kind: 'action', title: 'Forge Task Megaprompt (/forge)', detail: 'Synthesize a model-calibrated Megaprompt & acceptance rubric in the composer', keywords: 'forge megaprompt metaprompt metacognition ultra /forge', run: () => { const c = $('#composer-input'); if (c) { c.value = c.value.trim() ? `/forge ${c.value.trim()}` : '/forge '; c.focus(); } } },
     { kind: 'action', title: 'Forge Conclave Agent (Stats Builder)', detail: 'Build a custom specialist with live benchmark radar stats from any API or CLI harness', keywords: 'conclave agent builder stats radar roster codex claude hermes grok antigravity', run: () => { window.G0DConclave?.open({ lens: 'roster' }); window.G0DConclave?.openBuilder(null); } },
+    { kind: 'action', title: 'Open Live Browser Mirror (/browser)', detail: 'Watch your agent navigate, click, and test apps live or pop out a real Chromium window', keywords: 'browser live watch screencast window headless non-headless chrome /browser', run: () => window.G0DBrowserLive?.open() },
+    { kind: 'action', title: 'Toggle Visible Browser Window', detail: 'Switch the contained agent browser between headless mirror and a real visible Chromium window', keywords: 'browser window visible non-headless popout chrome watch', run: () => { window.G0DBrowserLive?.open(); window.G0DBrowserLive?.toggleWindowMode(); } },
     { kind: 'action', title: 'Open The Conclave (Multi-Agent Stage)', detail: 'Visualize parallel subagents, Diff Races, and Arena councils (/conclave)', keywords: 'conclave swarm multi agent subagent crew arena council stage /conclave /swarm', run: () => window.G0DConclave?.open() },
     { kind: 'action', title: 'Open Models & Subscriptions', detail: 'CLI logins, API keys, and local models', keywords: 'claude codex gemini copilot ollama key provider /model', run: () => openSettings('models') },
     ...(window.G0DThemes ? window.G0DThemes.list().map(t => ({
@@ -5336,6 +5354,7 @@ function renderSelected(data, force = false) {
   setVisible('#task-workspace', true);
   manageStream(task);
   window.G0DConclave?.syncTask(task);
+  window.G0DBrowserLive?.syncTask(task);
   const signature = JSON.stringify(data);
   if (!force && signature === detailSignature) return;
   const oldTaskId = $('#selected-id').dataset.fullId;
@@ -5540,6 +5559,8 @@ function manageStream(task) {
           } else if (delta.type === 'permission.requested' || delta.type === 'todos.updated') {
             window.G0DConclave?.ingestStreamEvent(delta);
             setTimeout(refresh, 150);
+          } else if (delta.type === 'browser.frame' || delta.type === 'browser.activity' || delta.type === 'browser.status' || delta.type === 'browser.closed') {
+            window.G0DBrowserLive?.ingestStreamEvent(delta);
           } else if (delta.type === 'subagent.started' || delta.type === 'subagent.progress' || delta.type === 'subagent.completed' || delta.type === 'conclave.update' || delta.type === 'conclave.steered' || delta.type === 'race.dispatched' || delta.type === 'race.result' || delta.type === 'race.completed') {
             window.G0DConclave?.ingestStreamEvent(delta);
             if (delta.type === 'subagent.completed' || delta.type === 'race.completed') setTimeout(refresh, 250);
@@ -6343,6 +6364,7 @@ $('#crew-review-dialog').addEventListener('close', () => { crewReview = null; ($
 $('#command-open')?.addEventListener('click', openCommands);
 $('#header-command-open')?.addEventListener('click', openCommands);
 $('#conclave-toggle-btn')?.addEventListener('click', () => window.G0DConclave?.toggle());
+$('#browser-toggle-btn')?.addEventListener('click', () => window.G0DBrowserLive?.toggle());
 $('#command-palette-dialog')?.addEventListener('close', () => { if (commandReturnFocus?.isConnected && !commandReturnFocus.closest('[inert]')) commandReturnFocus.focus({ preventScroll: true }); });
 $('#palette-input')?.addEventListener('input', () => { commandIndex = 0; renderCommands(); });
 $('#palette-input')?.addEventListener('keydown', event => {
@@ -7548,6 +7570,7 @@ window.toast = toast;
     { cmd: '/theme', hint: 'Switch UI theme (/theme obsidian | minimal | alabaster | dragons | psychedelic | hacker | synthwave | vesuvian | ancient | celestial)' },
     { cmd: '/settings', hint: 'Open settings' },
     { cmd: '/forge', hint: 'Forge a task-specific Megaprompt & rubric into the composer (/forge <prompt>)' },
+    { cmd: '/browser', hint: 'Open Live Browser mirror (/browser window | headless | close)' },
     { cmd: '/conclave', hint: 'Open The Conclave live multi-agent council & arena stage' },
     { cmd: '/swarm', hint: 'Open The Conclave multi-agent swarm visualizer' },
     { cmd: '/benchmark', hint: 'Run offline harness diagnostics' },

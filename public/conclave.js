@@ -773,6 +773,7 @@
       artDock.classList.add('hidden');
       artSplit?.classList.add('hidden');
     }
+    if (window.G0DBrowserLive?.isOpen?.()) window.G0DBrowserLive.close();
     isOpenState = true;
     dock.classList.remove('hidden');
     document.body.classList.add('conclave-open');

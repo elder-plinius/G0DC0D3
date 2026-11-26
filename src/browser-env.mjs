@@ -25,6 +25,53 @@ const CHROMIUM_CANDIDATES = [
 const IDLE_TTL_MS = 10 * 60 * 1000;
 const MAX_CONSOLE_LOG = 40;
 const MAX_EVAL_CHARS = 16000;
+const FRAME_EMIT_INTERVAL_MS = 95;
+
+export const DEFAULT_BROWSER_SETTINGS = Object.freeze({
+  visibleWindow: false,
+  liveMirror: true,
+  autoOpenMirror: true,
+});
+
+export function normalizeBrowserSettings(input = {}, current = DEFAULT_BROWSER_SETTINGS) {
+  const base = { ...DEFAULT_BROWSER_SETTINGS, ...(current && typeof current === 'object' ? current : {}) };
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return base;
+  return {
+    visibleWindow: typeof input.visibleWindow === 'boolean' ? input.visibleWindow : Boolean(base.visibleWindow),
+    liveMirror: typeof input.liveMirror === 'boolean' ? input.liveMirror : base.liveMirror !== false,
+    autoOpenMirror: typeof input.autoOpenMirror === 'boolean' ? input.autoOpenMirror : base.autoOpenMirror !== false,
+  };
+}
+
+export function buildChromiumLaunchArgs({
+  headless = true,
+  viewport = { width: 1280, height: 800 },
+  profileDir,
+  platform = process.platform,
+} = {}) {
+  const w = Math.max(320, Math.min(2560, Number(viewport?.width) || 1280));
+  const h = Math.max(240, Math.min(2000, Number(viewport?.height) || 800));
+  return [
+    ...(headless ? ['--headless=new', '--mute-audio', '--hide-scrollbars'] : ['--window-position=80,60']),
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--disable-extensions',
+    '--disable-sync',
+    '--disable-background-networking',
+    '--disable-component-update',
+    '--disable-default-apps',
+    '--disable-breakpad',
+    '--disable-crash-reporter',
+    '--disable-domain-reliability',
+    '--metrics-recording-only',
+    ...(platform === 'linux' && headless ? ['--disable-gpu', '--disable-dev-shm-usage'] : []),
+    `--window-size=${w},${h}`,
+    '--remote-debugging-port=0',
+    '--remote-debugging-address=127.0.0.1',
+    `--user-data-dir=${profileDir}`,
+    'about:blank',
+  ];
+}
 
 export async function findChromiumBinary(envPath = process.env.G0D_BROWSER_PATH) {
   const list = envPath ? [envPath, ...CHROMIUM_CANDIDATES] : CHROMIUM_CANDIDATES;
@@ -307,18 +354,25 @@ const CONTAINMENT_INIT_SCRIPT = `(() => {
 })();`;
 
 class CdpSession {
-  constructor({ taskId, binaryPath, viewport = { width: 1280, height: 800 } }) {
+  constructor({ taskId, binaryPath, viewport = { width: 1280, height: 800 }, headless = true, profileDir = null, onEvent = null }) {
     this.taskId = taskId;
     this.binaryPath = binaryPath;
     this.viewport = viewport;
+    this.headless = headless !== false;
     this.proc = null;
-    this.profileDir = null;
+    this.profileDir = profileDir || null;
+    this.onEvent = typeof onEvent === 'function' ? onEvent : null;
     this.ws = null;
     this.nextId = 1;
     this.pending = new Map();
     this.consoleLogs = [];
-    this.latestScreenshot = null; // Buffer
+    this.latestScreenshot = null; // Buffer (PNG)
     this.screenshotSeq = 0;
+    this.latestFrame = null; // { buffer: Buffer, mime: string, seq: number, width: number, height: number, time: number }
+    this.frameSeq = 0;
+    this.lastFrameEmitAt = 0;
+    this.screencastActive = false;
+    this.lastAction = null;
     this.lastUrl = 'about:blank';
     this.lastTitle = '';
     this.lastUsedAt = Date.now();
@@ -334,30 +388,20 @@ class CdpSession {
 
   touch() { this.lastUsedAt = Date.now(); }
 
+  _emit(evt) {
+    if (!this.onEvent) return;
+    try { this.onEvent({ taskId: this.taskId, headless: this.headless, viewport: this.viewport, ...evt }); } catch {}
+  }
+
   async start() {
-    this.profileDir = await fs.mkdtemp(path.join(os.tmpdir(), `g0dc0d3-browser-${this.taskId.slice(0, 8)}-`));
-    const args = [
-      '--headless=new',
-      '--no-first-run',
-      '--no-default-browser-check',
-      '--disable-extensions',
-      '--disable-sync',
-      '--disable-background-networking',
-      '--disable-component-update',
-      '--disable-default-apps',
-      '--disable-breakpad',
-      '--disable-crash-reporter',
-      '--disable-domain-reliability',
-      '--metrics-recording-only',
-      '--mute-audio',
-      '--hide-scrollbars',
-      ...(process.platform === 'linux' ? ['--disable-gpu', '--disable-dev-shm-usage'] : []),
-      `--window-size=${this.viewport.width},${this.viewport.height}`,
-      '--remote-debugging-port=0',
-      '--remote-debugging-address=127.0.0.1',
-      `--user-data-dir=${this.profileDir}`,
-      'about:blank',
-    ];
+    if (!this.profileDir) {
+      this.profileDir = await fs.mkdtemp(path.join(os.tmpdir(), `g0dc0d3-browser-${this.taskId.slice(0, 8)}-`));
+    }
+    const args = buildChromiumLaunchArgs({
+      headless: this.headless,
+      viewport: this.viewport,
+      profileDir: this.profileDir,
+    });
     this.proc = spawn(this.binaryPath, args, { stdio: ['ignore', 'ignore', 'pipe'], detached: process.platform !== 'win32' });
     let stderrBuf = '';
     const debugPort = await new Promise((resolve, reject) => {
@@ -413,12 +457,40 @@ class CdpSession {
     await this.send('Log.enable').catch(() => {});
     await this.send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] }).catch(() => {});
     await this.send('Page.addScriptToEvaluateOnNewDocument', { source: CONTAINMENT_INIT_SCRIPT }).catch(() => {});
-    await this.send('Emulation.setDeviceMetricsOverride', {
-      width: this.viewport.width,
-      height: this.viewport.height,
-      deviceScaleFactor: 1,
-      mobile: false,
-    });
+    if (this.headless) {
+      await this.send('Emulation.setDeviceMetricsOverride', {
+        width: this.viewport.width,
+        height: this.viewport.height,
+        deviceScaleFactor: 1,
+        mobile: false,
+      });
+    }
+  }
+
+  async startScreencast({ quality = 68, maxWidth = 1280, maxHeight = 820, everyNthFrame = 1 } = {}) {
+    if (this.closed || this.disconnected || this.screencastActive) return this.screencastActive;
+    try {
+      await this.send('Page.startScreencast', {
+        format: 'jpeg',
+        quality: Math.max(30, Math.min(92, Number(quality) || 68)),
+        maxWidth: Math.max(320, Math.min(1600, Number(maxWidth) || 1280)),
+        maxHeight: Math.max(240, Math.min(1200, Number(maxHeight) || 820)),
+        everyNthFrame: Math.max(1, Math.min(4, Number(everyNthFrame) || 1)),
+      }, 5000);
+      this.screencastActive = true;
+      this._emit({ type: 'browser.status', active: true, screencastActive: true, url: this.lastUrl, title: this.lastTitle });
+    } catch {
+      this.screencastActive = false;
+    }
+    return this.screencastActive;
+  }
+
+  async stopScreencast() {
+    if (!this.screencastActive) return;
+    this.screencastActive = false;
+    if (!this.closed && !this.disconnected) {
+      await this.send('Page.stopScreencast', {}, 3000).catch(() => {});
+    }
   }
 
   _onMessage(raw) {
@@ -465,6 +537,35 @@ class CdpSession {
       if (errText && !/ERR_BLOCKED_BY_CLIENT|ERR_ABORTED/i.test(errText)) {
         const resType = String(msg.params?.type || 'resource');
         this._pushConsole('network', `Failed ${resType} load: ${errText}`.slice(0, 400));
+      }
+    } else if (msg.method === 'Page.screencastFrame') {
+      const p = msg.params || {};
+      if (p.sessionId !== undefined) {
+        this.send('Page.screencastFrameAck', { sessionId: p.sessionId }, 3000).catch(() => {});
+      }
+      if (typeof p.data === 'string' && p.data.length) {
+        const buf = Buffer.from(p.data, 'base64');
+        const seq = ++this.frameSeq;
+        const meta = p.metadata || {};
+        this.latestFrame = {
+          buffer: buf,
+          mime: 'image/jpeg',
+          seq,
+          width: Number(meta.deviceWidth) || this.viewport.width,
+          height: Number(meta.deviceHeight) || this.viewport.height,
+          time: Date.now(),
+        };
+        const now = Date.now();
+        if (now - this.lastFrameEmitAt >= FRAME_EMIT_INTERVAL_MS) {
+          this.lastFrameEmitAt = now;
+          this._emit({
+            type: 'browser.frame',
+            seq,
+            url: this.lastUrl,
+            title: this.lastTitle,
+            frameUrl: `/api/tasks/${encodeURIComponent(this.taskId)}/browser/frame?v=${seq}`,
+          });
+        }
       }
     } else if (msg.method === 'Log.entryAdded') {
       const e = msg.params?.entry;
@@ -573,6 +674,22 @@ class CdpSession {
     const buf = Buffer.from(res.data || '', 'base64');
     this.latestScreenshot = buf;
     this.screenshotSeq += 1;
+    const fSeq = ++this.frameSeq;
+    this.latestFrame = {
+      buffer: buf,
+      mime: 'image/png',
+      seq: fSeq,
+      width: this.viewport.width,
+      height: this.viewport.height,
+      time: Date.now(),
+    };
+    this._emit({
+      type: 'browser.frame',
+      seq: fSeq,
+      url: this.lastUrl,
+      title: this.lastTitle,
+      frameUrl: `/api/tasks/${encodeURIComponent(this.taskId)}/browser/frame?v=${fSeq}`,
+    });
     return {
       bytes: buf.length,
       seq: this.screenshotSeq,
@@ -635,14 +752,18 @@ class CdpSession {
         width: Math.max(320, Math.min(2560, viewport.width)),
         height: Math.max(320, Math.min(2000, viewport.height)),
       };
-      await this.send('Emulation.setDeviceMetricsOverride', {
-        width: this.viewport.width,
-        height: this.viewport.height,
-        deviceScaleFactor: 1,
-        mobile: false,
-      });
+      if (this.headless) {
+        await this.send('Emulation.setDeviceMetricsOverride', {
+          width: this.viewport.width,
+          height: this.viewport.height,
+          deviceScaleFactor: 1,
+          mobile: false,
+        });
+      }
     }
     this.activeOutboundOpts = outboundOpts || {};
+    this.lastAction = { action: 'navigate', label: safeUrl, x: null, y: null, url: safeUrl, time: Date.now() };
+    this._emit({ type: 'browser.activity', active: true, ...this.lastAction });
     this.lastBlockedNavError = null;
     const targetIsLoopback = isLoopbackHost(new URL(safeUrl).hostname);
     this.explicitLoopbackNavPending = targetIsLoopback;
@@ -686,6 +807,8 @@ class CdpSession {
       this.explicitLoopbackNavPending = false;
     }
     const shot = await this.captureScreenshot();
+    this.lastAction = { action: 'navigate', label: snap.title || snap.url, x: null, y: null, url: snap.url, title: snap.title, time: Date.now() };
+    this._emit({ type: 'browser.activity', active: true, ...this.lastAction });
     return { ok: true, ...snap, screenshotUrl: shot.screenshotUrl, screenshotBytes: shot.bytes };
   }
 
@@ -693,6 +816,8 @@ class CdpSession {
     this.touch();
     this.activeOutboundOpts = outboundOpts || {};
     const action = String(args.action || '').toLowerCase();
+    let actPt = null;
+    let actLabel = args.ref || args.selector || args.key || (typeof args.text === 'string' ? args.text.slice(0, 40) : '') || action;
     if (action === 'back') {
       await this.send('Runtime.evaluate', { expression: 'history.back()' });
       await this.waitForLoad(4000);
@@ -760,6 +885,9 @@ class CdpSession {
       await this.wait(args.waitMs ?? 200);
     } else if (action === 'hover' || action === 'click' || action === 'double_click') {
       const pt = await this.resolveTargetPoint(args);
+      actPt = { x: Math.round(pt.x), y: Math.round(pt.y) };
+      this.lastAction = { action, label: actLabel, x: actPt.x, y: actPt.y, url: this.lastUrl, title: this.lastTitle, time: Date.now() };
+      this._emit({ type: 'browser.activity', active: true, ...this.lastAction });
       await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: pt.x, y: pt.y });
       if (action === 'click' || action === 'double_click') {
         const clicks = action === 'double_click' ? 2 : 1;
@@ -772,6 +900,9 @@ class CdpSession {
     } else if (action === 'type') {
       if (args.ref || args.selector || (Number.isFinite(args.x) && Number.isFinite(args.y))) {
         const pt = await this.resolveTargetPoint({ ...args, focus: true });
+        actPt = { x: Math.round(pt.x), y: Math.round(pt.y) };
+        this.lastAction = { action: 'type', label: typeof args.text === 'string' ? args.text.slice(0, 36) : actLabel, x: actPt.x, y: actPt.y, url: this.lastUrl, title: this.lastTitle, time: Date.now() };
+        this._emit({ type: 'browser.activity', active: true, ...this.lastAction });
         await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: pt.x, y: pt.y });
         await this.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: pt.x, y: pt.y, button: 'left', clickCount: 1 });
         await this.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: pt.x, y: pt.y, button: 'left', clickCount: 1 });
@@ -860,6 +991,8 @@ class CdpSession {
       this.explicitLoopbackNavPending = false;
     }
     const shot = await this.captureScreenshot();
+    this.lastAction = { action, label: actLabel, x: actPt?.x ?? null, y: actPt?.y ?? null, url: snap.url, title: snap.title, time: Date.now() };
+    this._emit({ type: 'browser.activity', active: true, ...this.lastAction });
     return { ok: true, action, ...snap, screenshotUrl: shot.screenshotUrl, screenshotBytes: shot.bytes };
   }
 
@@ -884,8 +1017,9 @@ class CdpSession {
     };
   }
 
-  async close() {
+  async close({ preserveProfile = false } = {}) {
     if (this.cleanupPromise) return this.cleanupPromise;
+    await this.stopScreencast().catch(() => {});
     this.closed = true;
     this.disconnected = true;
     this.cleanupPromise = (async () => {
@@ -908,10 +1042,14 @@ class CdpSession {
         });
       }
       this.latestScreenshot = null;
-      if (this.profileDir) {
+      this.latestFrame = null;
+      if (!preserveProfile && this.profileDir) {
         const dir = this.profileDir;
         this.profileDir = null;
         await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+      }
+      if (!preserveProfile) {
+        this._emit({ type: 'browser.closed', active: false });
       }
     })();
     return this.cleanupPromise;
@@ -919,11 +1057,23 @@ class CdpSession {
 }
 
 export class BrowserPool {
-  constructor() {
+  constructor({ getSettings = null, onEvent = null, forceHeadless = false } = {}) {
     this.sessions = new Map();
     this.launching = new Map();
+    this.sessionVisibleOverrides = new Map();
+    this.screencastWatchers = new Set();
+    this.getSettings = typeof getSettings === 'function' ? getSettings : (() => DEFAULT_BROWSER_SETTINGS);
+    this.onEvent = typeof onEvent === 'function' ? onEvent : null;
+    this.forceHeadless = Boolean(forceHeadless);
     this.reapTimer = setInterval(() => this._reapIdle(), 60 * 1000);
     this.reapTimer.unref?.();
+  }
+
+  _shouldRunHeadless(taskId) {
+    if (this.forceHeadless || process.env.G0D_FORCE_HEADLESS === '1' || process.env.NODE_ENV === 'test') return true;
+    if (this.sessionVisibleOverrides.has(taskId)) return !this.sessionVisibleOverrides.get(taskId);
+    const settings = normalizeBrowserSettings(this.getSettings?.());
+    return !settings.visibleWindow;
   }
 
   _reapIdle() {
@@ -935,7 +1085,7 @@ export class BrowserPool {
     }
   }
 
-  async _getOrCreate(taskId, viewport) {
+  async _getOrCreate(taskId, viewport, { profileDir = null, headlessOverride = null } = {}) {
     let session = this.sessions.get(taskId);
     if (session && !session.closed && session.ws?.readyState === WebSocket.OPEN) {
       session.touch();
@@ -948,10 +1098,22 @@ export class BrowserPool {
       if (!binaryPath) {
         throw fault('BROWSER_UNAVAILABLE', 'No Chromium-compatible browser (Chrome, Brave, Chromium, Edge, Arc) was found. Set G0D_BROWSER_PATH to configure one.');
       }
-      const next = new CdpSession({ taskId, binaryPath, viewport });
+      const headless = typeof headlessOverride === 'boolean' ? headlessOverride : this._shouldRunHeadless(taskId);
+      const next = new CdpSession({
+        taskId,
+        binaryPath,
+        viewport,
+        headless,
+        profileDir,
+        onEvent: this.onEvent,
+      });
       this.sessions.set(taskId, next);
       try {
         await next.start();
+        const settings = normalizeBrowserSettings(this.getSettings?.());
+        if (this.screencastWatchers.has(taskId) && settings.liveMirror) {
+          await next.startScreencast().catch(() => {});
+        }
         return next;
       } catch (err) {
         this.sessions.delete(taskId);
@@ -973,6 +1135,106 @@ export class BrowserPool {
       url: session.lastUrl,
       title: session.lastTitle,
     };
+  }
+
+  getLatestFrame(taskId) {
+    const session = this.sessions.get(taskId);
+    if (!session || session.closed) return null;
+    if (session.latestFrame?.buffer) return session.latestFrame;
+    if (session.latestScreenshot) {
+      return {
+        buffer: session.latestScreenshot,
+        mime: 'image/png',
+        seq: session.screenshotSeq,
+        width: session.viewport.width,
+        height: session.viewport.height,
+        time: session.lastUsedAt,
+      };
+    }
+    return null;
+  }
+
+  getStatus(taskId) {
+    const settings = normalizeBrowserSettings(this.getSettings?.());
+    const session = this.sessions.get(taskId);
+    const active = Boolean(session && !session.closed && session.ws?.readyState === WebSocket.OPEN);
+    return {
+      active,
+      headless: active ? session.headless : this._shouldRunHeadless(taskId),
+      visibleWindow: active ? !session.headless : !this._shouldRunHeadless(taskId),
+      url: active ? session.lastUrl : null,
+      title: active ? session.lastTitle : null,
+      viewport: active ? session.viewport : { width: 1280, height: 800 },
+      screencastActive: active ? Boolean(session.screencastActive) : false,
+      hasFrame: active ? Boolean(session.latestFrame?.buffer || session.latestScreenshot) : false,
+      frameSeq: active ? session.frameSeq : 0,
+      lastAction: active ? session.lastAction : null,
+      consoleErrors: active ? session.consoleLogs.slice(-15) : [],
+      settings,
+    };
+  }
+
+  async setScreencastWatching(taskId, watching) {
+    if (watching) this.screencastWatchers.add(taskId);
+    else this.screencastWatchers.delete(taskId);
+    const session = this.sessions.get(taskId);
+    if (!session || session.closed || session.ws?.readyState !== WebSocket.OPEN) {
+      return this.getStatus(taskId);
+    }
+    const settings = normalizeBrowserSettings(this.getSettings?.());
+    if (watching && settings.liveMirror) {
+      await session.startScreencast().catch(() => {});
+    } else if (!watching) {
+      await session.stopScreencast().catch(() => {});
+    }
+    return this.getStatus(taskId);
+  }
+
+  async setSessionMode(taskId, { visibleWindow }, outboundOpts = {}) {
+    const wantVisible = Boolean(visibleWindow);
+    this.sessionVisibleOverrides.set(taskId, wantVisible);
+    const targetHeadless = (this.forceHeadless || process.env.G0D_FORCE_HEADLESS === '1' || process.env.NODE_ENV === 'test') ? true : !wantVisible;
+    const session = this.sessions.get(taskId);
+    if (!session || session.closed || session.ws?.readyState !== WebSocket.OPEN) {
+      return this.getStatus(taskId);
+    }
+    if (session.headless === targetHeadless) return this.getStatus(taskId);
+    const prevUrl = session.lastUrl;
+    const prevViewport = session.viewport;
+    const preservedProfileDir = session.profileDir;
+    this.sessions.delete(taskId);
+    await session.close({ preserveProfile: true });
+    let next;
+    try {
+      next = await this._getOrCreate(taskId, prevViewport, { profileDir: preservedProfileDir, headlessOverride: targetHeadless });
+      if (prevUrl && prevUrl !== 'about:blank') {
+        try {
+          assertBrowserUrlAllowed(prevUrl, outboundOpts);
+          await next.open({ url: prevUrl, waitMs: 250 }, outboundOpts);
+        } catch {}
+      } else {
+        await next.captureScreenshot().catch(() => {});
+      }
+      if (this.onEvent) {
+        try {
+          this.onEvent({
+            type: 'browser.status',
+            taskId,
+            active: true,
+            headless: next.headless,
+            visibleWindow: !next.headless,
+            url: next.lastUrl,
+            title: next.lastTitle,
+            viewport: next.viewport,
+            screencastActive: next.screencastActive,
+          });
+        } catch {}
+      }
+    } catch (err) {
+      if (preservedProfileDir) await fs.rm(preservedProfileDir, { recursive: true, force: true }).catch(() => {});
+      throw err;
+    }
+    return this.getStatus(taskId);
   }
 
   async open(taskId, args, outboundOpts) {
@@ -1022,6 +1284,8 @@ export class BrowserPool {
   }
 
   async closeSession(taskId) {
+    this.sessionVisibleOverrides.delete(taskId);
+    this.screencastWatchers.delete(taskId);
     const session = this.sessions.get(taskId);
     if (!session) return { ok: true, closed: false };
     this.sessions.delete(taskId);

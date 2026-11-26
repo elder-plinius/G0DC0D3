@@ -213,6 +213,12 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
         fixtures:fixtures.map(({id,title,description,objective})=>({id,title,description,objective})),scenarios:scriptedScenarios,benchmark,version:'0.2.0',capabilities,limitations,personas:PERSONAS,tools:TOOLS.map(({name,description,parameters,result})=>({name,description,parameters,resultSchema:result})),executionAvailable:isSandboxSupportedPlatform(),sessionProtected:auth,workflows:listWorkflows(),permissions:runtime.getGlobalPermissions(),privacy:runtime.getPrivacy(),overseer:runtime.getOverseer(),router:runtime.getRouterSettings(),modelGroups:runtime.getModelGroups({sortBy,catalog:modelCatalog}),sortModes:MODEL_SORT_MODES,catalogMeta:modelCatalog.meta()
       });
       }
+      if(req.method==='GET' && url.pathname==='/api/browser/settings')return send(res,200,await runtime.getBrowserInfo());
+      if(req.method==='PATCH' && url.pathname==='/api/browser/settings') {
+        const body = await readBody(req);
+        runtime.updateBrowserSettings(body);
+        return send(res,200,await runtime.getBrowserInfo());
+      }
       if(req.method==='GET' && url.pathname==='/api/overseer')return send(res,200,runtime.getOverseer());
       if(req.method==='PATCH' && url.pathname==='/api/overseer')return send(res,200,runtime.updateOverseer(await readBody(req)));
       if(req.method==='GET' && url.pathname==='/api/router')return send(res,200,await runtime.getRouterState());
@@ -723,6 +729,44 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
         res.end(shot.buffer);
         return;
       }
+      const browserFrameMatch = req.method === 'GET' && url.pathname.match(/^\/api\/tasks\/([^/]+)\/browser\/frame$/);
+      if (browserFrameMatch) {
+        const taskId = decodeURIComponent(browserFrameMatch[1]);
+        runtime.getTask(taskId);
+        const frame = runtime.broker.browser.getLatestFrame(taskId);
+        if (!frame) return send(res, 404, { error: 'No live browser frame available for this task.' });
+        res.writeHead(200, { 'content-type': frame.mime || 'image/jpeg', 'cache-control': 'no-store' });
+        res.end(frame.buffer);
+        return;
+      }
+      const browserCtrlMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/browser\/(status|mode|screencast|close)$/);
+      if (browserCtrlMatch) {
+        const taskId = decodeURIComponent(browserCtrlMatch[1]);
+        const sub = browserCtrlMatch[2];
+        runtime.getTask(taskId);
+        if (req.method === 'GET' && sub === 'status') {
+          return send(res, 200, runtime.broker.browser.getStatus(taskId));
+        }
+        if (req.method === 'POST' && sub === 'mode') {
+          const body = await readBody(req);
+          if (typeof body.visibleWindow !== 'boolean') {
+            throw Object.assign(new Error('visibleWindow must be a boolean.'), { status: 400, code: 'INVALID_BROWSER_MODE' });
+          }
+          if (body.persist === true) runtime.updateBrowserSettings({ visibleWindow: body.visibleWindow });
+          const status = await runtime.broker.browser.setSessionMode(taskId, { visibleWindow: body.visibleWindow }, runtime.outboundOptions());
+          return send(res, 200, status);
+        }
+        if (req.method === 'POST' && sub === 'screencast') {
+          const body = await readBody(req);
+          const status = await runtime.broker.browser.setScreencastWatching(taskId, Boolean(body.active));
+          return send(res, 200, status);
+        }
+        if (req.method === 'POST' && sub === 'close') {
+          await readBody(req).catch(() => ({}));
+          await runtime.broker.browser.closeSession(taskId);
+          return send(res, 200, runtime.broker.browser.getStatus(taskId));
+        }
+      }
       const match=url.pathname.match(/^\/api\/tasks\/([^/]+)(?:\/(run|pause|resume|cancel|accept|report-refusal|policy|providers|answer-race|message|export|patch|execution|checks|persona|effort|prompt|apply-preview|apply-source|inspect-apply|undo-apply|source-backup|hunk|generation|rewind|plan-mode|compact|checkpoints|permissions|approval|fork|transcript|commit|title))?$/);
       if(match) {
         const [,id,action]=match;
@@ -953,6 +997,7 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
       staticFiles['/themes.css'] = ['themes.css','text/css'];
       staticFiles['/mermaid-lite.js'] = ['mermaid-lite.js','text/javascript'];
       staticFiles['/conclave.js'] = ['conclave.js','text/javascript'];
+      staticFiles['/browser-live.js'] = ['browser-live.js','text/javascript'];
       staticFiles['/brand-wordmark.ttf'] = ['brand-wordmark.ttf', 'font/ttf'];
       if(req.method==='GET'&&staticFiles[url.pathname]) {
         const [filename,mime]=staticFiles[url.pathname],body=await fs.readFile(path.join(publicDir,filename));

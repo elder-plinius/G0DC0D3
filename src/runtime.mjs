@@ -8,6 +8,7 @@ import { promises as fs, constants as fsConstants } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Store } from './store.mjs';
 import { Broker, snapshotWorkspace, sha256, taskTools, conversationWithoutChecks, bindVerification, stableJson, evaluateBounded, scopedPath, READ_ONLY_TOOLS } from './broker.mjs';
+import { BrowserPool, DEFAULT_BROWSER_SETTINGS, normalizeBrowserSettings, findChromiumBinary } from './browser-env.mjs';
 import { validateTool } from './tool-schema.mjs';
 import { diagnoseIncident, detectRefusal, rankCandidates, providerIdentity, candidateEligibility, requestProfile, providerTier } from './routing.mjs';
 import { learningContext, inferModelFamily, bestStrategyForFamily, extractDeclineSignature } from './learning.mjs';
@@ -676,14 +677,20 @@ export class Runtime {
       return { status: 'unknown', snapshotHash: (await taskSnapshot(task.workspace)).snapshotHash, checks: [{ name: 'acceptance', status: 'unknown', detail: 'No independent evaluator configured.' }] };
     };
     this.memory = new MemoryStore(this.store);
-    this.broker = new Broker({ store: this.store, evaluator: this.evaluator, faultInjector, memory: this.memory });
+    this._streamSubs = new Map();
+    const browserPool = new BrowserPool({
+      getSettings: () => this.getBrowserSettings(),
+      onEvent: (evt) => {
+        if (evt?.taskId) this._emitStream(evt.taskId, evt);
+      }
+    });
+    this.broker = new Broker({ store: this.store, evaluator: this.evaluator, faultInjector, memory: this.memory, browser: browserPool });
     this.runs = new Map();
     this.closed = false;
     this.sourceChanges = new SourceChanges(this);
     for (const task of this.store.listTasks()) if (active.has(task.status)) this.store.updateTask(task.id, current => { current.status = 'paused'; current.epoch += 1; current.blocker = { code: 'RESTART_RECONCILIATION', message: 'Interrupted runtime. Resume will reconcile pending operations.' }; return current; }, 'task.restarted', { previousStatus: task.status });
     this.crew = new CrewController(this);
     this.outboundAudit = new OutboundAuditLog({ maxEntries: 100 });
-    this._streamSubs = new Map();
     this.activeSubagents = new Map();
     this._workerSteers = new Map();
   }
@@ -2993,6 +3000,20 @@ export class Runtime {
   setModelPreference(providerId, signal, domain = null) {
     const learning = this.store.setModelPreference(providerId, signal, domain);
     return { modelPreferences: learning.modelPreferences || {}, domainElo: learning.domainElo || {} };
+  }
+  getBrowserSettings() {
+    const stored = this.store.getLocalState('browser_settings', DEFAULT_BROWSER_SETTINGS);
+    return normalizeBrowserSettings(stored, DEFAULT_BROWSER_SETTINGS);
+  }
+  updateBrowserSettings(patch = {}) {
+    const next = normalizeBrowserSettings(patch, this.getBrowserSettings());
+    this.store.setLocalState('browser_settings', next);
+    return next;
+  }
+  async getBrowserInfo() {
+    const settings = this.getBrowserSettings();
+    const binary = await findChromiumBinary().catch(() => null);
+    return { settings, chromiumAvailable: Boolean(binary) };
   }
   getRouterSettings() {
     const stored = this.store.getLocalState('router_settings', DEFAULT_ROUTER_SETTINGS);

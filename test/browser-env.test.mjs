@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { assertBrowserUrlAllowed, findChromiumBinary } from '../src/browser-env.mjs';
+import { assertBrowserUrlAllowed, buildChromiumLaunchArgs, BrowserPool, findChromiumBinary } from '../src/browser-env.mjs';
 import { createApp } from '../src/server.mjs';
 import { Store } from '../src/store.mjs';
 import { Broker, taskTools } from '../src/broker.mjs';
@@ -815,4 +815,133 @@ test('Thinking effort levels (fast/medium/high/max) persist via PATCH /api/tasks
   // 3) Invalid effort rejected cleanly
   const bad = await api(`/api/tasks/${created.task.id}/effort`, 'PATCH', { effort: 'turbo' });
   assert.equal(bad.status, 400);
+});
+
+test('Live Browser Combo: non-headless launch args, settings persistence, CDP screencast frames, click reticle events & zero inline style= dock UI', async (t) => {
+  // 1) Launch args cleanly toggle headless vs isolated visible window
+  const headlessArgs = buildChromiumLaunchArgs({ headless: true, viewport: { width: 1280, height: 800 }, profileDir: '/tmp/p1' });
+  assert.ok(headlessArgs.includes('--headless=new'));
+  assert.ok(headlessArgs.includes('--mute-audio'));
+  assert.ok(headlessArgs.includes('--user-data-dir=/tmp/p1'));
+
+  const visibleArgs = buildChromiumLaunchArgs({ headless: false, viewport: { width: 1280, height: 840 }, profileDir: '/tmp/p2' });
+  assert.ok(!visibleArgs.includes('--headless=new'));
+  assert.ok(!visibleArgs.includes('--mute-audio'));
+  assert.ok(!visibleArgs.includes('--hide-scrollbars'));
+  assert.ok(visibleArgs.includes('--window-position=80,60'));
+  assert.ok(visibleArgs.includes('--user-data-dir=/tmp/p2'));
+
+  const binary = await findChromiumBinary();
+  if (!binary) { t.skip('No Chromium binary installed on this host'); return; }
+
+  const targetServer = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end('<!doctype html><html><head><title>Live Mirror Target</title></head><body><h1>Watch Me Click</h1><button id="go" onclick="this.textContent=\'Clicked!\'">Go</button></body></html>');
+  });
+  await new Promise(resolve => targetServer.listen(0, '127.0.0.1', resolve));
+  const targetUrl = `http://127.0.0.1:${targetServer.address().port}/`;
+
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'g0d-live-browser-'));
+  const stub = {
+    id: 'openrouter:gemini-4-neon',
+    label: 'Gemini 4 Neon',
+    model: 'google/gemini-4-neon',
+    kind: 'http',
+    tier: 'frontier',
+    available: true,
+    capabilities: { tools: true, nativeTools: true },
+    async turn() { return { type: 'message', finish: 'done', text: 'ok' }; }
+  };
+  const app = await createApp({ dataDir: dir, auth: false, providers: new Map([[stub.id, stub]]), cliDiscovery: { probes: [] } });
+  // Keep test runs strictly headless even when toggling visibleWindow settings!
+  app.runtime.broker.browser.forceHeadless = true;
+  const root = await app.listen(0);
+  const headers = { 'content-type': 'application/json', 'x-g0d-request': '1' };
+  const uiPool = new BrowserPool({ forceHeadless: true });
+
+  t.after(async () => {
+    await uiPool.closeAll();
+    await app.close();
+    targetServer.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  // 2) Settings API persists visibleWindow / liveMirror / autoOpenMirror
+  const s0 = await (await fetch(`${root}/api/browser/settings`)).json();
+  assert.equal(s0.settings.visibleWindow, false);
+  assert.equal(s0.settings.liveMirror, true);
+  assert.equal(s0.chromiumAvailable, true);
+
+  const s1 = await (await fetch(`${root}/api/browser/settings`, {
+    method: 'PATCH', headers, body: JSON.stringify({ visibleWindow: true, autoOpenMirror: false })
+  })).json();
+  assert.equal(s1.settings.visibleWindow, true);
+  assert.equal(s1.settings.autoOpenMirror, false);
+  await fetch(`${root}/api/browser/settings`, {
+    method: 'PATCH', headers, body: JSON.stringify({ visibleWindow: false, autoOpenMirror: true })
+  });
+
+  // 3) Live session + CDP screencast + click reticle telemetry + /frame endpoint
+  const task = await app.runtime.createTask({ objective: 'Inspect target page', providerId: stub.id, workspace: dir });
+  const receivedEvents = [];
+  const unsub = app.runtime.subscribeStream(task.id, ev => receivedEvents.push(ev));
+
+  await app.runtime.broker.browser.setScreencastWatching(task.id, true);
+  await app.runtime.broker.browser.open(task.id, { url: targetUrl, waitMs: 250 }, { privacy: { localOnly: false } });
+  await app.runtime.broker.browser.act(task.id, { action: 'click', selector: '#go', waitMs: 150 }, { privacy: { localOnly: false } });
+  unsub();
+
+  const st = await (await fetch(`${root}/api/tasks/${encodeURIComponent(task.id)}/browser/status`)).json();
+  assert.equal(st.active, true);
+  assert.equal(st.title, 'Live Mirror Target');
+  assert.equal(st.hasFrame, true);
+  assert.equal(st.lastAction?.action, 'click');
+  assert.ok(Number.isFinite(st.lastAction?.x) && Number.isFinite(st.lastAction?.y), 'Click action must capture reticle coordinates');
+  assert.ok(receivedEvents.some(e => e.type === 'browser.activity' && e.action === 'click' && Number.isFinite(e.x)));
+  assert.ok(receivedEvents.some(e => e.type === 'browser.frame'));
+
+  const frameRes = await fetch(`${root}/api/tasks/${encodeURIComponent(task.id)}/browser/frame`);
+  assert.equal(frameRes.status, 200);
+  assert.match(frameRes.headers.get('content-type') || '', /^image\/(jpeg|png)/);
+  const frameBuf = Buffer.from(await frameRes.arrayBuffer());
+  assert.ok(frameBuf.length > 500);
+
+  // Invalid mode payload rejected with 400
+  const badMode = await fetch(`${root}/api/tasks/${encodeURIComponent(task.id)}/browser/mode`, {
+    method: 'POST', headers, body: JSON.stringify({ visibleWindow: 'yes' })
+  });
+  assert.equal(badMode.status, 400);
+
+  // 4) Headless Chromium UI E2E: Live Browser dock renders frame cleanly with 0 inline style= and Settings → Tools shows switches
+  const sid = 'live-browser-ui';
+  await uiPool.open(sid, { url: `${root}/`, viewport: { width: 1440, height: 900 }, waitMs: 800 }, { privacy: { localOnly: false } });
+  await uiPool.evaluate(sid, {
+    expression: `(() => { window.__BL_ERRS = []; window.addEventListener('error', e => { if (!/ResizeObserver loop/i.test(e.message || '')) window.__BL_ERRS.push(e.message); }); window.addEventListener('unhandledrejection', e => window.__BL_ERRS.push(String(e.reason))); return true; })()`
+  });
+  const dlgs = JSON.parse((await uiPool.evaluate(sid, { expression: `[...document.querySelectorAll('dialog[open]')].map(d => d.id)` })).result);
+  if (dlgs.length) await uiPool.act(sid, { action: 'press', key: 'Escape', waitMs: 150 }, { privacy: { localOnly: false } });
+
+  await uiPool.evaluate(sid, { expression: `window.G0DBrowserLive.syncTask({ id: ${JSON.stringify(task.id)} }); window.G0DBrowserLive.open(); true;` });
+  await new Promise(r => setTimeout(r, 450));
+
+  const dockCheck = JSON.parse((await uiPool.evaluate(sid, {
+    expression: `(() => ({
+      open: window.G0DBrowserLive.isOpen(),
+      url: document.getElementById('bl-url-text')?.textContent || '',
+      canvasVisible: !document.getElementById('browser-live-canvas')?.classList.contains('hidden'),
+      inlineStyles: document.querySelectorAll('#browser-dock [style]').length,
+      errors: window.__BL_ERRS || [],
+    }))()`
+  })).result);
+  assert.equal(dockCheck.open, true);
+  assert.match(dockCheck.url, /127\.0\.0\.1/);
+  assert.equal(dockCheck.canvasVisible, true);
+  assert.equal(dockCheck.inlineStyles, 0);
+  assert.deepEqual(dockCheck.errors, []);
+
+  // Close browser session cleanly via API
+  const closeRes = await (await fetch(`${root}/api/tasks/${encodeURIComponent(task.id)}/browser/close`, {
+    method: 'POST', headers, body: '{}'
+  })).json();
+  assert.equal(closeRes.active, false);
 });

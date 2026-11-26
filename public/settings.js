@@ -259,6 +259,19 @@ document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" clas
         </form>
       </section>
 
+      <div class="settings-card" id="browser-settings-card">
+        <div class="permission-gate-header">
+          <div>
+            <h4>Agent Browser &amp; Live Viewer</h4>
+            <p class="field-help">Watch agents test your apps in real time inside the dock or pop out a real isolated Chromium window (never touches your personal Chrome profile).</p>
+          </div>
+          <span class="meta-chip" id="browser-chromium-badge">Checking…</span>
+        </div>
+        <div class="setting-row"><label for="browser-visible-window">Visible browser window (non-headless)<small>Launch agent browser sessions in a real Chromium window for 60fps WebGL, audio, and manual login or CAPTCHA takeover.</small></label><input type="checkbox" role="switch" class="toggle" id="browser-visible-window" data-browser-setting="visibleWindow"></div>
+        <div class="setting-row"><label for="browser-live-mirror">In-app live browser mirror<small>Stream live CDP screencast frames and agent click reticles inside the G0DM0D3 right dock.</small></label><input type="checkbox" role="switch" class="toggle" id="browser-live-mirror" data-browser-setting="liveMirror"></div>
+        <div class="setting-row"><label for="browser-auto-open">Auto-open mirror when agent browses<small>Automatically open the Live Browser dock the first time an agent opens a URL in a chat.</small></label><input type="checkbox" role="switch" class="toggle" id="browser-auto-open" data-browser-setting="autoOpenMirror"></div>
+      </div>
+
       <div class="settings-card">
         <div class="settings-card-head">
           <h4>Shell Execution &amp; Checks</h4>
@@ -1183,7 +1196,7 @@ async function selectSettingsPane(pane, options = {}) {
     await Promise.all([loadModelConnections(), loadVeniceCatalog(), typeof loadOpenRouterCatalog === 'function' ? loadOpenRouterCatalog() : Promise.resolve(), typeof loadServices === 'function' ? loadServices() : Promise.resolve(), typeof loadModelGroups === 'function' ? loadModelGroups() : Promise.resolve(), typeof loadOverseer === 'function' ? loadOverseer() : Promise.resolve(), typeof loadUltraRouter === 'function' ? loadUltraRouter() : Promise.resolve()]);
     selectModelsSubtab(modelsSubtab);
   }
-  if (pane === 'tools') { await Promise.all([loadPermissionsSettings(), loadHooksSettings()]); }
+  if (pane === 'tools') { await Promise.all([loadPermissionsSettings(), loadHooksSettings(), loadBrowserSettings()]); }
   if (pane === 'memory') { await Promise.all([loadMemorySettings(options.query), loadSkillsSettings(), loadTransparencySettings().then(renderPersonalInstructionsFromTransparency)]); }
   if (pane === 'privacy') { await loadPrivacySettings(); }
   if (pane === 'advanced') {
@@ -1354,6 +1367,10 @@ $('#settings-dialog').addEventListener('change', event => {
   const input = event.target;
   if (input.matches('[data-privacy-toggle]')) {
     updatePrivacySetting(input.dataset.privacyToggle, input.checked);
+    return;
+  }
+  if (input.matches('[data-browser-setting]')) {
+    updateBrowserSetting(input.dataset.browserSetting, input.checked);
     return;
   }
   if (input.matches('[data-qol]')) {
@@ -1660,6 +1677,40 @@ let transparencyState = null;
 let transSubtab = 'prompts';
 let transToolCategory = 'All';
 let transWireMode = 'directChat';
+
+async function loadBrowserSettings() {
+  try {
+    const data = await api('/api/browser/settings');
+    const st = data?.settings || {};
+    if ($('#browser-visible-window')) $('#browser-visible-window').checked = Boolean(st.visibleWindow);
+    if ($('#browser-live-mirror')) $('#browser-live-mirror').checked = st.liveMirror !== false;
+    if ($('#browser-auto-open')) $('#browser-auto-open').checked = st.autoOpenMirror !== false;
+    const badge = $('#browser-chromium-badge');
+    if (badge) {
+      badge.textContent = data?.chromiumAvailable ? (st.visibleWindow ? 'Window Mode' : 'Headless Mirror') : 'No Chromium';
+      badge.className = `meta-chip ${data?.chromiumAvailable ? '' : 'neutral'}`;
+    }
+  } catch {}
+}
+window.loadBrowserSettings = loadBrowserSettings;
+async function updateBrowserSetting(key, value) {
+  try {
+    const data = await api('/api/browser/settings', { method: 'PATCH', body: JSON.stringify({ [key]: Boolean(value) }) });
+    const st = data?.settings || {};
+    if ($('#browser-visible-window')) $('#browser-visible-window').checked = Boolean(st.visibleWindow);
+    if ($('#browser-live-mirror')) $('#browser-live-mirror').checked = st.liveMirror !== false;
+    if ($('#browser-auto-open')) $('#browser-auto-open').checked = st.autoOpenMirror !== false;
+    const badge = $('#browser-chromium-badge');
+    if (badge && data?.chromiumAvailable) badge.textContent = st.visibleWindow ? 'Window Mode' : 'Headless Mirror';
+    window.G0DBrowserLive?.loadStatus?.();
+    settingsFeedback(key === 'visibleWindow'
+      ? (st.visibleWindow ? 'Non-headless visible browser window enabled for new sessions.' : 'Headless live mirror restored as default.')
+      : 'Browser viewer preference saved.');
+  } catch (err) {
+    settingsFeedback(err.message || 'Could not save browser setting.', true);
+    loadBrowserSettings();
+  }
+}
 
 function selectTransparencySubtab(subtab) {
   transSubtab = ['prompts', 'tools', 'lab', 'wire'].includes(subtab) ? subtab : 'prompts';
