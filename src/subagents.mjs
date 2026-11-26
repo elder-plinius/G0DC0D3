@@ -162,73 +162,108 @@ export async function runSpecialistSubagent({ runtime, parentTask, role = 'explo
   const privacy = outbound.privacy || DEFAULT_PRIVACY_SETTINGS;
   const wId = workerId || `${spec.name}-${started.toString(36)}`;
 
+  // Atomic call budget reservation helper (prevents TOCTOU overrun across 4 parallel subagents!)
+  const reserveCallSlot = () => {
+    if (!runtime.store?.updateTask) return true;
+    let allowed = false;
+    try {
+      runtime.store.updateTask(parentTask.id, cur => {
+        if (Number.isInteger(cur?.policy?.maxCalls) && (cur.calls || 0) >= cur.policy.maxCalls) {
+          allowed = false;
+          return cur;
+        }
+        cur.calls = (cur.calls || 0) + 1;
+        allowed = true;
+        return cur;
+      });
+    } catch {
+      return false;
+    }
+    return allowed;
+  };
+
   // True Cross-Harness Execution ("Meta-Harness of Harnesses"):
-  // If this Roster agent is configured as an external CLI harness (or custom CLI) without a direct API provider lock,
-  // run it directly in bounded read-only mode (shell: false, CLI_NO_TELEMETRY_ENV), falling back cleanly if unavailable!
+  // Enforce BOTH localOnly and strictZdr privacy gates before spawning external cloud CLIs!
   const wantsExternalCli = (spec.engineType === 'custom_cli' || spec.engineType === 'harness')
     && (spec.harnessCommand || spec.harnessId)
     && (!spec.model || spec.autonomy === 'external_harness' || !runtime.providers.has(spec.model));
-  if (wantsExternalCli && !privacy.localOnly) {
-    const hLabel = spec.displayName ? `${spec.displayName} · CLI` : `${spec.harnessCommand || spec.harnessId} · CLI`;
-    if (typeof onProgress === 'function') {
-      try {
-        onProgress({
-          workerId: wId, role: spec.name, providerId: `harness:${spec.harnessId || spec.harnessCommand}`,
-          modelLabel: hLabel, status: 'streaming', tool: 'cli.harness', target: spec.harnessCommand || spec.harnessId || '',
-          files: [], tools: ['cli.harness'], streamTail: `Invoking external harness ${spec.harnessCommand || spec.harnessId}…`,
-          startedAt, durationMs: Date.now() - started, calls: 1
-        });
-      } catch {}
-    }
-    const hRes = await runExternalHarnessSubagent({
-      harnessId: spec.harnessId,
-      harnessCommand: spec.harnessCommand,
-      prompt,
-      instructions: spec.instructions,
-      workspace: parentTask.workspace || parentTask.sourcePath || null,
-      signal,
-      onProgress: ({ streamTail: tail, harnessLabel }) => {
-        if (typeof onProgress === 'function') {
-          try {
-            onProgress({
-              workerId: wId, role: spec.name, providerId: `harness:${spec.harnessId || spec.harnessCommand}`,
-              modelLabel: harnessLabel || hLabel, status: 'streaming', tool: 'cli.harness', target: spec.harnessCommand || spec.harnessId || '',
-              files: [], tools: ['cli.harness'], streamTail: tail, startedAt, durationMs: Date.now() - started, calls: 1
-            });
-          } catch {}
-        }
-      }
-    });
-    if (hRes.ok) {
-      const endedAt = new Date().toISOString();
-      const durationMs = Date.now() - started;
+  if (wantsExternalCli) {
+    if (privacy.localOnly || privacy.strictZdr) {
+      outbound.onOutbound?.({
+        providerId: `harness:${spec.harnessId || spec.harnessCommand}`,
+        host: `cli:${spec.harnessCommand || spec.harnessId}`,
+        protocol: 'external_harness',
+        zdrClass: 'provider-policy',
+        zdrFlags: [],
+        secretsRedacted: 0,
+        blocked: true,
+        reason: privacy.localOnly ? 'PRIVACY_LOCAL_ONLY' : 'PRIVACY_STRICT_ZDR'
+      });
+    } else if (reserveCallSlot()) {
+      const hLabel = spec.displayName ? `${spec.displayName} · CLI` : `${spec.harnessCommand || spec.harnessId} · CLI`;
       if (typeof onProgress === 'function') {
         try {
           onProgress({
             workerId: wId, role: spec.name, providerId: `harness:${spec.harnessId || spec.harnessCommand}`,
-            modelLabel: hRes.harnessLabel || hLabel, status: 'completed', tool: '', target: '',
-            files: [], tools: ['cli.harness'], streamTail: hRes.output.slice(-360),
-            startedAt, endedAt, durationMs, calls: 1, viaHarness: true, summary: hRes.output.slice(0, 400)
+            modelLabel: hLabel, status: 'streaming', tool: 'cli.harness', target: spec.harnessCommand || spec.harnessId || '',
+            files: [], tools: ['cli.harness'], streamTail: `Invoking external harness ${spec.harnessCommand || spec.harnessId}…`,
+            startedAt, durationMs: Date.now() - started, calls: 1
           });
         } catch {}
       }
-      return {
-        ok: true,
-        workerId: wId,
-        role: spec.name,
-        providerId: `harness:${spec.harnessId || spec.harnessCommand}`,
-        modelLabel: hRes.harnessLabel || hLabel,
-        viaHarness: true,
-        calls: 1,
-        startedAt,
-        endedAt,
-        durationMs,
-        files: [],
-        tools: ['cli.harness'],
-        summary: hRes.output
-      };
+      const hRes = await runExternalHarnessSubagent({
+        harnessId: spec.harnessId,
+        harnessCommand: spec.harnessCommand,
+        prompt,
+        instructions: spec.instructions,
+        workspace: parentTask.workspace || parentTask.sourcePath || null,
+        signal,
+        outbound,
+        onProgress: ({ streamTail: tail, harnessLabel }) => {
+          if (typeof onProgress === 'function') {
+            try {
+              onProgress({
+                workerId: wId, role: spec.name, providerId: `harness:${spec.harnessId || spec.harnessCommand}`,
+                modelLabel: harnessLabel || hLabel, status: 'streaming', tool: 'cli.harness', target: spec.harnessCommand || spec.harnessId || '',
+                files: [], tools: ['cli.harness'], streamTail: tail, startedAt, durationMs: Date.now() - started, calls: 1
+              });
+            } catch {}
+          }
+        }
+      });
+      if (hRes.ok) {
+        const endedAt = new Date().toISOString();
+        const durationMs = Date.now() - started;
+        if (typeof onProgress === 'function') {
+          try {
+            onProgress({
+              workerId: wId, role: spec.name, providerId: `harness:${spec.harnessId || spec.harnessCommand}`,
+              modelLabel: hRes.harnessLabel || hLabel, status: 'completed', tool: '', target: '',
+              files: [], tools: ['cli.harness'], streamTail: hRes.output.slice(-360),
+              startedAt, endedAt, durationMs, calls: 1, viaHarness: true, summary: hRes.output.slice(0, 400)
+            });
+          } catch {}
+        }
+        return {
+          ok: true,
+          workerId: wId,
+          role: spec.name,
+          providerId: `harness:${spec.harnessId || spec.harnessCommand}`,
+          modelLabel: hRes.harnessLabel || hLabel,
+          viaHarness: true,
+          calls: 1,
+          startedAt,
+          endedAt,
+          durationMs,
+          files: [],
+          tools: ['cli.harness'],
+          summary: hRes.output
+        };
+      }
+      if (signal?.aborted || hRes.code === 'HARNESS_CANCELLED') {
+        return { ok: false, workerId: wId, role: spec.name, startedAt, endedAt: new Date().toISOString(), durationMs: Date.now() - started, files: [], tools: [], error: { code: 'SUBAGENT_CANCELLED', message: 'Subagent cancelled.' } };
+      }
     }
-    // Seamless graceful fallback to connected API stack if CLI binary is missing/unauthenticated
   }
 
   const provider = selectSubagentProvider(runtime, parentTask, spec, modelHint, privacy);
@@ -284,10 +319,14 @@ export async function runSpecialistSubagent({ runtime, parentTask, role = 'explo
     }
     const freshSteers = runtime.drainWorkerSteer?.(parentTask.id, wId) || [];
     if (freshSteers.length) steerNotes.push(...freshSteers);
+    if (!reserveCallSlot()) {
+      if (calls === 0) {
+        emitProgress('failed', { calls: 0, error: 'Parent task call budget exhausted.' });
+        return { ok: false, workerId: wId, role: spec.name, providerId: provider.id, modelLabel, calls: 0, startedAt, endedAt: new Date().toISOString(), durationMs: Date.now() - started, files: [...filesTouched], tools: toolsUsed, error: { code: 'CALL_BUDGET', message: 'Parent task has no remaining call budget for a subagent.' } };
+      }
+      break;
+    }
     calls += 1;
-    try {
-      runtime.store?.updateTask?.(parentTask.id, cur => { cur.calls = (cur.calls || 0) + 1; return cur; });
-    } catch {}
     const subPrompt = [
       `Specialist role: ${spec.name}`,
       `Instructions: ${spec.instructions}`,

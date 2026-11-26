@@ -6658,9 +6658,6 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   margin: 0;
   gap: 5px;
   border-radius: 8px;
-  border: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
-  background: color-mix(in srgb, var(--panel-soft) 72%, transparent);
-  color: var(--text-secondary);
   font-family: var(--font);
   font-size: .75rem;
   font-weight: 500;
@@ -6668,6 +6665,16 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   letter-spacing: 0;
   white-space: nowrap;
   flex-shrink: 0;
+}
+:where(.composer-options .composer-option,
+.composer-options .plan-mode-switch,
+.composer-options .ultra-switch,
+.composer-options #composer-race,
+.composer-options #composer-effort,
+.composer-options #composer-model) {
+  border: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
+  background: color-mix(in srgb, var(--panel-soft) 72%, transparent);
+  color: var(--text-secondary);
 }
 .composer-options #composer-model {
   max-width: 215px;
@@ -6716,10 +6723,12 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   height: 15px;
 }
 /* Light / Alabaster unified composer pill clarity */
-:root[data-theme="light"] .composer-options .composer-option,
-:root[data-theme="light"] .composer-options #composer-race,
-:root[data-theme="light"] .composer-options #composer-effort,
-:root[data-theme="light"] .composer-options #composer-model {
+:root[data-theme="light"] :where(.composer-options .composer-option,
+.composer-options .plan-mode-switch,
+.composer-options .ultra-switch,
+.composer-options #composer-race,
+.composer-options #composer-effort,
+.composer-options #composer-model) {
   background: #f5f3f9;
   border-color: #dfdbe8;
   color: #2c2838;
@@ -6733,8 +6742,14 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   border-color: #c5bcd8;
   color: #181520;
 }
+:root[data-theme="light"] .composer-options .effort-switch[data-effort="fast"] {
+  background: #eaf7ee;
+  border-color: #9dd4af;
+  color: #1b5c34;
+}
 :root[data-theme="light"] .composer-options .effort-switch[data-effort="high"],
 :root[data-theme="light"] .composer-options .effort-switch[data-effort="max"],
+:root[data-theme="light"] .composer-options .plan-mode-switch.enabled,
 :root[data-theme="light"] .composer-options .ultra-switch.enabled,
 :root[data-theme="light"] .composer-options #composer-race.race-enabled {
   background: #efe8fc;

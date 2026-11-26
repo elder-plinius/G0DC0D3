@@ -2,7 +2,13 @@ import { spawn } from 'node:child_process';
 import { constants as fsConstants, promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { CLI_NO_TELEMETRY_ENV } from './privacy.mjs';
+import { CLI_NO_TELEMETRY_ENV, DEFAULT_PRIVACY_SETTINGS, environmentSecrets, redactOutboundText } from './privacy.mjs';
+import {
+  cliEnvironment,
+  claudeSubscriptionEnvironment,
+  copilotSubscriptionEnvironment,
+  geminiSubscriptionEnvironment
+} from './providers.mjs';
 import { loadBenchmarkMatrix, matchBenchmarkEntry, ROUTER_DOMAINS } from './ultra-router.mjs';
 import { providerDomainStats } from './learning.mjs';
 
@@ -139,10 +145,17 @@ export const EXTERNAL_HARNESSES = Object.freeze([
   }
 ]);
 
+const DISALLOWED_CLI_BINARIES = new Set([
+  'sh', 'bash', 'zsh', 'dash', 'ksh', 'csh', 'tcsh', 'fish',
+  'node', 'deno', 'bun', 'python', 'python3', 'perl', 'ruby', 'php', 'lua',
+  'awk', 'gawk', 'sed', 'osascript', 'env', 'sudo', 'su', 'xargs', 'exec', 'eval', 'rm', 'dd', 'curl', 'wget'
+]);
+
 async function checkCommandOnPath(cmd, env = process.env) {
   if (!cmd || !/^[a-z0-9._-]+$/i.test(cmd)) return null;
+  if (DISALLOWED_CLI_BINARIES.has(cmd.toLowerCase())) return null;
   const home = os.homedir();
-  const pathDirs = String(env.PATH || '').split(path.delimiter).filter(Boolean);
+  const pathDirs = String(env.PATH || '').split(path.delimiter).filter(dir => dir && path.isAbsolute(dir));
   const extras = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', path.join(home, '.local/bin'), path.join(home, '.npm-global/bin')];
   const seen = new Set();
   for (const dir of [...pathDirs, ...extras]) {
@@ -286,7 +299,11 @@ export function normalizeRosterAgent(input = {}, existing = null) {
   const engineType = ['api', 'harness', 'custom_cli'].includes(input.engineType) ? input.engineType : (input.harnessId ? 'harness' : 'api');
   const providerId = input.providerId ? String(input.providerId).trim().slice(0, 200) : null;
   const harnessId = input.harnessId && EXTERNAL_HARNESSES.some(h => h.id === input.harnessId) ? input.harnessId : null;
-  const harnessCommand = input.harnessCommand ? String(input.harnessCommand).trim().slice(0, 120) : null;
+  const rawCmd = input.harnessCommand ? String(input.harnessCommand).trim().slice(0, 120) : null;
+  if (rawCmd && (!/^[a-z0-9._-]+$/i.test(rawCmd) || DISALLOWED_CLI_BINARIES.has(rawCmd.toLowerCase()))) {
+    throw Object.assign(new Error('Harness command must be a safe CLI binary name (shells and scripting interpreters are disallowed).'), { code: 'INVALID_AGENT', status: 400 });
+  }
+  const harnessCommand = rawCmd;
   const primarySpecialty = VALID_DOMAINS.has(input.primarySpecialty) ? input.primarySpecialty : (existing?.primarySpecialty || 'swe_coding');
   const secondarySpecialty = VALID_DOMAINS.has(input.secondarySpecialty) ? input.secondarySpecialty : (existing?.secondarySpecialty || 'math_reasoning');
   const autonomy = VALID_AUTONOMY.has(input.autonomy) ? input.autonomy : (existing?.autonomy || 'read_only');
@@ -459,22 +476,46 @@ export async function resolveHarnessBinary(cmd, env = process.env) {
 export function buildHarnessInvocation(harnessId, harnessCommand, fullPrompt) {
   const known = harnessId ? EXTERNAL_HARNESSES.find(h => h.id === harnessId) : null;
   const cmdName = String(harnessCommand || known?.command || '').trim();
-  if (!cmdName || !/^[a-z0-9._-]+$/i.test(cmdName)) {
+  if (!cmdName || !/^[a-z0-9._-]+$/i.test(cmdName) || DISALLOWED_CLI_BINARIES.has(cmdName.toLowerCase())) {
     return null;
   }
+  // Never pass untrusted prompt text as unguarded flags; lock down tool/hook/MCP surfaces on supported CLIs
   if (harnessId === 'claude-code' || cmdName === 'claude') {
-    return { binName: cmdName, args: ['-p', fullPrompt, '--output-format', 'text'], stdinText: '' };
+    return {
+      binName: cmdName,
+      args: [
+        '--print', '--output-format', 'text',
+        '--tools', '', '--permission-mode', 'dontAsk',
+        '--setting-sources', '', '--settings', '{"disableAllHooks":true,"enabledPlugins":{}}',
+        '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
+        '--no-session-persistence'
+      ],
+      stdinText: fullPrompt,
+      envKind: 'claude'
+    };
   }
   if (harnessId === 'codex-cli' || cmdName === 'codex') {
-    return { binName: cmdName, args: ['exec', '--sandbox', 'read-only', fullPrompt], stdinText: '' };
+    return {
+      binName: cmdName,
+      args: [
+        'exec', '--sandbox', 'read-only', '--ephemeral', '--ignore-user-config',
+        '-c', 'approval_policy="never"', '-c', 'web_search="disabled"',
+        '-'
+      ],
+      stdinText: fullPrompt,
+      envKind: 'codex'
+    };
   }
   if (harnessId === 'gemini-cli' || cmdName === 'gemini') {
-    return { binName: cmdName, args: ['-p', fullPrompt], stdinText: '' };
+    return { binName: cmdName, args: ['-p', '--', fullPrompt], stdinText: '', envKind: 'gemini' };
   }
   if (harnessId === 'antigravity' || cmdName === 'agy') {
-    return { binName: cmdName, args: ['-p', fullPrompt], stdinText: '' };
+    return { binName: cmdName, args: ['-p', '--', fullPrompt], stdinText: '', envKind: 'gemini' };
   }
-  return { binName: cmdName, args: ['-p', fullPrompt], stdinText: fullPrompt };
+  if (harnessId === 'copilot-cli' || cmdName === 'copilot') {
+    return { binName: cmdName, args: ['-p', '--', fullPrompt], stdinText: '', envKind: 'copilot' };
+  }
+  return { binName: cmdName, args: ['--', fullPrompt], stdinText: fullPrompt, envKind: 'generic' };
 }
 
 export async function runExternalHarnessSubagent({
@@ -487,20 +528,33 @@ export async function runExternalHarnessSubagent({
   maxOutputBytes = 64 * 1024,
   signal = null,
   env = process.env,
+  outbound = null,
   onProgress = null,
   _overrideSpawnSpec = null
 } = {}) {
   const started = Date.now();
+  const privacy = outbound?.privacy || DEFAULT_PRIVACY_SETTINGS;
+  const shouldRedact = privacy.redactOutboundSecrets !== false;
+  const secretList = shouldRedact ? (outbound?.extraSecrets || environmentSecrets()) : [];
+  let secretsRedacted = 0;
+  const clean = (txt) => {
+    if (!shouldRedact || !txt) return String(txt || '');
+    const res = redactOutboundText(String(txt), secretList);
+    secretsRedacted += res.count;
+    return res.text;
+  };
+
   const fullPrompt = [
-    instructions ? `Role instructions: ${String(instructions).slice(0, 1500)}` : '',
+    instructions ? `Role instructions: ${clean(String(instructions).slice(0, 1500))}` : '',
     'Operating mode: STRICTLY READ-ONLY advisory specialist. Do not edit files or run destructive commands. Return a concise technical brief.',
-    `Task: ${String(prompt || '').slice(0, 4000)}`
+    `Task: ${clean(String(prompt || '').slice(0, 4000))}`
   ].filter(Boolean).join('\n\n');
 
   let binPath = null;
   let args = [];
   let stdinText = '';
   let harnessLabel = '';
+  let envKind = 'generic';
 
   if (_overrideSpawnSpec && typeof _overrideSpawnSpec.binPath === 'string' && Array.isArray(_overrideSpawnSpec.args)) {
     binPath = _overrideSpawnSpec.binPath;
@@ -510,7 +564,7 @@ export async function runExternalHarnessSubagent({
   } else {
     const inv = buildHarnessInvocation(harnessId, harnessCommand, fullPrompt);
     if (!inv) {
-      return { ok: false, code: 'HARNESS_INVALID_CMD', error: 'Invalid external harness command name (alphanumeric basename only).', durationMs: Date.now() - started };
+      return { ok: false, code: 'HARNESS_INVALID_CMD', error: 'Invalid external harness command name (alphanumeric basename only; shells disallowed).', durationMs: Date.now() - started };
     }
     binPath = await checkCommandOnPath(inv.binName, env);
     if (!binPath) {
@@ -518,9 +572,25 @@ export async function runExternalHarnessSubagent({
     }
     args = inv.args;
     stdinText = inv.stdinText;
+    envKind = inv.envKind || 'generic';
     const known = harnessId ? EXTERNAL_HARNESSES.find(h => h.id === harnessId) : null;
     harnessLabel = known ? `${known.shortName} · CLI` : `${inv.binName} · CLI`;
   }
+
+  const safeEnv = envKind === 'claude' ? claudeSubscriptionEnvironment(env)
+    : envKind === 'gemini' ? geminiSubscriptionEnvironment(env)
+    : envKind === 'copilot' ? copilotSubscriptionEnvironment(env)
+    : cliEnvironment(env);
+
+  outbound?.onOutbound?.({
+    providerId: `harness:${harnessId || path.basename(binPath)}`,
+    host: `cli:${path.basename(binPath)}`,
+    protocol: 'external_harness',
+    zdrClass: 'provider-policy',
+    zdrFlags: ['cli:telemetry-disabled'],
+    secretsRedacted,
+    blocked: false
+  });
 
   return new Promise((resolve) => {
     let stdout = '';
@@ -528,25 +598,43 @@ export async function runExternalHarnessSubagent({
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let settled = false;
-    let timedOut = false;
+    let killTimer = null;
 
     const child = spawn(binPath, args, {
-      cwd: workspace || process.cwd(),
-      env: { ...env, ...CLI_NO_TELEMETRY_ENV },
+      cwd: _overrideSpawnSpec ? (workspace || os.tmpdir()) : os.tmpdir(),
+      env: { ...safeEnv, ...CLI_NO_TELEMETRY_ENV },
       shell: false,
+      detached: process.platform !== 'win32',
       stdio: ['pipe', 'pipe', 'pipe']
     });
+
+    const terminate = () => {
+      const pid = child.pid;
+      if (!pid) return;
+      const sendSig = (sig) => {
+        try {
+          if (process.platform !== 'win32') process.kill(-pid, sig);
+          else child.kill(sig);
+        } catch {}
+      };
+      sendSig('SIGTERM');
+      if (!killTimer) {
+        killTimer = setTimeout(() => sendSig('SIGKILL'), 1200);
+        killTimer.unref?.();
+      }
+    };
 
     const finish = (res) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (killTimer) { clearTimeout(killTimer); killTimer = null; }
       if (signal) signal.removeEventListener('abort', onAbort);
       resolve(res);
     };
 
     const onAbort = () => {
-      try { child.kill('SIGTERM'); } catch {}
+      terminate();
       finish({ ok: false, code: 'HARNESS_CANCELLED', error: 'External harness subagent cancelled.', harnessLabel, durationMs: Date.now() - started });
     };
     if (signal) {
@@ -554,15 +642,15 @@ export async function runExternalHarnessSubagent({
       signal.addEventListener('abort', onAbort, { once: true });
     }
 
+    const boundedTimeout = Math.max(1000, Math.min(120000, Number(timeoutMs) || 45000));
     const timer = setTimeout(() => {
-      timedOut = true;
-      try { child.kill('SIGTERM'); } catch {}
-      setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 1500).unref?.();
-    }, Math.max(1000, Math.min(120000, Number(timeoutMs) || 45000)));
+      terminate();
+      finish({ ok: false, code: 'HARNESS_TIMEOUT', error: `${harnessLabel} timed out after ${Math.round(boundedTimeout / 1000)}s.`, harnessLabel, durationMs: Date.now() - started });
+    }, boundedTimeout);
     timer.unref?.();
 
     child.stdout.on('data', (chunk) => {
-      if (stdoutBytes >= maxOutputBytes) return;
+      if (settled || stdoutBytes >= maxOutputBytes) return;
       const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
       const slice = buf.subarray(0, maxOutputBytes - stdoutBytes);
       stdoutBytes += slice.length;
@@ -572,7 +660,7 @@ export async function runExternalHarnessSubagent({
       }
     });
     child.stderr.on('data', (chunk) => {
-      if (stderrBytes >= 16384) return;
+      if (settled || stderrBytes >= 16384) return;
       const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
       const slice = buf.subarray(0, 16384 - stderrBytes);
       stderrBytes += slice.length;
@@ -584,11 +672,8 @@ export async function runExternalHarnessSubagent({
     });
 
     child.on('close', (code) => {
+      if (killTimer) { clearTimeout(killTimer); killTimer = null; }
       const durationMs = Date.now() - started;
-      if (timedOut) {
-        finish({ ok: false, code: 'HARNESS_TIMEOUT', error: `${harnessLabel} timed out after ${Math.round(timeoutMs / 1000)}s.`, harnessLabel, durationMs });
-        return;
-      }
       const trimmed = stdout.trim();
       if (code === 0 && trimmed) {
         finish({ ok: true, output: trimmed.slice(0, 12000), harnessLabel, binName: path.basename(binPath), durationMs });

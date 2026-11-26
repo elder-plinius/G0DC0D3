@@ -8,6 +8,7 @@ import { promises as fs, constants as fsConstants } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Store } from './store.mjs';
 import { Broker, snapshotWorkspace, sha256, taskTools, conversationWithoutChecks, bindVerification, stableJson, evaluateBounded, scopedPath, READ_ONLY_TOOLS } from './broker.mjs';
+import { validateTool } from './tool-schema.mjs';
 import { diagnoseIncident, detectRefusal, rankCandidates, providerIdentity, candidateEligibility, requestProfile, providerTier } from './routing.mjs';
 import { learningContext, inferModelFamily, bestStrategyForFamily, extractDeclineSignature } from './learning.mjs';
 import {
@@ -696,36 +697,39 @@ export class Runtime {
     if (subs) for (const cb of subs) try { cb(event); } catch {}
   }
   async queueWorkerSteer(taskId, workerId, message) {
-    const text = String(message || '').trim();
+    const cleanWorkerId = typeof workerId === 'string' ? workerId.trim().slice(0, 128) : '';
+    if (!cleanWorkerId) throw fault('INVALID_MESSAGE', 'Worker identifier is required.');
+    const text = String(message || '').trim().slice(0, 2000);
     if (!text) throw fault('INVALID_MESSAGE', 'Steer message cannot be empty.');
     const task = this.getTask(taskId);
-    const key = `${taskId}:${workerId}`;
-    const list = this._workerSteers.get(key) || [];
-    list.push(text.slice(0, 2000));
-    this._workerSteers.set(key, list.slice(-6));
     const activeMap = this.activeSubagents.get(taskId);
-    if (activeMap?.has(workerId)) {
-      this._emitStream(taskId, { type: 'pantheon.steered', workerId, message: text, target: 'subagent' });
-      return { ok: true, target: 'subagent', workerId, queued: list.length };
+    if (activeMap?.has(cleanWorkerId)) {
+      const key = `${taskId}:${cleanWorkerId}`;
+      const next = [...(this._workerSteers.get(key) || []), text].slice(-6);
+      this._workerSteers.set(key, next);
+      this._emitStream(taskId, { type: 'pantheon.steered', workerId: cleanWorkerId, message: text, target: 'subagent' });
+      return { ok: true, target: 'subagent', workerId: cleanWorkerId, queued: next.length };
     }
     const crew = this.crew?.record(taskId);
-    if (crew && Object.values(crew.members || {}).includes(workerId)) {
-      const workerTask = this.store.getTask(workerId);
-      if (workerTask && active.has(workerTask.status)) {
-        const pending = { id: randomUUID(), message: text, createdAt: new Date().toISOString(), mode: 'steer' };
-        this.store.updateTask(workerId, cur => ({ ...cur, pendingMessages: [...(cur.pendingMessages || []), pending] }), 'user.message.queued', { ...pending, source: 'owner' });
+    if (crew && Object.values(crew.members || {}).includes(cleanWorkerId)) {
+      const roleEntry = Object.entries(crew.members || {}).find(([, wid]) => wid === cleanWorkerId);
+      const crewRole = roleEntry?.[0] || 'worker';
+      if (crewRole === 'verifier') {
+        throw fault('INVALID_STEER', 'Independent verifier checks cannot be steered mid-run.');
       }
-      this._emitStream(taskId, { type: 'pantheon.steered', workerId, message: text, target: 'crew_worker' });
-      return { ok: true, target: 'crew_worker', workerId, queued: list.length };
+      // Record crew steer out-of-band without mutating pendingMessages (which would invalidate contractVersion)
+      this.store.appendEvent(taskId, 'pantheon.steered', { workerId: cleanWorkerId, role: crewRole, message: text, target: 'crew_worker' });
+      this._emitStream(taskId, { type: 'pantheon.steered', workerId: cleanWorkerId, role: crewRole, message: text, target: 'crew_worker' });
+      return { ok: true, target: 'crew_worker', workerId: cleanWorkerId, queued: 1 };
     }
     if (active.has(task.status)) {
-      const res = await this.submitMessage(task.id, `[Pantheon steer → ${workerId}] ${text}`, undefined, 'steer');
-      this._emitStream(taskId, { type: 'pantheon.steered', workerId, message: text, target: 'orchestrator' });
-      return { ok: true, target: 'orchestrator', workerId, queued: res.task?.pendingMessages?.length || 1 };
+      const res = await this.submitMessage(task.id, `[Conclave steer → ${cleanWorkerId}] ${text}`, undefined, 'steer');
+      this._emitStream(taskId, { type: 'pantheon.steered', workerId: cleanWorkerId, message: text, target: 'orchestrator' });
+      return { ok: true, target: 'orchestrator', workerId: cleanWorkerId, queued: res.task?.pendingMessages?.length || 1 };
     }
-    this.store.appendEvent(taskId, 'pantheon.steered', { workerId, message: text, target: 'note' });
-    this._emitStream(taskId, { type: 'pantheon.steered', workerId, message: text, target: 'note' });
-    return { ok: true, target: 'note', workerId, queued: list.length };
+    this.store.appendEvent(taskId, 'pantheon.steered', { workerId: cleanWorkerId, message: text, target: 'note' });
+    this._emitStream(taskId, { type: 'pantheon.steered', workerId: cleanWorkerId, message: text, target: 'note' });
+    return { ok: true, target: 'note', workerId: cleanWorkerId, queued: 1 };
   }
   drainWorkerSteer(taskId, workerId) {
     const key = `${taskId}:${workerId}`;
@@ -735,6 +739,7 @@ export class Runtime {
     return list;
   }
   async _executeAgentSpawn(id, epoch, call, signal) {
+    validateTool('agent.spawn', call.args || {});
     const workerId = String(call.id || `sub-${Date.now().toString(36)}`);
     const role = String(call.args?.role || 'explore').trim() || 'explore';
     const promptPreview = String(call.args?.prompt || '').slice(0, 400);
@@ -749,6 +754,7 @@ export class Runtime {
     activeMap.set(workerId, initialState);
     this.store.appendEvent(id, 'subagent.started', { workerId, callId: call.id, role, prompt: promptPreview, startedAt });
     this._emitStream(id, { type: 'subagent.started', worker: initialState });
+    let finished = false;
     try {
       const result = await runSpecialistSubagent({
         runtime: this,
@@ -759,6 +765,7 @@ export class Runtime {
         workerId,
         signal,
         onProgress: (prog) => {
+          if (finished) return;
           const merged = { ...initialState, ...prog, kind: 'subagent', callId: call.id, prompt: promptPreview };
           activeMap.set(workerId, merged);
           this._emitStream(id, { type: 'subagent.progress', worker: merged });
@@ -776,8 +783,10 @@ export class Runtime {
       this._emitStream(id, { type: 'subagent.completed', worker: { ...initialState, ...result, status: result?.ok ? 'completed' : 'failed' } });
       return result;
     } finally {
+      finished = true;
       activeMap.delete(workerId);
       if (activeMap.size === 0) this.activeSubagents.delete(id);
+      this._workerSteers.delete(`${id}:${workerId}`);
     }
   }
   getPantheonState(taskId) {
@@ -801,11 +810,11 @@ export class Runtime {
           role: d.role || 'explore', prompt: d.prompt || '',
           status: 'thinking', providerId: null, modelLabel: null,
           tool: '', target: '', files: [], tools: [], streamTail: '',
-          summary: '', calls: 0, startedAt: d.startedAt || ev.at, endedAt: null, durationMs: 0
+          summary: '', calls: 0, startedAt: d.startedAt || ev.time, endedAt: null, durationMs: 0
         });
       } else if (ev.type === 'subagent.completed') {
         const wId = d.workerId || d.callId || `sa-${ev.seq}`;
-        const prev = workersById.get(wId) || { workerId: wId, kind: 'subagent', role: d.role || 'explore', startedAt: d.startedAt || ev.at };
+        const prev = workersById.get(wId) || { workerId: wId, kind: 'subagent', role: d.role || 'explore', startedAt: d.startedAt || ev.time };
         workersById.set(wId, {
           ...prev,
           role: d.role || prev.role || 'explore',
@@ -818,12 +827,12 @@ export class Runtime {
           summary: d.summary || d.error?.message || '',
           streamTail: String(d.summary || d.error?.message || '').slice(-360),
           startedAt: d.startedAt || prev.startedAt,
-          endedAt: d.endedAt || ev.at,
+          endedAt: d.endedAt || ev.time,
           durationMs: d.durationMs || 0
         });
       } else if (ev.type === 'model.switched' || ev.type === 'routing.reframe_retry') {
         failovers.push({
-          type: ev.type, at: ev.at,
+          type: ev.type, at: ev.time,
           from: d.from || d.providerId || null,
           to: d.to || d.providerId || null,
           reason: d.reason || d.level || 'GODMODƎ recovery'
@@ -880,14 +889,14 @@ export class Runtime {
       const latestDispatch = [...raceEvents].reverse().find(e => e.type === 'race.dispatched' && e.data?.stage === 'draft');
       const raceId = latestDispatch?.data?.raceId || null;
       const relevantResults = raceEvents.filter(e => e.type === 'race.result' && (!raceId || e.data?.raceId === raceId));
-      const latestScorecard = [...raceEvents].reverse().find(e => e.type === 'model.response' && e.data?.scorecard)?.data?.scorecard || null;
+      const latestScorecard = [...raceEvents].reverse().find(e => e.type === 'model.response' && e.data?.scorecard && (!raceId || e.data.scorecard.raceId === raceId))?.data?.scorecard || null;
       const contenderIds = latestDispatch?.data?.models || task.answerRace?.models || [];
       const judgeId = latestScorecard?.judgeId || task.answerRace?.judge || null;
       const contenders = contenderIds.map((pid, idx) => {
         const resEv = relevantResults.find(e => e.data?.stage === 'draft' && e.data?.providerId === pid);
         const grade = latestScorecard?.grades?.find(g => g.providerId === pid) || null;
         return {
-          slot: ['A', 'B'][idx] || String(idx + 1),
+          slot: ['A', 'B', 'C', 'D'][idx] || String(idx + 1),
           providerId: pid,
           label: providerLabel(pid) || pid,
           status: resEv ? (resEv.data.status === 'done' ? 'completed' : resEv.data.status) : (active.has(task.status) ? 'streaming' : 'queued'),
@@ -959,9 +968,13 @@ export class Runtime {
               let additions = 0;
               let deletions = 0;
               if (typeof c.patch === 'string' && c.patch) {
+                let inHunk = false;
                 for (const line of c.patch.split('\n')) {
-                  if (line.startsWith('+') && !line.startsWith('+++')) additions += 1;
-                  else if (line.startsWith('-') && !line.startsWith('---')) deletions += 1;
+                  if (line.startsWith('@@ ')) { inHunk = true; continue; }
+                  if (line.startsWith('diff --git ') || line.startsWith('+++ ') || line.startsWith('--- ')) { inHunk = false; continue; }
+                  if (!inHunk) continue;
+                  if (line.startsWith('+')) additions += 1;
+                  else if (line.startsWith('-')) deletions += 1;
                 }
               }
               const status = appliedId === c.id ? 'applied' : c.patch ? 'ready' : c.error ? 'failed' : building ? 'building' : 'queued';
@@ -1022,7 +1035,11 @@ export class Runtime {
       : mode === 'diff_race'
         ? diffDone
         : workers.filter(w => w.status === 'completed').length;
-    const failedCount = workers.filter(w => w.status === 'failed').length;
+    const failedCount = mode === 'arena'
+      ? arenaContenders.filter(c => ['failed', 'declined'].includes(c.status)).length
+      : mode === 'diff_race'
+        ? (worktreeRace?.candidates || []).filter(c => c.status === 'failed').length
+        : workers.filter(w => w.status === 'failed').length;
 
     // Crown ★ MVP on completed multi-worker swarms (highest signal + fastest delivery)
     if (workers.length >= 2 && activeCount === 0) {
@@ -1055,7 +1072,11 @@ export class Runtime {
       fileConflicts,
       pendingApproval: task.pendingApproval || null,
       stats: {
-        totalWorkers: mode === 'diff_race' ? (worktreeRace?.candidates?.length || 0) : workers.length,
+        totalWorkers: mode === 'arena'
+          ? (arenaContenders.length + (arena?.judge ? 1 : 0))
+          : mode === 'diff_race'
+            ? (worktreeRace?.candidates?.length || 0)
+            : workers.length,
         activeWorkers: activeCount,
         completedWorkers: completedCount,
         failedWorkers: failedCount,
@@ -2997,7 +3018,7 @@ export class Runtime {
       if (!p || p.kind === 'scripted' || p.available === false || p.closed) continue;
       if (!checkProviderPrivacyAllowed(p, privacy).allowed) continue;
       seen.add(p.id);
-      candidates.push({ id: p.id, label: p.label, model: p.model, kind: p.kind, tier: p.tier, baseUrl: p.baseUrl, supportsFunctionCalling: p.modelMetadata ? Boolean(p.modelMetadata.supportsFunctionCalling) : true, available: true });
+      candidates.push({ id: p.id, label: p.label, model: p.model, kind: p.kind, tier: p.tier, baseUrl: p.baseUrl, supportsFunctionCalling: p.modelMetadata?.supportsFunctionCalling !== undefined ? Boolean(p.modelMetadata.supportsFunctionCalling) : true, available: true });
     }
     if (workspaceKind === 'conversation' && this.catalog) {
       const catList = await this.catalog.list().catch(() => null);
@@ -3034,16 +3055,22 @@ export class Runtime {
     const cls = decision?.domain
       ? { primaryDomain: decision.domain, secondaryDomain: decision.secondaryDomain || null, refusalRisk: decision.refusalRisk || 0 }
       : classifyPromptDomain(text, { files, attachments });
-    const targetProvider = providerId ? (this.providers.get(providerId) || this.catalog?.get?.(providerId) || null) : null;
-    const modelFamily = detectModelFamily(targetProvider || providerId || '');
+    const privacy = this.getPrivacy().settings;
+    const isEligibleArchitect = (p) => Boolean(p && p.kind !== 'scripted' && p.available !== false && !p.closed && (typeof p.draft === 'function' || typeof p.turn === 'function') && checkProviderPrivacyAllowed(p, privacy).allowed);
+    const rawTarget = providerId ? (this.providers.get(providerId) || this.catalog?.get?.(providerId) || null) : null;
+    const targetProvider = isEligibleArchitect(rawTarget) ? rawTarget : null;
+    const modelFamily = detectModelFamily(rawTarget || providerId || '');
     if (shouldAutoForge({ objective: text, domain: cls.primaryDomain, effort, isFirstTurn: true, mode })) {
       const overseer = this._resolveOverseer?.();
-      const architect = overseer?.provider || targetProvider || [...this.providers.values()].find(p => p && p.available !== false && !p.closed && (typeof p.draft === 'function' || typeof p.turn === 'function')) || null;
+      const architect = (isEligibleArchitect(overseer?.provider) ? overseer.provider : null)
+        || targetProvider
+        || [...this.providers.values()].find(isEligibleArchitect)
+        || null;
       return forgeTaskMegaprompt({
         objective: text,
         domain: cls.primaryDomain,
         modelFamily,
-        targetProvider,
+        targetProvider: rawTarget,
         architectProvider: architect,
         effort,
         workspaceKind,
@@ -3060,20 +3087,29 @@ export class Runtime {
       modelFamily,
       effort,
       workspaceKind,
-      providerLabel: targetProvider?.label || providerId || null
+      providerLabel: rawTarget?.label || providerId || null
     });
   }
   async forgeMetapromptPreview({ objective = '', domain = null, providerId = null, effort = 'medium', workspaceKind = 'conversation' } = {}) {
     const text = String(objective || '').trim();
     if (!text) throw fault('INVALID_MESSAGE', 'Provide a prompt to forge.');
-    const targetProvider = providerId ? (this.providers.get(providerId) || this.catalog?.get?.(providerId) || null) : null;
+    if (domain !== null && domain !== undefined && domain !== '' && !ROUTER_DOMAINS.some(d => d.id === domain)) {
+      throw fault('INVALID_DOMAIN', `Unknown domain: ${String(domain).slice(0, 64)}`);
+    }
+    const privacy = this.getPrivacy().settings;
+    const isEligibleArchitect = (p) => Boolean(p && p.kind !== 'scripted' && p.available !== false && !p.closed && (typeof p.draft === 'function' || typeof p.turn === 'function') && checkProviderPrivacyAllowed(p, privacy).allowed);
+    const rawTarget = providerId ? (this.providers.get(providerId) || this.catalog?.get?.(providerId) || null) : null;
+    const targetProvider = isEligibleArchitect(rawTarget) ? rawTarget : null;
     const overseer = this._resolveOverseer?.();
-    const architect = overseer?.provider || targetProvider || [...this.providers.values()].find(p => p && p.available !== false && !p.closed && (typeof p.draft === 'function' || typeof p.turn === 'function')) || null;
+    const architect = (isEligibleArchitect(overseer?.provider) ? overseer.provider : null)
+      || targetProvider
+      || [...this.providers.values()].find(isEligibleArchitect)
+      || null;
     return forgeTaskMegaprompt({
       objective: text,
       domain: domain || null,
-      modelFamily: detectModelFamily(targetProvider || architect || ''),
-      targetProvider,
+      modelFamily: detectModelFamily(rawTarget || architect || ''),
+      targetProvider: rawTarget,
       architectProvider: architect,
       effort,
       workspaceKind,
@@ -3426,6 +3462,9 @@ export class Runtime {
     }
     const result = this.store.purgeTask(id);
     this._streamSubs.delete(id);
+    for (const key of [...this._workerSteers.keys()]) {
+      if (key.startsWith(`${id}:`)) this._workerSteers.delete(key);
+    }
     await this.broker.browser.closeSession(id).catch(() => {});
     // Only delete workspaces created inside this runtime's managed workspaces directory.
     let managedRoot = resolve(this.store.dataDir, 'workspaces') + sep;

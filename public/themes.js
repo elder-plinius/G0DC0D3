@@ -147,7 +147,7 @@
     canvas.height = Math.round(height * dpr);
     if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     if (engine?.resize) engine.resize(width, height);
-    if (engine && rafId === null) engine.step(0.05, 1.2);
+    if (engine && rafId === null) engine.step(0.25, 1.2);
   }
 
   /* ── 1. Dragon Realm Engine: articulated winged dragons + fire breath + embers ── */
@@ -332,7 +332,19 @@
     }
 
     return {
-      resize() {},
+      resize() {
+        const minY = 70;
+        const maxY = Math.max(190, height - 110);
+        for (const d of dragons) {
+          d.baseY = Math.max(minY, Math.min(maxY, d.baseY));
+          d.y = d.baseY;
+          if (d.x > width + 240 * d.scale) d.x = Math.random() * width;
+        }
+        for (const e of embers) {
+          e.x = Math.random() * width;
+          e.y = Math.random() * height;
+        }
+      },
       step(dt, t) {
         const bg = ctx.createLinearGradient(0, 0, 0, height);
         bg.addColorStop(0, '#0a0507');
@@ -818,7 +830,7 @@
     init();
 
     return {
-      resize() {},
+      resize() { init(); },
       step(dt, t) {
         const bg = ctx.createLinearGradient(0, 0, 0, height);
         bg.addColorStop(0, '#0d0706');
@@ -1339,7 +1351,7 @@
     if (!engine) return;
 
     // Always paint an immediate initial frame (even under prefers-reduced-motion or user pause!)
-    engine.step(0.05, 1.2);
+    engine.step(0.25, 1.2);
     document.documentElement.dataset.themeMotion = (reducedMotion.matches || motionPaused) ? 'paused' : 'live';
     if (reducedMotion.matches || motionPaused) return;
 
@@ -1510,6 +1522,7 @@
     matchByQuery(q) {
       const s = String(q || '').trim().toLowerCase();
       if (!s) return null;
+      if (['vesuvius', 'vesuvian', 'plinian', 'lava', 'magma', 'volcano'].includes(s)) return byId.get('volcano');
       if (['roman', 'greek', 'greco', 'greco-roman', 'marble', 'classical', 'rome', 'athens', 'spqr'].includes(s)) return byId.get('ancient');
       if (['astral', 'cosmos', 'cosmic', 'space', 'stars', 'galaxy', 'nebula', 'observatory', 'astrolabe'].includes(s)) return byId.get('celestial');
       return THEMES.find(t => t.id === s || t.short.toLowerCase() === s || t.name.toLowerCase().includes(s)) || null;

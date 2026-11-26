@@ -690,6 +690,7 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
           return send(res, 200, runtime.getPantheonState(id));
         }
         if (req.method === 'POST' && subAction === 'steer') {
+          if (runtime.getTask(id).crewMember) throw Object.assign(new Error('Control crew workers through their parent conversation.'), { code: 'CREW_MEMBER', status: 400 });
           const body = await readBody(req);
           const result = await runtime.queueWorkerSteer(id, body.workerId || 'orchestrator', body.message || '');
           return send(res, 200, { ...result, pantheon: runtime.getPantheonState(id) });

@@ -1,4 +1,5 @@
 import { classifyPromptDomain, ROUTER_DOMAINS } from './ultra-router.mjs';
+import { checkProviderPrivacyAllowed, DEFAULT_PRIVACY_SETTINGS } from './privacy.mjs';
 
 export const METACOGNITION_MODES = Object.freeze(['off', 'smart', 'auto_forge']);
 
@@ -241,8 +242,9 @@ export async function forgeTaskMegaprompt({
   timeoutMs = 14000
 } = {}) {
   const started = Date.now();
-  const classification = domain
-    ? { primaryDomain: domain, secondaryDomain: null, refusalRisk: 0 }
+  const validDomain = domain && Object.hasOwn(DOMAIN_PROTOCOLS, domain) ? domain : null;
+  const classification = validDomain
+    ? { primaryDomain: validDomain, secondaryDomain: null, refusalRisk: 0 }
     : classifyPromptDomain(objective, { files, attachments });
   const dom = classification.primaryDomain;
   const fam = modelFamily || detectModelFamily(targetProvider || architectProvider || '');
@@ -257,7 +259,8 @@ export async function forgeTaskMegaprompt({
   });
 
   const runner = architectProvider || targetProvider;
-  if (!runner || runner.available === false || runner.closed) {
+  const privacy = outbound?.privacy || DEFAULT_PRIVACY_SETTINGS;
+  if (!runner || runner.available === false || runner.closed || runner.kind === 'scripted' || !checkProviderPrivacyAllowed(runner, privacy).allowed) {
     return { ...fallback, fallbackReason: 'no_architect_provider' };
   }
 

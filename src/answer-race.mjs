@@ -1,7 +1,8 @@
 import { randomInt } from 'node:crypto';
 import { catalogMessages, stitchContinuation } from './providers.mjs';
 import { displayReplyOutcome } from './outcomes.mjs';
-import { detectRefusal } from './routing.mjs';
+import { checkProviderPrivacyAllowed, DEFAULT_PRIVACY_SETTINGS } from './privacy.mjs';
+import { detectRefusal, providerIdentity } from './routing.mjs';
 import { reframe as reframeObjective } from './reframe.mjs';
 import { isCatalogModel } from './venice-catalog.mjs';
 import { classifyPromptDomain } from './ultra-router.mjs';
@@ -51,7 +52,8 @@ function judgeTokenBound(judge) {
   return Math.min(ceiling, 1200);
 }
 
-async function findUncensoredCatalogFallback(runtime, excludeIds = []) {
+async function findUncensoredCatalogFallback(runtime, excludeIds = [], privacy = DEFAULT_PRIVACY_SETTINGS) {
+  if (privacy?.localOnly) return null;
   const excluded = new Set(excludeIds);
   const catalogList = await runtime.catalog?.list?.().catch(() => null);
   const available = (catalogList?.models || []).filter(m => m?.id && !excluded.has(m.id));
@@ -69,13 +71,13 @@ async function findUncensoredCatalogFallback(runtime, excludeIds = []) {
   for (const id of preferred) {
     if (!excluded.has(id)) {
       const model = runtime.catalog?.get(id);
-      if (model?.draft) return model;
+      if (model?.draft && checkProviderPrivacyAllowed(model, privacy).allowed) return model;
     }
   }
   const fuzzy = available.find(m => /uncensored|abliterat|heretic/i.test(`${m.id} ${m.model} ${m.label}`));
   if (fuzzy) {
     const model = runtime.catalog?.get(fuzzy.id);
-    if (model?.draft) return model;
+    if (model?.draft && checkProviderPrivacyAllowed(model, privacy).allowed) return model;
   }
   return null;
 }
@@ -147,7 +149,7 @@ export async function runAnswerRace(runtime, task, epoch, signal) {
       let hops = 0;
       while (contFinish === 'length' && hops < maxContHops && current() && !superseded()) {
         const latestTask = runtime.getTask(id);
-        if (latestTask.calls >= latestTask.policy.maxCalls) break;
+        if (latestTask.calls + 1 >= latestTask.policy.maxCalls) break;
         hops += 1;
         runtime.store.updateTask(id, t => { t.calls += 1; return t; }, 'routing.auto_continued', {
           providerId: model.id, hop: hops, maxContinuations: maxContHops, totalChars: stitched.length, raceId,
@@ -170,7 +172,8 @@ export async function runAnswerRace(runtime, task, epoch, signal) {
     const declined = displayReplyOutcome(response)?.kind === 'declined' || (stage === 'draft' && Boolean(detectRefusal(response, { learnedPatterns })));
     const status = signal.aborted ? 'interrupted' : declined ? 'declined' : response.type==='message' ? response.finish : response.code;
     const durationMs=Math.round(performance.now()-start);
-    if (Number.isFinite(response.retryAfterMs)) runtime.store.recordProviderDelay(id,'venice:direct-chat',Math.min(Number.MAX_SAFE_INTEGER,Date.now()+response.retryAfterMs));
+    const delayKey = isCatalogModel(model.id) ? 'venice:direct-chat' : providerIdentity(model.id, model);
+    if (Number.isFinite(response.retryAfterMs)) runtime.store.recordProviderDelay(id, delayKey, Math.min(Number.MAX_SAFE_INTEGER, Date.now() + response.retryAfterMs));
     runtime.store.appendEvent(id,'race.result',{raceId,stage,providerId:model.id,status,durationMs,httpStatus:response.httpStatus});
     runtime._emitStream(id, { type: 'race.result', raceId, stage, providerId: model.id, label: model.label || model.model || model.id, status, durationMs });
     return {response,declined,durationMs,providerId:model.id};
@@ -178,8 +181,12 @@ export async function runAnswerRace(runtime, task, epoch, signal) {
   function incomplete(results) {
     const decline=results.find(r=>r.declined);
     if (decline) return stop('RACE_DECLINED','A model declined this turn. The comparison stopped.');
-    const wait=runtime.getTask(id).providerNotBefore?.['venice:direct-chat'];
-    if (wait>Date.now()) return stop('VENICE_RETRY_AFTER','Venice requested a wait before another comparison.',{retryAt:wait});
+    const notBeforeMap = runtime.getTask(id).providerNotBefore || {};
+    const activeDelay = Object.entries(notBeforeMap).find(([, ts]) => ts > Date.now());
+    if (activeDelay) {
+      const isVenice = activeDelay[0] === 'venice:direct-chat';
+      return stop(isVenice ? 'VENICE_RETRY_AFTER' : 'RATE_LIMIT', isVenice ? 'Venice requested a wait before another comparison.' : 'A provider requested a brief cooldown before retrying.', { retryAt: activeDelay[1] });
+    }
     const failed=results.find(r=>r.response.type!=='message' || r.response.finish!=='done');
     if (failed) return stop(failed.response.code || 'RACE_INCOMPLETE',failed.response.message || 'A complete response was unavailable. See Activity for the model outcome.',{providerId:failed.providerId});
     return null;
@@ -208,7 +215,7 @@ export async function runAnswerRace(runtime, task, epoch, signal) {
     const hasRecoveryRoom = (latestState.recoveries || 0) < (latestState.policy.maxAttempts || 0);
     if (hasCallRoom && hasRecoveryRoom) {
       // 1) If a writer hit VENICE_OUTPUT_LIMIT with higher ceiling available, retry it once with boosted ceiling
-      const limitedIdx = drafts.findIndex((d, i) => d.response?.code === 'VENICE_OUTPUT_LIMIT' && (models[i]?.maxOutputTokensCeiling || 0) > draftTokenBound(models[i]));
+      const limitedIdx = drafts.findIndex((d, i) => ['VENICE_OUTPUT_LIMIT', 'output_limit'].includes(d.response?.code) && (models[i]?.maxOutputTokensCeiling || 0) > draftTokenBound(models[i]));
       if (limitedIdx >= 0) {
         const target = models[limitedIdx];
         const boostedLimit = Math.min(target.maxOutputTokensCeiling, Math.max(draftTokenBound(target) * 2, 32768));
@@ -231,8 +238,9 @@ export async function runAnswerRace(runtime, task, epoch, signal) {
       // 2) If writers declined or failed, recover via an uncensored Venice catalog fallback
       const afterStep1 = runtime.getTask(id);
       const stillRoom = afterStep1.calls < afterStep1.policy.maxCalls && (afterStep1.recoveries || 0) < (afterStep1.policy.maxAttempts || 0);
-      if (stillRoom && drafts.some(d => d.declined || d.response?.code === 'VENICE_OUTPUT_LIMIT')) {
-        const fallback = await findUncensoredCatalogFallback(runtime, ids);
+      if (stillRoom && drafts.some(d => d.declined || ['VENICE_OUTPUT_LIMIT', 'output_limit'].includes(d.response?.code))) {
+        const privacy = runtime.outboundOptions?.()?.privacy || DEFAULT_PRIVACY_SETTINGS;
+        const fallback = await findUncensoredCatalogFallback(runtime, ids, privacy);
         if (fallback) {
           runtime.store.updateTask(id, t => { t.recoveries += 1; return t; }, 'model.switched', {
             from: ids.join(', '), to: fallback.id, reason: 'RACE_GODMODE_RECOVERY'

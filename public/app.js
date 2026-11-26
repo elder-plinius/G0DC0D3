@@ -596,7 +596,7 @@ function renderComposer() {
   setText('#composer-project-label', task?.codeWorkspace ? task.codeWorkspace.repository : label || (task?.workspaceKind === 'conversation' ? 'Attach repository' : 'Add project'));
   const preferred = providerById(newConversationProviders()[0]);
   const race = task ? task.answerRace : RecoveryUI.preferences().answerRace;
-  setText('#composer-model-label', race ? '2 arena writers' : task ? providerById(task.providerId)?.label || task.providerId || 'Model' : preferred?.label || 'Connect model');
+  setText('#composer-model-label', race ? `${race.models?.length || 2} arena writers` : task ? providerById(task.providerId)?.label || task.providerId || 'Model' : preferred?.label || 'Connect model');
   $('#composer-project').title = task?.workspaceKind === 'conversation' ? (task.codeWorkspace ? 'Open GodCode in this chat' : 'Attach a repository to this chat') : task ? 'Project locations and working copy' : 'Start a new task in a project copy';
   setVisible('#composer-permissions', true);
   const permRulesNow = task && Array.isArray(task.permissionRules)
@@ -1993,7 +1993,7 @@ async function loadVeniceCatalog(force = false) {
   renderComposer();
 }
 function renderVeniceCatalog() {
-  const task = settingsTaskId ? selectedData?.task : null;
+  const task = typeof settingsTask === 'function' ? settingsTask() : (settingsTaskId ? selectedData?.task : null);
   renderRaceOptions(task);
   const saved = task ? taskProviders(task) : newConversationProviders();
   const primary = task?.providerId || saved[0];
@@ -2660,7 +2660,7 @@ function renderUltraRouterSection() {
     ['off', 'Off', 'Use your manually selected model & waterfall.'],
     ['auto_route', 'Auto-Route (Best Model)', 'Picks the highest-scoring endpoint per task domain & routes away from refusals.'],
     ['auto_arena', 'Auto-Arena (2–4 Models + Judge)', 'Races your top 2–4 distinct model families & trains your personal Elo from the blind judge.'],
-    ['manual_arena', 'Manual Arena', 'Race any two connected models & judge below.']
+    ['manual_arena', 'Manual Arena', 'Race any 2–4 connected models & judge below.']
   ];
   const domainTabs = domains.map(d => `<button type="button" class="ultra-domain-tab ${d.id === activeDom ? 'active' : ''}" data-router-domain="${escapeHTML(d.id)}" title="${escapeHTML(d.description)}">${escapeHTML(d.shortLabel)}</button>`).join('');
   const boardHtml = activeRows.length
@@ -3463,7 +3463,7 @@ function renderTimeline(events, total, task) {
     const recent = [...events].reverse().find(e => ['model.request', 'tool.started', 'evaluation.started', 'routing.auto_continued'].includes(e.type));
     const activeProvLabel = providerById(task.providerId)?.label || task.providerId || '';
     const phase = task.answerRace
-      ? (events.findLast(e => e.type === 'race.dispatched')?.data.stage === 'grade' ? 'Grading parallel drafts' : 'Drafting with 2 Arena writers')
+      ? (events.findLast(e => e.type === 'race.dispatched')?.data.stage === 'grade' ? 'Grading parallel drafts' : `Drafting with ${task.answerRace.models?.length || 2} Arena writers`)
       : recent?.type === 'routing.auto_continued'
         ? 'Continuing output'
         : task.status === 'verifying'
@@ -6786,7 +6786,7 @@ function renderUltraPopover() {
     <div class="ultra-pop-seg-row" aria-label="Arena contender count">
       <span class="ultra-pop-seg-label">Contenders</span>
       <div class="ultra-pop-seg-pills">
-        ${[2, 3, 4].map(n => `<button type="button" class="ultra-pop-pill${arenaSize === n && mode !== 'manual_arena' ? ' active' : ''}" data-ultra-arena-size="${n}" ${ultraRouterBusy || (n > Math.max(2, totalLiveModels)) ? 'disabled' : ''}>${n}×</button>`).join('')}
+        ${[2, 3, 4].map(n => `<button type="button" class="ultra-pop-pill${mode === 'auto_arena' && arenaSize === n ? ' active' : ''}" data-ultra-arena-size="${n}" ${ultraRouterBusy || (n > Math.max(2, totalLiveModels)) ? 'disabled' : ''}>${n}×</button>`).join('')}
       </div>
     </div>` : '';
 
@@ -6852,8 +6852,10 @@ $('#ultra-popover')?.addEventListener('click', async event => {
   if (openSettingsBtn) {
     closeUltraPopover();
     await openSettings('models', { subtab: 'routing' });
-    const targetId = openSettingsBtn.dataset.ultraOpenSettings === 'arena' ? '#race-options' : '#ultra-router-section';
-    const target = $(targetId) || $('#ultra-router-section');
+    const raceEl = $('#race-options');
+    const target = (openSettingsBtn.dataset.ultraOpenSettings === 'arena' && raceEl && !raceEl.hidden)
+      ? raceEl
+      : $('#ultra-router-section');
     target?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     return;
   }

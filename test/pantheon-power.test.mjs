@@ -12,14 +12,26 @@ import {
 } from '../src/pantheon-roster.mjs';
 import { createApp } from '../src/server.mjs';
 import { BrowserPool } from '../src/browser-env.mjs';
+import { HttpProvider } from '../src/providers.mjs';
 
 test('Pantheon Power #1: Bounded non-shell external CLI harness runner + injection guard + fallback', async () => {
-  // Rejects shell metacharacters / path traversal
+  // Rejects shell metacharacters, path traversal, and raw shells/interpreters
   assert.equal(buildHarnessInvocation(null, 'codex; rm -rf /', 'hi'), null);
   assert.equal(buildHarnessInvocation(null, '/usr/bin/codex', 'hi'), null);
+  assert.equal(buildHarnessInvocation(null, 'bash', 'hi'), null);
+  assert.equal(buildHarnessInvocation(null, 'node', 'hi'), null);
+  assert.equal(buildHarnessInvocation(null, 'python3', 'hi'), null);
   const inv = buildHarnessInvocation('codex-cli', null, 'audit auth');
   assert.equal(inv.binName, 'codex');
-  assert.deepEqual(inv.args, ['exec', '--sandbox', 'read-only', 'audit auth']);
+  assert.deepEqual(inv.args, [
+    'exec', '--sandbox', 'read-only', '--ephemeral', '--ignore-user-config',
+    '-c', 'approval_policy="never"', '-c', 'web_search="disabled"', '-'
+  ]);
+  assert.equal(inv.stdinText, 'audit auth');
+  // Positional CLI harnesses separate prompt with '--' to block flag injection
+  const gemInv = buildHarnessInvocation('gemini-cli', null, '--yolo');
+  assert.equal(gemInv.binName, 'gemini');
+  assert.deepEqual(gemInv.args, ['-p', '--', '--yolo']);
 
   // Real bounded subprocess execution via safe node binary
   let streamed = '';
@@ -342,8 +354,95 @@ test('Ultra-Plinian 3-Way Arena Race & arenaSize routing across non-Venice provi
     assert.equal(pState.mode, 'arena');
     assert.equal(pState.arena.contenders.length, 3);
     assert.equal(pState.arena.contenders.filter(c => c.isWinner).length, 1);
+
+    // 3. Invalid arenaSize rejected with 400
+    const badSize = await fetch(`${root}/api/router`, {
+      method: 'PATCH', headers, body: JSON.stringify({ arenaSize: 9 })
+    });
+    assert.equal(badSize.status, 400);
   } finally {
     await app.close();
     await fs.rm(dir, { recursive: true, force: true });
   }
+});
+
+test('Audit regression: HttpProvider Anthropic/Responses draft(), supportsFunctionCalling & Gemini nullable schema', async (t) => {
+  const captured = [];
+  const replies = [
+    { content: [{ type: 'text', text: '{"winner":"A"}' }], stop_reason: 'end_turn', usage: { input_tokens: 12, output_tokens: 6 } },
+    { output: [{ type: 'message', content: [{ type: 'output_text', text: 'Responses draft ok' }] }], status: 'completed', usage: { input_tokens: 10, output_tokens: 5 } },
+    { choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }
+  ];
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    const idx = captured.length;
+    captured.push({ url, body: JSON.parse(init.body) });
+    const payload = replies[idx];
+    return Response.json(payload);
+  });
+
+  // 1. Anthropic direct draft() sends /messages with system prompt preserved & supportsFunctionCalling = true
+  const anth = new HttpProvider({
+    id: 'anthropic:claude-sonnet-4-6',
+    label: 'Claude Sonnet 4.6',
+    baseUrl: 'https://api.anthropic.com/v1',
+    credential: 'sk-ant-test',
+    model: 'claude-sonnet-4-6',
+    protocol: 'anthropic'
+  });
+  assert.equal(anth.modelMetadata.supportsFunctionCalling, true);
+  const anthDraft = await anth.draft([
+    { role: 'system', content: 'You are a strict blind judge.' },
+    { role: 'user', content: 'Grade A vs B.' }
+  ], undefined, 512);
+  assert.equal(anthDraft.text, '{"winner":"A"}');
+  assert.match(captured[0].url, /\/messages$/);
+  assert.equal(captured[0].body.system, 'You are a strict blind judge.');
+
+  // 2. OpenAI Responses direct draft() sends /responses with instructions preserved
+  const oai = new HttpProvider({
+    id: 'openai:gpt-5.4',
+    label: 'GPT-5.4',
+    baseUrl: 'https://api.openai.com/v1',
+    credential: 'sk-test',
+    model: 'gpt-5.4',
+    protocol: 'openai-responses'
+  });
+  const oaiDraft = await oai.draft([
+    { role: 'system', content: 'System forge rule' },
+    { role: 'user', content: 'Draft answer' }
+  ], undefined, 256);
+  assert.equal(oaiDraft.text, 'Responses draft ok');
+  assert.match(captured[1].url, /\/responses$/);
+  assert.equal(captured[1].body.instructions, 'System forge rule');
+
+  // 3. Gemini plainChat sanitizes JSON Schema union arrays ['string', 'null'] -> { type: 'string', nullable: true }
+  const gem = new HttpProvider({
+    id: 'gemini:gemini-2.5-pro',
+    label: 'Gemini 2.5 Pro',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    credential: 'AIza-test',
+    model: 'gemini-2.5-pro',
+    protocol: 'openai-chat'
+  });
+  await gem.plainChat(
+    { id: gem.id, label: gem.label, model: gem.model, protocol: gem.protocol, baseUrl: gem.baseUrl, tier: gem.tier, maxOutputTokens: 1024, maxOutputTokensCeiling: 4096 },
+    [{ role: 'user', content: 'hi' }],
+    undefined,
+    {},
+    {
+      tools: [{
+        name: 'demo',
+        description: 'Demo tool',
+        parameters: {
+          type: 'object',
+          properties: { note: { type: ['string', 'null'] } },
+          additionalProperties: false
+        }
+      }]
+    }
+  );
+  const sentParams = captured[2].body.tools[0].function.parameters;
+  assert.equal(sentParams.properties.note.type, 'string');
+  assert.equal(sentParams.properties.note.nullable, true);
+  assert.equal('additionalProperties' in sentParams, false);
 });

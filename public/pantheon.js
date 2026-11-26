@@ -242,7 +242,7 @@
       const archBtn = e.target.closest('[data-pb-archetype]');
       if (archBtn) { applyArchetypeToDraft(archBtn.dataset.pbArchetype); return; }
       const sigilBtn = e.target.closest('[data-pb-sigil]');
-      if (sigilBtn && builderDraft) { builderDraft.sigil = sigilBtn.dataset.pbSigil; renderRosterView(); return; }
+      if (sigilBtn && builderDraft) { syncDraftTextFieldsFromDom(); builderDraft.sigil = sigilBtn.dataset.pbSigil; renderRosterView(); return; }
       if (e.target.closest('#pb-best-fit')) { applyBestFitEngine(); return; }
       if (e.target.closest('#pb-cancel')) { builderOpen = false; renderRosterView(); return; }
       if (e.target.closest('#pb-delete') && builderDraft?.slug) { deleteRosterAgent(builderDraft.slug); return; }
@@ -507,7 +507,7 @@
           startedAt: new Date(base + 900).toISOString(), endedAt: w3Status === 'completed' ? new Date(base + 11200).toISOString() : null,
           durationMs: w3Status === 'completed' ? 10300 : 2200 + cycle * 1200,
           streamTail: 'Verifying parallel agent.spawn fan-out assertions and headless Chromium stage rendering…',
-          summary: 'All parallel fan-out assertions, SSE worker telemetry streams, and Pantheon canvas hit-tests verified green.',
+          summary: 'All parallel fan-out assertions, SSE worker telemetry streams, and Conclave canvas hit-tests verified green.',
         },
       ],
       arena: null,
@@ -594,7 +594,7 @@
     dock.querySelector('#pantheon-view-cards')?.classList.toggle('hidden', activeLens !== 'cards');
     dock.querySelector('#pantheon-view-timeline')?.classList.toggle('hidden', activeLens !== 'timeline');
     dock.querySelector('#pantheon-view-roster')?.classList.toggle('hidden', activeLens !== 'roster');
-    if (activeLens === 'stage') drawStage();
+    if (activeLens === 'stage') { drawStage(); startLoop(); }
     if (activeLens === 'cards') renderCards();
     if (activeLens === 'timeline') drawTimeline();
     if (activeLens === 'roster') loadRoster();
@@ -622,6 +622,7 @@
     } else {
       if (replayProgress >= 99) replayProgress = 0;
       replayPlaying = true;
+      startLoop();
     }
     updateReplayBar();
     if (activeLens === 'stage') drawStage();
@@ -652,16 +653,33 @@
     }
   }
 
+  function resolveWorkerTimes(workers) {
+    const parsedStarts = workers.map(wk => {
+      const t = wk.startedAt ? Date.parse(wk.startedAt) : NaN;
+      return Number.isFinite(t) ? t : null;
+    });
+    const validStarts = parsedStarts.filter(t => t !== null);
+    const anchor = validStarts.length ? Math.min(...validStarts) : Date.now() - Math.max(1200, ...workers.map(w => Number(w.durationMs) || 1200));
+    return workers.map((wk, idx) => {
+      const dur = Math.max(400, Number(wk.durationMs) || 1200);
+      const s = parsedStarts[idx] !== null ? parsedStarts[idx] : anchor;
+      const parsedEnd = wk.endedAt ? Date.parse(wk.endedAt) : NaN;
+      const e = Number.isFinite(parsedEnd) && parsedEnd >= s ? Math.max(s + 400, parsedEnd) : s + dur;
+      return { wk, s, e };
+    });
+  }
+
   function computeReplaySpanMs(src) {
     if (!src) return 4000;
     if (src.mode === 'arena' && src.arena?.contenders?.length) {
-      return Math.max(1500, ...src.arena.contenders.map(c => c.durationMs || 2000));
+      return Math.max(1500, ...src.arena.contenders.map(c => Number(c.durationMs) || 2000));
     }
     const ws = src.workers || [];
     if (!ws.length) return 4000;
-    const starts = ws.map(w => w.startedAt ? Date.parse(w.startedAt) : 0);
-    const ends = ws.map((w, i) => w.endedAt ? Date.parse(w.endedAt) : starts[i] + Math.max(800, w.durationMs || 2000));
-    return Math.max(1200, Math.max(...ends) - Math.min(...starts));
+    const times = resolveWorkerTimes(ws);
+    const minT = Math.min(...times.map(t => t.s));
+    const maxT = Math.max(...times.map(t => t.e), minT + 1000);
+    return Math.max(1200, maxT - minT);
   }
 
   function getEffectiveData() {
@@ -693,11 +711,7 @@
     }
     const ws = data.workers || [];
     if (!ws.length) return data;
-    const times = ws.map(wk => {
-      const s = wk.startedAt ? Date.parse(wk.startedAt) : 0;
-      const e = wk.endedAt ? Date.parse(wk.endedAt) : s + Math.max(800, wk.durationMs || 2000);
-      return { s, e };
-    });
+    const times = resolveWorkerTimes(ws);
     const minT = Math.min(...times.map(t => t.s));
     const maxT = Math.max(...times.map(t => t.e), minT + 1000);
     const cursorT = minT + frac * (maxT - minT);
@@ -714,11 +728,18 @@
   }
 
   function startLoop() {
-    if (rafId !== null) return;
+    if (rafId !== null || !isOpenState) return;
+    if (!replayPlaying && (activeLens !== 'stage' || motionReduced())) return;
     lastFrameMs = performance.now();
     const tick = (now) => {
       if (!isOpenState) { rafId = null; return; }
-      const dt = Math.min(0.05, (now - lastFrameMs) / 1000);
+      if (!replayPlaying && (activeLens !== 'stage' || motionReduced())) { rafId = null; return; }
+      if (document.hidden) {
+        lastFrameMs = now;
+        rafId = requestAnimationFrame(tick);
+        return;
+      }
+      const dt = Math.min(0.05, Math.max(0, (now - lastFrameMs) / 1000));
       lastFrameMs = now;
       if (replayPlaying) {
         const spanSec = Math.max(1.2, computeReplaySpanMs(data) / 1000);
@@ -729,9 +750,9 @@
         renderLiveTicker();
         if (activeLens === 'stage') drawStage();
         if (activeLens === 'timeline') drawTimeline();
-      } else if (!motionReduced()) {
+      } else if (!motionReduced() && activeLens === 'stage') {
         animPhase = (animPhase + dt * 0.72) % 1000;
-        if (activeLens === 'stage') drawStage();
+        drawStage();
       }
       rafId = requestAnimationFrame(tick);
     };
@@ -765,6 +786,8 @@
 
   function close() {
     isOpenState = false;
+    replayPlaying = false;
+    stopDemo();
     stopLoop();
     const dock = dockEl();
     if (dock) {
@@ -818,8 +841,11 @@
     const workers = viewData?.workers || [];
     const show = activeLens === 'stage' && (viewData?.mode === 'swarm' || viewData?.mode === 'crew') && workers.length > 0;
     el.classList.toggle('hidden', !show);
-    if (!show) return;
-    el.innerHTML = workers.slice(0, 4).map(wk => {
+    if (!show) {
+      el.dataset.lastHtml = '';
+      return;
+    }
+    const html = workers.slice(0, 4).map(wk => {
       const st = statusInfo(wk.status);
       const isSel = wk.workerId === selectedWorkerId;
       const actionBadge = wk.status === 'recovering'
@@ -838,6 +864,9 @@
         <span class="plt-time">${fmtMs(wk.durationMs)}</span>
       </button>`;
     }).join('');
+    if (el.dataset.lastHtml === html) return;
+    el.dataset.lastHtml = html;
+    el.innerHTML = html;
   }
 
   function renderDiffActionsBar() {
@@ -1710,11 +1739,7 @@
     timelineHitTargets = [];
     ctx.clearRect(0, 0, w, h);
 
-    const times = workers.map(wk => {
-      const s = wk.startedAt ? Date.parse(wk.startedAt) : Date.now() - (wk.durationMs || 1000);
-      const e = wk.endedAt ? Date.parse(wk.endedAt) : s + Math.max(400, wk.durationMs || 1200);
-      return { wk, s, e };
-    });
+    const times = resolveWorkerTimes(workers);
     const minT = Math.min(...times.map(t => t.s));
     const maxT = Math.max(...times.map(t => t.e), minT + 1000);
     const span = Math.max(1000, maxT - minT);
@@ -1822,6 +1847,8 @@
     if (nextId !== currentTaskId) {
       currentTaskId = nextId;
       selectedWorkerId = null;
+      replayPlaying = false;
+      replayProgress = 100;
       if (!demoMode) data = null;
     }
     if (nextId && !demoMode) {
@@ -1965,19 +1992,22 @@
   async function loadRoster(force = false) {
     if (rosterData && !force) {
       renderRosterView();
-      return;
+      return true;
     }
     try {
       const res = await fetch('/api/pantheon/roster');
-      if (!res.ok) return;
+      if (!res.ok) return false;
       rosterData = await res.json();
       renderRosterView();
-    } catch {}
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   function openBuilder(slug = null) {
     if (!rosterData) {
-      loadRoster(true).then(() => openBuilder(slug));
+      loadRoster(true).then((ok) => { if (ok && rosterData) openBuilder(slug); });
       return;
     }
     const existing = slug ? (rosterData.agents || []).find(a => a.slug === slug) : null;
@@ -2035,6 +2065,7 @@
 
   function applyArchetypeToDraft(archetypeId) {
     if (!rosterData || !builderDraft) return;
+    syncDraftTextFieldsFromDom();
     const arch = (rosterData.archetypes || []).find(a => a.id === archetypeId);
     if (!arch) return;
     builderDraft.name = builderDraft.name || arch.name;
@@ -2074,6 +2105,7 @@
       if (typeof window.toast === 'function') window.toast('Connect an API or CLI harness to auto-pick the strongest engine.');
       return;
     }
+    syncDraftTextFieldsFromDom();
     builderDraft.engineType = 'api';
     builderDraft.providerId = builderBestEngine.id;
     builderDraft.harnessId = null;

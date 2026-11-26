@@ -1016,7 +1016,7 @@ async function loadHooksSettings() {
 let modelsSubtab = 'connections';
 function selectModelsSubtab(subtab) {
   modelsSubtab = ['connections', 'catalog', 'routing', 'overseer'].includes(subtab) ? subtab : 'connections';
-  $$('[data-models-subtab]').forEach(btn => {
+  $$('[role="tab"][data-models-subtab]').forEach(btn => {
     const active = btn.dataset.modelsSubtab === modelsSubtab;
     btn.classList.toggle('active', active);
     btn.setAttribute('aria-selected', String(active));
@@ -1109,6 +1109,7 @@ function renderSettingsSearchResults(rawQuery) {
     if (!paneEl) continue;
     const candidates = [...paneEl.querySelectorAll('.settings-card, .setting-row, .shortcut-row, .transparency-card')];
     for (const el of candidates) {
+      if (el.hidden || el.classList.contains('hidden') || el.closest('[hidden]:not([role="tabpanel"])')) continue;
       if (el.classList.contains('settings-card') && el.querySelector('.setting-row')) {
         const head = el.querySelector('.settings-card-head');
         const hText = (head?.textContent || '').trim();
@@ -1118,7 +1119,8 @@ function renderSettingsSearchResults(rawQuery) {
         const key = `${tab.id}::${title}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        matches.push({ tabId: tab.id, tabLabel: tab.label, subtab: el.dataset.modelSubtab || null, title, desc, targetEl: el });
+        const transSub = el.closest('[id^="trans-panel-"]')?.id?.replace('trans-panel-', '') || null;
+        matches.push({ tabId: tab.id, tabLabel: tab.label, subtab: el.dataset.modelSubtab || transSub || null, title, desc, targetEl: el });
         continue;
       }
       const rawTxt = (el.textContent || '').replace(/\s+/g, ' ').trim();
@@ -1146,7 +1148,8 @@ function renderSettingsSearchResults(rawQuery) {
       if (seen.has(key)) continue;
       seen.add(key);
       const modelSub = el.closest('[data-model-subtab]')?.dataset?.modelSubtab || null;
-      matches.push({ tabId: tab.id, tabLabel: tab.label, subtab: modelSub, title, desc, targetEl: el });
+      const transSub = el.closest('[id^="trans-panel-"]')?.id?.replace('trans-panel-', '') || null;
+      matches.push({ tabId: tab.id, tabLabel: tab.label, subtab: modelSub || transSub, title, desc, targetEl: el });
     }
   }
   box._targets = matches;
@@ -1178,6 +1181,7 @@ async function selectSettingsPane(pane, options = {}) {
     else selectModelsSubtab(modelsSubtab);
     renderModelSettings();
     await Promise.all([loadModelConnections(), loadVeniceCatalog(), typeof loadOpenRouterCatalog === 'function' ? loadOpenRouterCatalog() : Promise.resolve(), typeof loadServices === 'function' ? loadServices() : Promise.resolve(), typeof loadModelGroups === 'function' ? loadModelGroups() : Promise.resolve(), typeof loadOverseer === 'function' ? loadOverseer() : Promise.resolve(), typeof loadUltraRouter === 'function' ? loadUltraRouter() : Promise.resolve()]);
+    selectModelsSubtab(modelsSubtab);
   }
   if (pane === 'tools') { await Promise.all([loadPermissionsSettings(), loadHooksSettings()]); }
   if (pane === 'memory') { await Promise.all([loadMemorySettings(options.query), loadSkillsSettings(), loadTransparencySettings().then(renderPersonalInstructionsFromTransparency)]); }
@@ -1545,11 +1549,14 @@ $('#qol-import-file')?.addEventListener('change', async event => {
       localStorage.setItem('g0dc0d3.diffViewMode', raw.diffViewMode);
       if (typeof diffViewMode !== 'undefined') diffViewMode = raw.diffViewMode;
     }
-    if (raw.defaults && typeof raw.defaults === 'object') {
-      const merged = { ...RecoveryUI.preferences(), ...(raw.defaults.persona ? { persona: raw.defaults.persona } : {}), ...(raw.defaults.policy ? { policy: RecoveryUI.updatedPolicy(raw.defaults.policy) } : {}) };
+    if (raw.defaults && typeof raw.defaults === 'object' && !Array.isArray(raw.defaults)) {
+      const validPersona = ['plinian', 'focused'].includes(raw.defaults.persona) ? raw.defaults.persona : null;
+      const validPolicy = raw.defaults.policy && typeof raw.defaults.policy === 'object' && !Array.isArray(raw.defaults.policy) ? raw.defaults.policy : null;
+      const merged = { ...RecoveryUI.preferences(), ...(validPersona ? { persona: validPersona } : {}), ...(validPolicy ? { policy: RecoveryUI.updatedPolicy(validPolicy) } : {}) };
       localStorage.setItem('g0dc0d3.defaults', JSON.stringify(merged));
     }
     renderSettingsValues();
+    renderComposer();
     updateSettingsNavBadges();
     settingsFeedback('Imported preferences from JSON.');
     toast('Preferences imported cleanly.');
@@ -1580,7 +1587,7 @@ function renderRaceOptions(task) {
   const config = task ? task.answerRace : RecoveryUI.preferences().answerRace;
   panel.hidden = models.length < 2 || Boolean(task && task.workspaceKind !== 'conversation');
   if (panel.hidden) return;
-  const scope = JSON.stringify([task?.id || 'defaults', config || null, models.length]);
+  const scope = JSON.stringify([task?.id || 'defaults', config || null]);
   const changed = panel.dataset.scope !== scope;
   panel.dataset.scope = scope;
   if (changed) {
@@ -1603,10 +1610,12 @@ function renderRaceOptions(task) {
     ['#race-judge', 'Choose Blind Judge']
   ];
   const key = models.map(m => m.id).join('|');
+  const modelIds = new Set(models.map(m => m.id));
   selectors.forEach(([selector, placeholder], i) => {
     const el = $(selector);
     if (!el) return;
-    const value = changed ? saved[i] : el.value;
+    const prev = el.value;
+    const value = changed ? saved[i] : (prev && modelIds.has(prev) ? prev : saved[i]);
     if (settingsListContents.get(el) !== key) {
       el.replaceChildren(
         new Option(placeholder, ''),
@@ -1614,7 +1623,7 @@ function renderRaceOptions(task) {
       );
       settingsListContents.set(el, key);
     }
-    el.value = value || '';
+    el.value = value && modelIds.has(value) ? value : '';
   });
   syncRaceControls();
 }
@@ -1635,8 +1644,13 @@ $('#race-save').addEventListener('click', async () => {
   const task = settingsTask(), enabled = $('#race-enabled').checked;
   const writers = ['#race-first', '#race-second', '#race-third', '#race-fourth'].map(s => $(s)?.value || '').filter(Boolean);
   const answerRace = enabled ? { models: writers, judge: $('#race-judge').value } : null;
-  await saveSetting('answer-race', { answerRace }, task);
-  if (enabled) await updateUltraRouter({ mode: 'manual_arena' }).catch(() => {});
+  const ok = await saveSetting('answer-race', { answerRace }, task);
+  if (!ok) return;
+  if (enabled) {
+    await updateUltraRouter({ mode: 'manual_arena' }).catch(() => {});
+  } else if ((ultraRouterData?.settings?.mode || state.router?.mode) === 'manual_arena') {
+    await updateUltraRouter({ mode: 'off' }).catch(() => {});
+  }
   delete $('#race-options').dataset.scope;
   renderRaceOptions(settingsTask());
 });

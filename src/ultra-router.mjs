@@ -61,8 +61,14 @@ export function normalizeRouterSettings(input = {}, base = DEFAULT_ROUTER_SETTIN
   };
 
   const exploration = input.exploration !== undefined ? Boolean(input.exploration) : (base.exploration !== false);
-  const rawArenaSize = input.arenaSize !== undefined ? Number(input.arenaSize) : Number(base.arenaSize ?? 3);
-  const arenaSize = [2, 3, 4].includes(rawArenaSize) ? rawArenaSize : 3;
+  let arenaSize = [2, 3, 4].includes(Number(base.arenaSize)) ? Number(base.arenaSize) : 3;
+  if (input.arenaSize !== undefined) {
+    const parsedSize = Number(input.arenaSize);
+    if (!Number.isInteger(parsedSize) || ![2, 3, 4].includes(parsedSize)) {
+      throw Object.assign(new Error('arenaSize must be 2, 3, or 4.'), { code: 'INVALID_ROUTER_SETTINGS', status: 400 });
+    }
+    arenaSize = parsedSize;
+  }
   const rawMeta = input.metacognition !== undefined ? String(input.metacognition).trim().toLowerCase() : (base.metacognition || 'smart');
   if (!VALID_METACOG_MODES.has(rawMeta)) {
     throw Object.assign(new Error(`Metacognition mode must be one of: ${[...VALID_METACOG_MODES].join(', ')}.`), { code: 'INVALID_ROUTER_SETTINGS', status: 400 });
@@ -383,7 +389,7 @@ export function routeUltraPlinian({ objective = '', files = [], attachments = []
 
   // For Auto-Arena: pick up to cfg.arenaSize (2..4) distinct-family contenders across connected HTTP & Venice catalog models + an independent Judge
   const draftCapable = ranked.filter(r => r.id.startsWith('venice-catalog:') || candidates.find(c => c.id === r.id)?.kind === 'http');
-  const pool = draftCapable.length >= 2 ? draftCapable : ranked;
+  const pool = draftCapable;
   let arenaModels = null;
   let judgeId = null;
   if (pool.length >= 2) {
