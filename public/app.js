@@ -3663,11 +3663,38 @@ function diffFileStats(item) {
   return { hunks: null, added: Math.max(0, afterLines - beforeLines), removed: Math.max(0, beforeLines - afterLines) };
 }
 
+let diffFileFilter = '';
+
+function formatPrSummaryMarkdown(task, diff, statsByPath) {
+  const title = task?.title || 'Code changes';
+  const totalAdded = diff.reduce((n, item) => n + (statsByPath.get(item.path)?.added || 0), 0);
+  const totalRemoved = diff.reduce((n, item) => n + (statsByPath.get(item.path)?.removed || 0), 0);
+  const lines = [
+    `## ${title}`,
+    '',
+    task?.objective ? `> ${String(task.objective).replace(/\s+/g, ' ').trim().slice(0, 400)}` : '',
+    '',
+    `### Changed files (${diff.length} ${diff.length === 1 ? 'file' : 'files'}, +${totalAdded} / -${totalRemoved})`,
+    ...diff.map(item => {
+      const tag = item.before == null ? 'Added' : item.after == null ? 'Deleted' : 'Modified';
+      const st = statsByPath.get(item.path) || { added: 0, removed: 0 };
+      return `- \`${item.path}\` (${tag}: +${st.added} / -${st.removed})`;
+    }),
+  ].filter((line, idx, arr) => !(line === '' && arr[idx - 1] === ''));
+  if (task?.verification?.checks?.length) {
+    lines.push('', '### Verification');
+    for (const c of task.verification.checks) {
+      lines.push(`- ${c.status === 'pass' ? '✅' : c.status === 'fail' ? '❌' : '⚪'} ${c.name}${c.detail ? ` — ${String(c.detail).slice(0, 160)}` : ''}`);
+    }
+  }
+  return lines.join('\n');
+}
+
 function renderChanges(diff) {
   const panel = $('#panel-changes'), task = selectedData?.task;
   const sourceControls = renderSourceControls(task);
   if (!diff.some(file => file.path === changeSelections.get(selectedId))) changeSelections.set(selectedId, diff[0]?.path);
-  const signature = JSON.stringify([selectedId, diff, task?.status, task?.draining, sourceControls, changeSelections.get(selectedId), commitFormOpen, commitBusy, diffViewMode, diffCommentTarget]);
+  const signature = JSON.stringify([selectedId, diff, task?.status, task?.draining, sourceControls, changeSelections.get(selectedId), commitFormOpen, commitBusy, diffViewMode, diffCommentTarget, diffFileFilter]);
   if (signature === changesSignature) return;
   changesSignature = signature;
   const settled = task && !ACTIVE.has(task.status) && !task.draining;
@@ -3692,14 +3719,21 @@ function renderChanges(diff) {
   const fileLabel = file.before == null ? 'Added' : file.after == null ? 'Deleted' : 'Modified';
   const totalStatsHtml = `<span class="diff-stat-add">+${totalAdded}</span><span class="diff-stat-remove">-${totalRemoved}</span>`;
   const fileStatsHtml = `<span class="diff-stat-add">+${selectedStats.added}</span><span class="diff-stat-remove">-${selectedStats.removed}</span>`;
-  const fileListHtml = diff.map(item => {
-    const label = item.before == null ? 'A' : item.after == null ? 'D' : 'M';
-    const cls = item.before == null ? 'added' : item.after == null ? 'deleted' : 'modified';
-    const st = statsByPath.get(item.path) || { added: 0, removed: 0 };
-    return `<button type="button" class="diff-file-item ${item.path === file.path ? 'selected' : ''}" data-select-diff="${escapeHTML(item.path)}" title="${escapeHTML(item.path)} (+${st.added} -${st.removed})"><span class="diff-file-badge ${cls}">${label}</span><span class="diff-file-name">${escapeHTML(item.path)}</span><span class="diff-file-stats"><span class="diff-stat-add">+${st.added}</span><span class="diff-stat-remove">-${st.removed}</span></span></button>`;
-  }).join('');
+  const filterQuery = diffFileFilter.trim().toLowerCase();
+  const visibleDiff = filterQuery ? diff.filter(item => item.path.toLowerCase().includes(filterQuery)) : diff;
+  const filterInputHtml = diff.length >= 5
+    ? `<input type="search" class="diff-file-filter" data-diff-file-filter value="${escapeHTML(diffFileFilter)}" placeholder="Filter ${diff.length} files…" aria-label="Filter changed files" autocomplete="off" spellcheck="false">`
+    : '';
+  const fileListHtml = filterInputHtml + (visibleDiff.length
+    ? visibleDiff.map(item => {
+        const label = item.before == null ? 'A' : item.after == null ? 'D' : 'M';
+        const cls = item.before == null ? 'added' : item.after == null ? 'deleted' : 'modified';
+        const st = statsByPath.get(item.path) || { added: 0, removed: 0 };
+        return `<button type="button" class="diff-file-item ${item.path === file.path ? 'selected' : ''}" data-select-diff="${escapeHTML(item.path)}" title="${escapeHTML(item.path)} (+${st.added} -${st.removed})"><span class="diff-file-badge ${cls}">${label}</span><span class="diff-file-name">${escapeHTML(item.path)}</span><span class="diff-file-stats"><span class="diff-stat-add">+${st.added}</span><span class="diff-stat-remove">-${st.removed}</span></span></button>`;
+      }).join('')
+    : '<p class="field-help">No files match filter.</p>');
   const patchActions = settled
-    ? `<div class="changes-actions"><button type="button" class="button button-secondary" data-commit-toggle ${commitBusy ? 'disabled' : ''}>Commit</button><button type="button" class="button button-secondary copy-transcript-btn" data-copy-transcript>Copy transcript</button><button type="button" class="button button-secondary copy-patch-btn" data-copy-patch>Copy patch</button><a class="button button-secondary" href="/api/tasks/${encodeURIComponent(task.id)}/patch" download>Export patch</a></div>`
+    ? `<div class="changes-actions"><button type="button" class="button button-secondary" data-commit-toggle ${commitBusy ? 'disabled' : ''}>Commit</button><button type="button" class="button button-secondary copy-pr-btn" data-copy-pr-summary title="Copy GitHub PR summary markdown">Copy PR summary</button><button type="button" class="button button-secondary copy-transcript-btn" data-copy-transcript>Copy transcript</button><button type="button" class="button button-secondary copy-patch-btn" data-copy-patch>Copy patch</button><a class="button button-secondary" href="/api/tasks/${encodeURIComponent(task.id)}/patch" download>Export patch</a></div>`
     : `<div class="changes-actions"><button type="button" class="button button-secondary copy-transcript-btn" data-copy-transcript>Copy transcript</button></div>`;
   const commitBar = settled && commitFormOpen
     ? `<form class="changes-commit-bar" id="changes-commit-form" autocomplete="off"><input id="changes-commit-message" type="text" maxlength="500" placeholder="Checkpoint commit message (default: checkpoint)" aria-label="Checkpoint commit message"><button type="submit" class="button button-primary" ${commitBusy ? 'disabled' : ''}>${commitBusy ? 'Committing…' : 'Save checkpoint'}</button><button type="button" class="button button-quiet" data-commit-cancel ${commitBusy ? 'disabled' : ''}>Cancel</button></form>`
@@ -5931,6 +5965,25 @@ document.addEventListener('click', (event) => {
     copyTranscriptAction(selectedData.task, copyTranscript.classList.contains('copy-transcript-btn') ? copyTranscript : null);
     return;
   }
+  const copyPr = event.target.closest('[data-copy-pr-summary]');
+  if (copyPr && selectedData?.task) {
+    const diff = selectedData.diff || [];
+    const statsByPath = new Map(diff.map(item => [item.path, diffFileStats(item)]));
+    const md = formatPrSummaryMarkdown(selectedData.task, diff, statsByPath);
+    navigator.clipboard.writeText(md)
+      .then(() => {
+        copyPr.classList.add('copied');
+        copyPr.textContent = 'Copied ✓';
+        clearTimeout(copyCodeTimers.get(copyPr));
+        copyCodeTimers.set(copyPr, setTimeout(() => {
+          copyPr.classList.remove('copied');
+          copyPr.textContent = 'Copy PR summary';
+        }, 1800));
+        toast('PR summary copied to clipboard.');
+      })
+      .catch(error => toast(error?.message || 'Could not copy PR summary.'));
+    return;
+  }
   const copyPatch = event.target.closest('[data-copy-patch]');
   if (copyPatch && selectedData?.task) {
     const taskId = selectedData.task.id;
@@ -6963,6 +7016,15 @@ $('#ultra-router-section')?.addEventListener('change', event => {
     weights[el.dataset.routerWeight] = Number(el.value) / 100;
   });
   updateUltraRouter({ weights }, 'Updated Ultra-Plinian routing objective weights.');
+});
+$('#panel-changes')?.addEventListener('input', event => {
+  if (!event.target.matches('[data-diff-file-filter]')) return;
+  diffFileFilter = event.target.value || '';
+  const pos = event.target.selectionStart ?? diffFileFilter.length;
+  changesSignature = '';
+  renderChanges(selectedData?.diff || []);
+  const next = $('#panel-changes [data-diff-file-filter]');
+  if (next) { next.focus(); next.setSelectionRange(pos, pos); }
 });
 $('#panel-timeline')?.addEventListener('click', event => {
   const reportBtn = event.target.closest('[data-report-refusal]');

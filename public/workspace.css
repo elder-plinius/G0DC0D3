@@ -3435,6 +3435,70 @@ body.artifact-open.sidebar-collapsed .artifact-dock { grid-column: 3; }
 .model-filter-chip { padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel-soft); color: var(--muted); font-size: .72rem; font-weight: 600; cursor: pointer; transition: background-color .12s, border-color .12s, color .12s; }
 .model-filter-chip:hover { color: var(--text); border-color: var(--control-line); }
 .model-filter-chip.active { border-color: var(--violet); background: rgba(193, 175, 255, .15); color: var(--text); }
+
+/* ── Calm Single-Row Composer & Diff File Filter ────────────────── */
+.composer-toolbar {
+  padding: 6px 9px;
+  gap: 6px;
+}
+.composer-options {
+  gap: 3px;
+  flex: 1 1 auto;
+}
+.composer-options .composer-option {
+  min-height: 29px;
+  padding: 4px 8px;
+  font-size: .78rem;
+  gap: 4px;
+}
+.composer-options .plan-mode-switch,
+.composer-options .ultra-switch {
+  min-height: 29px;
+  padding: 4px 8px;
+  margin: 0;
+  font-size: .76rem;
+}
+.composer-options #composer-model {
+  max-width: 210px;
+}
+.composer-options #composer-model-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-options #composer-race {
+  font-size: .72rem;
+  letter-spacing: .04em;
+  padding: 4px 7px;
+}
+.conversation-controls {
+  padding: 3px 10px 0;
+  opacity: .78;
+}
+.conversation-controls:hover,
+.conversation-controls:focus-within {
+  opacity: 1;
+}
+.recovery-strip {
+  margin-top: 2px;
+  min-height: 20px;
+  opacity: .72;
+}
+.recovery-strip:hover { opacity: 1; }
+.diff-file-filter {
+  width: 100%;
+  margin: 0 0 6px;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: .75rem;
+}
+.diff-file-filter:focus {
+  outline: none;
+  border-color: var(--violet);
+}
 .artifact-console {
   height: var(--artifact-console-height, 150px);
   max-height: 55vh;
