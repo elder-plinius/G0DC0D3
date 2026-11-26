@@ -30,19 +30,22 @@
   const SHOTS = {
     dark: {
       src: './assets/godmode-dark.png',
-      alt: 'GODMODƎ dark workspace showing multi-model chat and controls',
-      title: 'GODMODƎ Workspace',
-      desc: 'Multi-model chat, Ultra-Plinian answer racing, live HTML5/SVG preview canvas, and sticky fallback waterfalls.'
+      alt: 'G0DM0D3 dark workspace showing multi-model chat and controls',
+      brand: 'GODMODƎ',
+      title: 'Workspace',
+      desc: 'Multi-model chat, The Conclave multi-agent stage, Ultra-Plinian routing & arena, and sticky fallback waterfalls.'
     },
     light: {
       src: './assets/godcode-light.png',
-      alt: 'GODCODƎ light coding workspace with repository diff and build controls',
-      title: 'GODCODƎ Coding Workspace',
+      alt: 'G0DC0D3 light coding workspace with repository diff and build controls',
+      brand: 'GODCODƎ',
+      title: 'Coding Workspace',
       desc: 'Attach local Git repos, review surgical patches, switch Plan/Build mode, and rewind checkpoints cleanly.'
     },
     lab: {
       src: './assets/godmode-system-lab.png',
       alt: 'System Lab prompt transparency inspector and live wire trace',
+      brand: '',
       title: 'System Lab · Prompt Transparency',
       desc: 'Inspect and customize every system prompt block, view live wire traces, and audit outbound Zero Data Retention posture.'
     }
@@ -61,6 +64,12 @@
       if (img) { img.src = shot.src; img.alt = shot.alt; }
       if (cap) {
         cap.textContent = '';
+        if (shot.brand) {
+          const wm = document.createElement('strong');
+          wm.className = 'wordmark';
+          wm.textContent = shot.brand;
+          cap.append(wm, ' ');
+        }
         const strong = document.createElement('strong');
         strong.textContent = shot.title;
         cap.append(strong, ` — ${shot.desc}`);

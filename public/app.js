@@ -664,12 +664,12 @@ function renderRecoveryControl(task, loading = false) {
   setVisible('#composer-race', !task || task.workspaceKind === 'conversation');
   $('#composer-race').classList.toggle('race-enabled', ultraOn);
   $('#composer-race').textContent = routerMode === 'auto_route' && !racing
-    ? 'ULTRA-PLINIAN · AUTO ⌄'
+    ? 'Ultra-Plinian · Auto ⌄'
     : routerMode === 'auto_arena' && !racing
-      ? 'ULTRA-PLINIAN · ARENA ⌄'
+      ? 'Ultra-Plinian · Arena ⌄'
       : racing
-        ? 'ULTRA-PLINIAN · CUSTOM ⌄'
-        : 'ULTRA-PLINIAN ⌄';
+        ? 'Ultra-Plinian · Custom ⌄'
+        : 'Ultra-Plinian ⌄';
   $('#composer-race').title = routerMode === 'auto_route' && !racing
     ? 'Ultra-Plinian Auto-Route · Click to switch mode'
     : ultraOn

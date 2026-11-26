@@ -6621,6 +6621,155 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
 .pantheon-diff-actions.hidden { display: none; }
 .pantheon-legend.hidden { display: none; }
 .pantheon-stat { white-space: nowrap; }
+
+/* ── Unified Composer & Header Button Polish (Crisp 28px Rail, Zero Cutoff) ── */
+.composer-shell {
+  margin: 10px auto 14px;
+  padding-bottom: 4px;
+}
+.composer-caption:has(#composer-hint:empty) {
+  display: none;
+}
+.recovery-strip {
+  margin-top: 5px;
+  min-height: 20px;
+}
+.composer-toolbar {
+  padding: 7px 10px;
+  gap: 6px;
+  align-items: center;
+}
+.composer-options {
+  gap: 5px;
+  align-items: center;
+  flex-wrap: wrap;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.composer-options .composer-option,
+.composer-options .plan-mode-switch,
+.composer-options .ultra-switch,
+.composer-options #composer-race,
+.composer-options #composer-effort,
+.composer-options #composer-model {
+  height: 28px;
+  min-height: 28px;
+  padding: 0 9px;
+  margin: 0;
+  gap: 5px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
+  background: color-mix(in srgb, var(--panel-soft) 72%, transparent);
+  color: var(--text-secondary);
+  font-family: var(--font);
+  font-size: .75rem;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.composer-options #composer-model {
+  max-width: 215px;
+  flex-shrink: 1;
+  min-width: 96px;
+  color: var(--text);
+}
+.composer-options .composer-option:hover,
+.composer-options #composer-race:hover {
+  background: color-mix(in srgb, var(--panel-raised) 82%, var(--panel-soft));
+  border-color: color-mix(in srgb, var(--control-line) 90%, transparent);
+  color: var(--text);
+}
+.composer-options #composer-ultra-label.wordmark {
+  font-size: .72rem;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+}
+.composer-options #composer-ultra-state {
+  font-family: var(--mono);
+  font-size: .62rem;
+  font-weight: 600;
+  letter-spacing: .04em;
+  line-height: 1;
+  padding-left: 6px;
+}
+.composer-options #composer-race.race-enabled {
+  border-color: color-mix(in srgb, var(--violet) 52%, var(--line));
+  background: color-mix(in srgb, var(--violet) 12%, var(--panel-soft));
+  color: var(--text);
+}
+.composer-toolbar .composer-attach-btn,
+.composer-toolbar .dictation,
+.composer-toolbar .composer-options-toggle,
+.composer-toolbar .composer-send {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  flex: 0 0 28px;
+  border-radius: 8px;
+}
+.composer-toolbar .composer-send svg {
+  width: 15px;
+  height: 15px;
+}
+/* Light / Alabaster unified composer pill clarity */
+:root[data-theme="light"] .composer-options .composer-option,
+:root[data-theme="light"] .composer-options #composer-race,
+:root[data-theme="light"] .composer-options #composer-effort,
+:root[data-theme="light"] .composer-options #composer-model {
+  background: #f5f3f9;
+  border-color: #dfdbe8;
+  color: #2c2838;
+}
+:root[data-theme="light"] .composer-options #composer-model {
+  color: #181520;
+}
+:root[data-theme="light"] .composer-options .composer-option:hover,
+:root[data-theme="light"] .composer-options #composer-race:hover {
+  background: #ece8f5;
+  border-color: #c5bcd8;
+  color: #181520;
+}
+:root[data-theme="light"] .composer-options .effort-switch[data-effort="high"],
+:root[data-theme="light"] .composer-options .effort-switch[data-effort="max"],
+:root[data-theme="light"] .composer-options .ultra-switch.enabled,
+:root[data-theme="light"] .composer-options #composer-race.race-enabled {
+  background: #efe8fc;
+  border-color: #bba2e8;
+  color: #3d246e;
+}
+/* Unified 28px top header pills */
+.app-header .header-pantheon-btn,
+.app-header .header-services-btn,
+.app-header .connection,
+.app-header .header-palette-btn,
+.app-header .details-button {
+  height: 28px;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 8px;
+  font-size: .75rem;
+  font-weight: 500;
+  line-height: 1;
+  box-sizing: border-box;
+}
+.app-header .header-palette-btn {
+  padding: 0 7px;
+}
+.app-header .header-palette-btn kbd {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font-size: .72rem;
+}
+:root[data-theme="light"] .message-assistant .message-avatar,
+:root[data-theme="light"] .stream-preview .message-avatar {
+  background: var(--brand-mark) center / 20px 20px no-repeat;
+  border-color: transparent;
+}
 .pda-head {
   display: flex;
   align-items: center;
