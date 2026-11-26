@@ -662,6 +662,8 @@ export class Runtime {
     this.crew = new CrewController(this);
     this.outboundAudit = new OutboundAuditLog({ maxEntries: 100 });
     this._streamSubs = new Map();
+    this.activeSubagents = new Map();
+    this._workerSteers = new Map();
   }
   subscribeStream(taskId, callback) {
     if (!this._streamSubs.has(taskId)) this._streamSubs.set(taskId, new Set());
@@ -671,6 +673,273 @@ export class Runtime {
   _emitStream(taskId, event) {
     const subs = this._streamSubs.get(taskId);
     if (subs) for (const cb of subs) try { cb(event); } catch {}
+  }
+  async queueWorkerSteer(taskId, workerId, message) {
+    const text = String(message || '').trim();
+    if (!text) throw fault('INVALID_MESSAGE', 'Steer message cannot be empty.');
+    const task = this.getTask(taskId);
+    const key = `${taskId}:${workerId}`;
+    const list = this._workerSteers.get(key) || [];
+    list.push(text.slice(0, 2000));
+    this._workerSteers.set(key, list.slice(-6));
+    const activeMap = this.activeSubagents.get(taskId);
+    if (activeMap?.has(workerId)) {
+      this._emitStream(taskId, { type: 'pantheon.steered', workerId, message: text, target: 'subagent' });
+      return { ok: true, target: 'subagent', workerId, queued: list.length };
+    }
+    const crew = this.crew?.record(taskId);
+    if (crew && Object.values(crew.members || {}).includes(workerId)) {
+      const workerTask = this.store.getTask(workerId);
+      if (workerTask && active.has(workerTask.status)) {
+        const pending = { id: randomUUID(), message: text, createdAt: new Date().toISOString(), mode: 'steer' };
+        this.store.updateTask(workerId, cur => ({ ...cur, pendingMessages: [...(cur.pendingMessages || []), pending] }), 'user.message.queued', { ...pending, source: 'owner' });
+      }
+      this._emitStream(taskId, { type: 'pantheon.steered', workerId, message: text, target: 'crew_worker' });
+      return { ok: true, target: 'crew_worker', workerId, queued: list.length };
+    }
+    if (active.has(task.status)) {
+      const res = await this.submitMessage(task.id, `[Pantheon steer → ${workerId}] ${text}`, undefined, 'steer');
+      this._emitStream(taskId, { type: 'pantheon.steered', workerId, message: text, target: 'orchestrator' });
+      return { ok: true, target: 'orchestrator', workerId, queued: res.task?.pendingMessages?.length || 1 };
+    }
+    this.store.appendEvent(taskId, 'pantheon.steered', { workerId, message: text, target: 'note' });
+    this._emitStream(taskId, { type: 'pantheon.steered', workerId, message: text, target: 'note' });
+    return { ok: true, target: 'note', workerId, queued: list.length };
+  }
+  drainWorkerSteer(taskId, workerId) {
+    const key = `${taskId}:${workerId}`;
+    const list = this._workerSteers.get(key);
+    if (!list?.length) return [];
+    this._workerSteers.delete(key);
+    return list;
+  }
+  async _executeAgentSpawn(id, epoch, call, signal) {
+    const workerId = String(call.id || `sub-${Date.now().toString(36)}`);
+    const role = String(call.args?.role || 'explore').trim() || 'explore';
+    const promptPreview = String(call.args?.prompt || '').slice(0, 400);
+    const startedAt = new Date().toISOString();
+    let activeMap = this.activeSubagents.get(id);
+    if (!activeMap) { activeMap = new Map(); this.activeSubagents.set(id, activeMap); }
+    const initialState = {
+      workerId, callId: call.id, kind: 'subagent', role, prompt: promptPreview,
+      status: 'thinking', providerId: null, modelLabel: null, tool: '', target: '',
+      files: [], tools: [], streamTail: '', calls: 0, startedAt, durationMs: 0
+    };
+    activeMap.set(workerId, initialState);
+    this.store.appendEvent(id, 'subagent.started', { workerId, callId: call.id, role, prompt: promptPreview, startedAt });
+    this._emitStream(id, { type: 'subagent.started', worker: initialState });
+    try {
+      const result = await runSpecialistSubagent({
+        runtime: this,
+        parentTask: this.getTask(id),
+        role,
+        prompt: call.args?.prompt || '',
+        modelHint: call.args?.model,
+        workerId,
+        signal,
+        onProgress: (prog) => {
+          const merged = { ...initialState, ...prog, kind: 'subagent', callId: call.id, prompt: promptPreview };
+          activeMap.set(workerId, merged);
+          this._emitStream(id, { type: 'subagent.progress', worker: merged });
+        }
+      });
+      const opId = `${id}:${call.id}`;
+      const nowIso = new Date().toISOString();
+      this.store.putOperation({
+        id: opId, taskId: id, callId: call.id, name: call.name, args: call.args,
+        argsHash: sha256(stableJson(call.args || {})), epoch,
+        status: result?.ok ? 'succeeded' : 'failed', result, createdAt: nowIso, updatedAt: nowIso
+      }, 'tool.completed', { operationId: opId, name: call.name, status: result?.ok ? 'succeeded' : 'failed', result });
+      this.store.appendEvent(id, 'subagent.completed', { workerId, callId: call.id, ...result });
+      this._emitStream(id, { type: 'subagent.completed', worker: { ...initialState, ...result, status: result?.ok ? 'completed' : 'failed' } });
+      return result;
+    } finally {
+      activeMap.delete(workerId);
+      if (activeMap.size === 0) this.activeSubagents.delete(id);
+    }
+  }
+  getPantheonState(taskId) {
+    const task = this.getTask(taskId);
+    const events = this.store.getRecentEvents(taskId, 300);
+    const workersById = new Map();
+    const failovers = [];
+    const raceEvents = [];
+    const providerLabel = (pid) => {
+      if (!pid) return null;
+      const p = this.providers.get(pid) || this.catalog?.get?.(pid);
+      return p?.label || p?.model || pid;
+    };
+
+    for (const ev of events) {
+      const d = ev.data || {};
+      if (ev.type === 'subagent.started') {
+        const wId = d.workerId || d.callId || `sa-${ev.seq}`;
+        workersById.set(wId, {
+          workerId: wId, callId: d.callId || wId, kind: 'subagent',
+          role: d.role || 'explore', prompt: d.prompt || '',
+          status: 'thinking', providerId: null, modelLabel: null,
+          tool: '', target: '', files: [], tools: [], streamTail: '',
+          summary: '', calls: 0, startedAt: d.startedAt || ev.at, endedAt: null, durationMs: 0
+        });
+      } else if (ev.type === 'subagent.completed') {
+        const wId = d.workerId || d.callId || `sa-${ev.seq}`;
+        const prev = workersById.get(wId) || { workerId: wId, kind: 'subagent', role: d.role || 'explore', startedAt: d.startedAt || ev.at };
+        workersById.set(wId, {
+          ...prev,
+          role: d.role || prev.role || 'explore',
+          status: d.ok ? 'completed' : 'failed',
+          providerId: d.providerId || prev.providerId,
+          modelLabel: d.modelLabel || providerLabel(d.providerId) || prev.modelLabel,
+          files: Array.isArray(d.files) ? d.files : (prev.files || []),
+          tools: Array.isArray(d.tools) ? d.tools : (prev.tools || []),
+          calls: d.calls || prev.calls || 1,
+          summary: d.summary || d.error?.message || '',
+          streamTail: String(d.summary || d.error?.message || '').slice(-360),
+          startedAt: d.startedAt || prev.startedAt,
+          endedAt: d.endedAt || ev.at,
+          durationMs: d.durationMs || 0
+        });
+      } else if (ev.type === 'model.switched' || ev.type === 'routing.reframe_retry') {
+        failovers.push({
+          type: ev.type, at: ev.at,
+          from: d.from || d.providerId || null,
+          to: d.to || d.providerId || null,
+          reason: d.reason || d.level || 'GODMODƎ recovery'
+        });
+      } else if (ev.type === 'race.dispatched' || ev.type === 'race.result' || (ev.type === 'model.response' && d.scorecard)) {
+        raceEvents.push(ev);
+      }
+    }
+
+    // Overlay live in-flight subagents
+    const liveSubs = this.activeSubagents.get(taskId);
+    if (liveSubs) {
+      for (const [wId, live] of liveSubs.entries()) {
+        workersById.set(wId, { ...live, modelLabel: live.modelLabel || providerLabel(live.providerId) });
+      }
+    }
+
+    // Merge Coding Crew workers if present
+    const crewSummary = this.crew?.summary(taskId) || null;
+    if (crewSummary?.workers?.length) {
+      for (const cw of crewSummary.workers) {
+        const wTask = cw.taskId ? this.store.getTask(cw.taskId) : null;
+        const wEvents = cw.taskId ? this.store.getRecentEvents(cw.taskId, 40) : [];
+        const filesSet = new Set();
+        let lastTool = '';
+        for (const we of wEvents) {
+          if (we.type === 'tool.started' || we.type === 'tool.completed') {
+            if (we.data?.name) lastTool = we.data.name;
+            if (we.data?.path) filesSet.add(we.data.path);
+            if (we.data?.result?.path) filesSet.add(we.data.result.path);
+          }
+        }
+        const statusMap = { running: 'streaming', verifying: 'tool', recovering: 'recovering', completed: 'completed', failed: 'failed', cancelled: 'failed', paused: 'paused', queued: 'thinking' };
+        const wId = cw.taskId || `crew-${cw.role}`;
+        workersById.set(wId, {
+          workerId: wId, kind: 'crew', role: cw.role,
+          prompt: `${cw.role} phase (${crewSummary.phase})`,
+          status: statusMap[cw.status] || (cw.status === 'pending' ? 'queued' : cw.status),
+          providerId: cw.providerId,
+          modelLabel: providerLabel(cw.providerId) || (cw.role === 'verifier' ? 'Independent Checks' : 'Pending'),
+          tool: lastTool, target: '', files: [...filesSet].slice(0, 12), tools: lastTool ? [lastTool] : [],
+          streamTail: cw.summary || '', summary: cw.summary || '',
+          calls: cw.calls || 0,
+          startedAt: wTask?.createdAt || null,
+          endedAt: wTask?.completedAt || null,
+          durationMs: wTask?.createdAt ? ((wTask.completedAt ? Date.parse(wTask.completedAt) : Date.now()) - Date.parse(wTask.createdAt)) : 0
+        });
+      }
+    }
+
+    // Build Arena Race telemetry if answerRace configured or race events occurred
+    let arena = null;
+    if (task.answerRace || raceEvents.length) {
+      const latestDispatch = [...raceEvents].reverse().find(e => e.type === 'race.dispatched' && e.data?.stage === 'draft');
+      const raceId = latestDispatch?.data?.raceId || null;
+      const relevantResults = raceEvents.filter(e => e.type === 'race.result' && (!raceId || e.data?.raceId === raceId));
+      const latestScorecard = [...raceEvents].reverse().find(e => e.type === 'model.response' && e.data?.scorecard)?.data?.scorecard || null;
+      const contenderIds = latestDispatch?.data?.models || task.answerRace?.models || [];
+      const judgeId = latestScorecard?.judgeId || task.answerRace?.judge || null;
+      const contenders = contenderIds.map((pid, idx) => {
+        const resEv = relevantResults.find(e => e.data?.stage === 'draft' && e.data?.providerId === pid);
+        const grade = latestScorecard?.grades?.find(g => g.providerId === pid) || null;
+        return {
+          slot: ['A', 'B'][idx] || String(idx + 1),
+          providerId: pid,
+          label: providerLabel(pid) || pid,
+          status: resEv ? (resEv.data.status === 'done' ? 'completed' : resEv.data.status) : (active.has(task.status) ? 'streaming' : 'queued'),
+          durationMs: resEv?.data?.durationMs || grade?.durationMs || 0,
+          grade,
+          isWinner: Boolean(latestScorecard?.winnerId && latestScorecard.winnerId === pid)
+        };
+      });
+      const judgeResult = relevantResults.find(e => e.data?.stage === 'grade');
+      const judgeDispatched = raceEvents.some(e => e.type === 'race.dispatched' && e.data?.stage === 'grade' && (!raceId || e.data?.raceId === raceId));
+      arena = {
+        raceId,
+        status: latestScorecard ? 'completed' : judgeDispatched ? 'grading' : (latestDispatch && active.has(task.status) ? 'drafting' : 'ready'),
+        contenders,
+        judge: judgeId ? {
+          providerId: judgeId,
+          label: providerLabel(judgeId) || judgeId,
+          status: latestScorecard ? 'completed' : judgeResult ? judgeResult.data.status : (judgeDispatched ? 'grading' : 'waiting')
+        } : null,
+        winnerId: latestScorecard?.winnerId || null,
+        note: latestScorecard?.note || null
+      };
+    }
+
+    const workers = [...workersById.values()];
+    const fileOwners = new Map();
+    for (const w of workers) {
+      for (const f of (w.files || [])) {
+        if (!fileOwners.has(f)) fileOwners.set(f, []);
+        fileOwners.get(f).push({ workerId: w.workerId, role: w.role });
+      }
+    }
+    const fileConflicts = [...fileOwners.entries()]
+      .filter(([, owners]) => owners.length > 1)
+      .map(([file, owners]) => ({ file, owners }));
+
+    const activeCount = workers.filter(w => ['thinking', 'streaming', 'tool', 'recovering'].includes(w.status)).length;
+    const completedCount = workers.filter(w => w.status === 'completed').length;
+    const failedCount = workers.filter(w => w.status === 'failed').length;
+    const mode = (arena && (arena.status === 'drafting' || arena.status === 'grading' || (workers.length === 0 && arena.status === 'completed')))
+      ? 'arena'
+      : crewSummary && ['preparing', 'running', 'verifying', 'ready', 'paused', 'applied'].includes(crewSummary.status)
+        ? 'crew'
+        : workers.length > 0
+          ? 'swarm'
+          : 'standby';
+
+    return {
+      taskId: task.id,
+      title: task.title,
+      status: task.status,
+      mode,
+      orchestrator: {
+        providerId: task.providerId,
+        modelLabel: providerLabel(task.providerId) || 'Orchestrator',
+        status: task.status,
+        calls: task.calls || 0,
+        maxCalls: task.policy?.maxCalls || 250,
+        recoveries: task.recoveries || 0
+      },
+      workers,
+      crew: crewSummary,
+      arena,
+      failovers: failovers.slice(-8),
+      fileConflicts,
+      pendingApproval: task.pendingApproval || null,
+      stats: {
+        totalWorkers: workers.length,
+        activeWorkers: activeCount,
+        completedWorkers: completedCount,
+        failedWorkers: failedCount,
+        totalCalls: task.calls || 0
+      }
+    };
   }
   selectedProvider(id, workspaceKind) {
     return this.providers.get(id) ?? (workspaceKind === 'conversation' ? this.catalog?.get(id) : undefined);
@@ -1219,6 +1488,40 @@ export class Runtime {
             idx = runEnd;
             continue;
           }
+          // Dispatch contiguous agent.spawn calls concurrently (up to 4 in parallel) for true multi-agent swarm fan-out!
+          let spawnEnd = idx;
+          while (spawnEnd < response.calls.length && spawnEnd - idx < 4 && response.calls[spawnEnd]?.name === 'agent.spawn') spawnEnd += 1;
+          let canSpawnBatch = spawnEnd - idx >= 2;
+          if (canSpawnBatch) {
+            const hooks = await discoverHooks(liveTask);
+            if (hooks.PreToolUse.length || hooks.PostToolUse.length) canSpawnBatch = false;
+          }
+          if (canSpawnBatch) {
+            const spawnBatch = response.calls.slice(idx, spawnEnd);
+            for (const c of spawnBatch) {
+              if (evaluatePermission(effectiveRules, c.name, c.args).action !== 'allow') { canSpawnBatch = false; break; }
+            }
+            if (canSpawnBatch) {
+              try {
+                for (const call of spawnBatch) this._emitStream(id, { type: 'tool.start', name: call.name, callId: call.id, args: streamArgsFor(call) });
+                const results = await Promise.all(spawnBatch.map(call => this._executeAgentSpawn(id, epoch, call, controller.signal)));
+                for (let j = 0; j < spawnBatch.length; j++) {
+                  const call = spawnBatch[j], result = results[j];
+                  this._emitStream(id, { type: 'tool.completed', name: call.name, callId: call.id, ok: result?.ok ?? false });
+                  this._recordToolCallSig(id, call, sha256(stableJson([call.name, call.args || {}])), false);
+                  if (result?.ok === false && !failure) failure = result.error;
+                  else trackResult(call, result);
+                }
+                if (failure) break;
+              } catch (cause) {
+                if (!this._current(id, epoch, controller.signal)) break;
+                failure = { code: cause.code || 'TOOL_ERROR', message: cause.message };
+                break;
+              }
+              idx = spawnEnd;
+              continue;
+            }
+          }
           const call = response.calls[idx++];
           const permTask = this.getTask(id);
           const permRules = this._effectivePermissionRules(permTask);
@@ -1325,23 +1628,7 @@ export class Runtime {
             this._emitStream(id, { type: 'tool.start', name: call.name, callId: call.id, args: streamArgsFor(call) });
             let result;
             if (call.name === 'agent.spawn') {
-              this.store.appendEvent(id, 'subagent.started', { callId: call.id, role: call.args?.role || 'explore', prompt: String(call.args?.prompt || '').slice(0, 400) });
-              result = await runSpecialistSubagent({
-                runtime: this,
-                parentTask: this.getTask(id),
-                role: call.args?.role || 'explore',
-                prompt: call.args?.prompt || '',
-                modelHint: call.args?.model,
-                signal: controller.signal
-              });
-              const opId = `${id}:${call.id}`;
-              const nowIso = new Date().toISOString();
-              this.store.putOperation({
-                id: opId, taskId: id, callId: call.id, name: call.name, args: call.args,
-                argsHash: sha256(stableJson(call.args || {})), epoch,
-                status: result?.ok ? 'succeeded' : 'failed', result, createdAt: nowIso, updatedAt: nowIso
-              }, 'tool.completed', { operationId: opId, name: call.name, status: result?.ok ? 'succeeded' : 'failed', result });
-              this.store.appendEvent(id, 'subagent.completed', { callId: call.id, ...result });
+              result = await this._executeAgentSpawn(id, epoch, call, controller.signal);
             } else {
               const onOutput = call.name === 'process.run'
                 ? (stream, text) => this._emitStream(id, { type: 'command.chunk', callId: call.id, command: String(call.args?.command || '').slice(0, 200), stream, text })

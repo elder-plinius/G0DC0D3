@@ -71,7 +71,11 @@ export class CrewController {
   }
   _update(id, patch, event) {
     const current = this.store.getCrew(id);
-    return this.store.putCrew({ ...current, ...patch }, event);
+    const updated = this.store.putCrew({ ...current, ...patch }, event);
+    try {
+      this.runtime._emitStream(updated.parentId, { type: 'pantheon.update', kind: 'crew', crew: this.summary(updated.parentId) });
+    } catch {}
+    return updated;
   }
   _assertParent(crew) {
     const parent = this.runtime.getTask(crew.parentId);

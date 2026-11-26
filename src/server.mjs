@@ -657,6 +657,19 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
         res.on('error', cleanup);
         return;
       }
+      const pantheonMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/pantheon(?:\/(steer))?$/);
+      if (pantheonMatch) {
+        const id = decodeURIComponent(pantheonMatch[1]);
+        const subAction = pantheonMatch[2] || '';
+        if (req.method === 'GET' && !subAction) {
+          return send(res, 200, runtime.getPantheonState(id));
+        }
+        if (req.method === 'POST' && subAction === 'steer') {
+          const body = await readBody(req);
+          const result = await runtime.queueWorkerSteer(id, body.workerId || 'orchestrator', body.message || '');
+          return send(res, 200, { ...result, pantheon: runtime.getPantheonState(id) });
+        }
+      }
       const crewMatch=url.pathname.match(/^\/api\/tasks\/([^/]+)\/crew(?:\/(pause|cancel|resume|inspect|candidate|apply))?$/);
       if(crewMatch) {
         const [,id,action]=crewMatch,task=runtime.getTask(id);
@@ -913,6 +926,7 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
       staticFiles['/themes.js'] = ['themes.js','text/javascript'];
       staticFiles['/themes.css'] = ['themes.css','text/css'];
       staticFiles['/mermaid-lite.js'] = ['mermaid-lite.js','text/javascript'];
+      staticFiles['/pantheon.js'] = ['pantheon.js','text/javascript'];
       staticFiles['/brand-wordmark.ttf'] = ['brand-wordmark.ttf', 'font/ttf'];
       if(req.method==='GET'&&staticFiles[url.pathname]) {
         const [filename,mime]=staticFiles[url.pathname],body=await fs.readFile(path.join(publicDir,filename));

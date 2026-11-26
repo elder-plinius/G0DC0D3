@@ -130,20 +130,49 @@ function selectSubagentProvider(runtime, parentTask, spec, modelHint, privacy) {
 /**
  * Run an isolated, read-only specialist subagent without mutating the parent workspace or polluting parent context.
  */
-export async function runSpecialistSubagent({ runtime, parentTask, role = 'explore', prompt, modelHint, maxTurns = 4, signal }) {
+export async function runSpecialistSubagent({ runtime, parentTask, role = 'explore', prompt, modelHint, maxTurns = 4, signal, workerId = null, onProgress = null }) {
   const started = Date.now();
+  const startedAt = new Date(started).toISOString();
   const agents = await discoverSubagents(parentTask);
   const roleKey = String(role || 'explore').trim().toLowerCase();
   const spec = agents.get(roleKey) || BUILTIN_SUBAGENTS.explore;
   const outbound = runtime.outboundOptions();
   const privacy = outbound.privacy || DEFAULT_PRIVACY_SETTINGS;
   const provider = selectSubagentProvider(runtime, parentTask, spec, modelHint, privacy);
+  const wId = workerId || `${spec.name}-${started.toString(36)}`;
   if (!provider) {
-    return { ok: false, error: { code: 'SUBAGENT_NO_PROVIDER', message: 'No privacy-eligible provider is available for this subagent.' } };
+    return { ok: false, workerId: wId, role: spec.name, startedAt, endedAt: new Date().toISOString(), durationMs: Date.now() - started, files: [], tools: [], error: { code: 'SUBAGENT_NO_PROVIDER', message: 'No privacy-eligible provider is available for this subagent.' } };
   }
+  const modelLabel = provider.label || provider.model || provider.id;
+  const filesTouched = new Set();
+  const toolsUsed = [];
+  let streamTail = '';
+  let lastTool = '';
+  let lastTarget = '';
+  const emitProgress = (status, extra = {}) => {
+    if (typeof onProgress !== 'function') return;
+    try {
+      onProgress({
+        workerId: wId,
+        role: spec.name,
+        providerId: provider.id,
+        modelLabel,
+        status,
+        tool: lastTool,
+        target: lastTarget,
+        files: [...filesTouched].slice(0, 12),
+        tools: toolsUsed.slice(-12),
+        streamTail: streamTail.slice(-360),
+        startedAt,
+        durationMs: Date.now() - started,
+        ...extra,
+      });
+    } catch {}
+  };
 
   const readOnlyTools = TOOLS.filter(t => SUBAGENT_TOOLS.has(t.name));
   const transcript = [];
+  const steerNotes = [];
   let calls = 0;
   let finalSummary = '';
   const liveParent = (() => { try { return runtime.getTask(parentTask.id); } catch { return parentTask; } })();
@@ -151,14 +180,18 @@ export async function runSpecialistSubagent({ runtime, parentTask, role = 'explo
     ? Math.max(0, liveParent.policy.maxCalls - (liveParent.calls || 0))
     : 6;
   if (remainingBudget <= 0) {
-    return { ok: false, error: { code: 'CALL_BUDGET', message: 'Parent task has no remaining call budget for a subagent.' } };
+    return { ok: false, workerId: wId, role: spec.name, providerId: provider.id, modelLabel, startedAt, endedAt: new Date().toISOString(), durationMs: Date.now() - started, files: [], tools: [], error: { code: 'CALL_BUDGET', message: 'Parent task has no remaining call budget for a subagent.' } };
   }
   const boundTurns = Math.max(1, Math.min(6, remainingBudget, Number(maxTurns) || 4));
+  emitProgress('thinking', { calls: 0, step: 1, maxTurns: boundTurns });
 
   for (let step = 0; step < boundTurns; step++) {
     if (signal?.aborted) {
-      return { ok: false, error: { code: 'SUBAGENT_CANCELLED', message: 'Subagent cancelled.' } };
+      emitProgress('failed', { calls, error: 'Subagent cancelled.' });
+      return { ok: false, workerId: wId, role: spec.name, providerId: provider.id, modelLabel, calls, startedAt, endedAt: new Date().toISOString(), durationMs: Date.now() - started, files: [...filesTouched], tools: toolsUsed, error: { code: 'SUBAGENT_CANCELLED', message: 'Subagent cancelled.' } };
     }
+    const freshSteers = runtime.drainWorkerSteer?.(parentTask.id, wId) || [];
+    if (freshSteers.length) steerNotes.push(...freshSteers);
     calls += 1;
     try {
       runtime.store?.updateTask?.(parentTask.id, cur => { cur.calls = (cur.calls || 0) + 1; return cur; });
@@ -167,6 +200,7 @@ export async function runSpecialistSubagent({ runtime, parentTask, role = 'explo
       `Specialist role: ${spec.name}`,
       `Instructions: ${spec.instructions}`,
       `Task: ${String(prompt || '').slice(0, 4000)}`,
+      steerNotes.length ? `Live operator steering notes:\n- ${steerNotes.join('\n- ')}` : '',
       transcript.length ? `Previous read-only tool observations:\n${transcript.join('\n---\n').slice(-10000)}` : '',
       step === boundTurns - 1
         ? 'This is your final turn. Return your concise, actionable summary directly (no more tool calls).'
@@ -194,14 +228,31 @@ export async function runSpecialistSubagent({ runtime, parentTask, role = 'explo
       manifest: { bytes: Buffer.byteLength(subPrompt), omittedEventCount: 0, omittedFiles: [] }
     };
 
+    lastTool = '';
+    lastTarget = '';
+    emitProgress('streaming', { calls, step: step + 1, maxTurns: boundTurns });
+    let lastDeltaAt = 0;
+    const onDelta = (delta) => {
+      if (delta?.type === 'text' && delta.text) {
+        streamTail = (streamTail + delta.text).slice(-600);
+        const now = Date.now();
+        if (now - lastDeltaAt >= 180) {
+          lastDeltaAt = now;
+          emitProgress('streaming', { calls, step: step + 1, maxTurns: boundTurns });
+        }
+      }
+    };
+
     let res;
     try {
-      res = await provider.turn(context, { signal, ...outbound });
+      res = await provider.turn(context, { signal, onDelta, ...outbound });
     } catch (err) {
-      return { ok: false, error: { code: err?.code || 'SUBAGENT_ERROR', message: err?.message || 'Subagent provider call failed.' } };
+      emitProgress('failed', { calls, error: err?.message || 'Subagent provider call failed.' });
+      return { ok: false, workerId: wId, role: spec.name, providerId: provider.id, modelLabel, calls, startedAt, endedAt: new Date().toISOString(), durationMs: Date.now() - started, files: [...filesTouched], tools: toolsUsed, error: { code: err?.code || 'SUBAGENT_ERROR', message: err?.message || 'Subagent provider call failed.' } };
     }
     if (res?.type === 'error') {
-      return { ok: false, error: { code: res.code || 'SUBAGENT_ERROR', message: res.message || 'Subagent provider error.' } };
+      emitProgress('failed', { calls, error: res.message || 'Subagent provider error.' });
+      return { ok: false, workerId: wId, role: spec.name, providerId: provider.id, modelLabel, calls, startedAt, endedAt: new Date().toISOString(), durationMs: Date.now() - started, files: [...filesTouched], tools: toolsUsed, error: { code: res.code || 'SUBAGENT_ERROR', message: res.message || 'Subagent provider error.' } };
     }
     if (res?.type === 'tool' && Array.isArray(res.calls) && res.calls.length && step < boundTurns - 1) {
       for (const tc of res.calls.slice(0, 4)) {
@@ -219,7 +270,18 @@ export async function runSpecialistSubagent({ runtime, parentTask, role = 'explo
             transcript.push(`[${tc.name}] denied by permission policy (${perm.action}${perm.reason ? `: ${perm.reason}` : ''})`);
             continue;
           }
+          lastTool = tc.name;
+          lastTarget = String(tc.args?.path || tc.args?.pattern || tc.args?.query || '').slice(0, 120);
+          toolsUsed.push(tc.name);
+          if (typeof tc.args?.path === 'string' && tc.args.path.trim()) filesTouched.add(tc.args.path.trim());
+          emitProgress('tool', { calls, step: step + 1, maxTurns: boundTurns });
           const toolRes = await runtime.broker._runReadOnly(parentTask, parentTask.id, tc, { signal, outbound });
+          if (Array.isArray(toolRes?.files)) {
+            for (const f of toolRes.files.slice(0, 4)) {
+              const p = typeof f === 'string' ? f : f?.path;
+              if (p) filesTouched.add(p);
+            }
+          }
           transcript.push(`[${tc.name} ${JSON.stringify(tc.args || {}).slice(0, 200)}]\n${JSON.stringify(toolRes).slice(0, 2500)}`);
         } catch (err) {
           transcript.push(`[${tc.name}] error: ${err.message}`);
@@ -228,15 +290,26 @@ export async function runSpecialistSubagent({ runtime, parentTask, role = 'explo
       continue;
     }
     finalSummary = String(res?.text || '').trim();
+    if (finalSummary) streamTail = finalSummary.slice(-600);
     break;
   }
 
+  const endedAt = new Date().toISOString();
+  const durationMs = Date.now() - started;
+  const summary = (finalSummary || transcript.at(-1) || 'Subagent completed with no text output.').slice(0, 12000);
+  emitProgress('completed', { calls, durationMs, endedAt, summary: summary.slice(0, 400) });
   return {
     ok: true,
+    workerId: wId,
     role: spec.name,
     providerId: provider.id,
+    modelLabel,
     calls,
-    durationMs: Date.now() - started,
-    summary: (finalSummary || transcript.at(-1) || 'Subagent completed with no text output.').slice(0, 12000)
+    startedAt,
+    endedAt,
+    durationMs,
+    files: [...filesTouched].slice(0, 24),
+    tools: toolsUsed.slice(-24),
+    summary
   };
 }

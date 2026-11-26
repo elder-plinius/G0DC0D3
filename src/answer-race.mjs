@@ -113,6 +113,7 @@ export async function runAnswerRace(runtime, task, epoch, signal) {
   const raceId = epoch + '-' + (task.calls+1);
   function reserve(modelIds,stage) {
     runtime.store.updateTask(id,t=>{t.calls+=modelIds.length;return t;},'race.dispatched',{raceId,stage,models:modelIds});
+    runtime._emitStream(id, { type: 'race.dispatched', raceId, stage, models: modelIds, at: new Date().toISOString() });
   }
   async function call(model, input, limit, stage) {
     const start=performance.now();
@@ -152,6 +153,7 @@ export async function runAnswerRace(runtime, task, epoch, signal) {
     const durationMs=Math.round(performance.now()-start);
     if (Number.isFinite(response.retryAfterMs)) runtime.store.recordProviderDelay(id,'venice:direct-chat',Math.min(Number.MAX_SAFE_INTEGER,Date.now()+response.retryAfterMs));
     runtime.store.appendEvent(id,'race.result',{raceId,stage,providerId:model.id,status,durationMs,httpStatus:response.httpStatus});
+    runtime._emitStream(id, { type: 'race.result', raceId, stage, providerId: model.id, label: model.label || model.model || model.id, status, durationMs });
     return {response,declined,durationMs,providerId:model.id};
   }
   function incomplete(results) {
@@ -294,5 +296,6 @@ export async function runAnswerRace(runtime, task, epoch, signal) {
     t.completedAt=new Date().toISOString();return t;
   },'model.response',{providerId:winner.providerId,response:winner.response,scorecard});
   runtime.store.appendEvent(id,'task.completed',{completionKind:'answered',independentVerification:'not_applicable',raceId});
+  runtime._emitStream(id, { type: 'race.completed', raceId, scorecard });
   }
 }

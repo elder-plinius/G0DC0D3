@@ -1682,6 +1682,13 @@ async function executeSlashCommand(raw) {
     openCreate();
     return { handled: true };
   }
+  if (cmd === '/pantheon' || cmd === '/swarm') {
+    clearInput();
+    if (arg && /^(demo|preview)$/i.test(arg.trim())) window.G0DPantheon?.open({ demo: true });
+    else if (arg && /^(cards|timeline|stage)$/i.test(arg.trim())) window.G0DPantheon?.open({ lens: arg.trim().toLowerCase() });
+    else window.G0DPantheon?.toggle();
+    return { handled: true };
+  }
   if (cmd === '/benchmark') {
     clearInput();
     openBenchmark();
@@ -5117,6 +5124,7 @@ function renderCommands() {
     ] : [
       { kind: 'action', title: 'Toggle Plan Mode', detail: draftPlanMode ? 'Start next chat in Build Mode' : 'Start next chat in read-only Plan Mode', keywords: 'plan build /plan /build', run: () => togglePlanMode(null) },
     ]),
+    { kind: 'action', title: 'Open The Pantheon (Multi-Agent Stage)', detail: 'Visualize parallel subagents, Coding Crews, and Arena races (/pantheon)', keywords: 'pantheon swarm multi agent subagent crew arena constellation stage /pantheon /swarm', run: () => window.G0DPantheon?.open() },
     { kind: 'action', title: 'Open Models & Subscriptions', detail: 'CLI logins, API keys, and local models', keywords: 'claude codex gemini copilot ollama key provider /model', run: () => openSettings('models') },
     ...(window.G0DThemes ? window.G0DThemes.list().map(t => ({
       kind: 'action',
@@ -5277,6 +5285,7 @@ function renderSelected(data, force = false) {
   setVisible('#welcome-links', false);
   setVisible('#task-workspace', true);
   manageStream(task);
+  window.G0DPantheon?.syncTask(task);
   const signature = JSON.stringify(data);
   if (!force && signature === detailSignature) return;
   const oldTaskId = $('#selected-id').dataset.fullId;
@@ -5479,7 +5488,11 @@ function manageStream(task) {
               setTimeout(refresh, 350);
             }
           } else if (delta.type === 'permission.requested' || delta.type === 'todos.updated') {
+            window.G0DPantheon?.ingestStreamEvent(delta);
             setTimeout(refresh, 150);
+          } else if (delta.type === 'subagent.started' || delta.type === 'subagent.progress' || delta.type === 'subagent.completed' || delta.type === 'pantheon.update' || delta.type === 'pantheon.steered' || delta.type === 'race.dispatched' || delta.type === 'race.result' || delta.type === 'race.completed') {
+            window.G0DPantheon?.ingestStreamEvent(delta);
+            if (delta.type === 'subagent.completed' || delta.type === 'race.completed') setTimeout(refresh, 250);
           }
         } catch {}
       };
@@ -6279,6 +6292,7 @@ $('#crew-review-dialog').addEventListener('close', () => { crewReview = null; ($
 
 $('#command-open')?.addEventListener('click', openCommands);
 $('#header-command-open')?.addEventListener('click', openCommands);
+$('#pantheon-toggle-btn')?.addEventListener('click', () => window.G0DPantheon?.toggle());
 $('#command-palette-dialog')?.addEventListener('close', () => { if (commandReturnFocus?.isConnected && !commandReturnFocus.closest('[inert]')) commandReturnFocus.focus({ preventScroll: true }); });
 $('#palette-input')?.addEventListener('input', () => { commandIndex = 0; renderCommands(); });
 $('#palette-input')?.addEventListener('keydown', event => {
@@ -7474,6 +7488,8 @@ window.toast = toast;
     { cmd: '/fixtures', hint: 'Browse test fixtures' },
     { cmd: '/theme', hint: 'Switch UI theme (/theme ancient | celestial | dragons | psychedelic | hacker | minimal | synthwave | volcano)' },
     { cmd: '/settings', hint: 'Open settings' },
+    { cmd: '/pantheon', hint: 'Open The Pantheon live multi-agent constellation & arena stage' },
+    { cmd: '/swarm', hint: 'Open The Pantheon multi-agent swarm visualizer' },
     { cmd: '/benchmark', hint: 'Run offline harness diagnostics' },
     { cmd: '/clear', hint: 'Start a new conversation' },
   ];
