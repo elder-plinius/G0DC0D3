@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { accessSync, constants as fsConstants } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { accessSync, constants as fsConstants, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { HttpProvider } from './providers.mjs';
 
@@ -115,11 +115,57 @@ export function linuxSecretToolKeychain(dataDir, { binary } = {}) {
 
 export const MAX_MODELS_PER_PROVIDER = 128;
 
-export async function createProviderSettings(providers, keychain) {
+export async function createProviderSettings(providers, keychain, { dataDir } = {}) {
   const secrets = new Set();
   const savedModels = new Map();
   const savedKeys = new Map();
+  const disabledProfiles = new Set();
+  const togglesFile = dataDir ? path.join(dataDir, 'provider-toggles.json') : null;
   let pending = Promise.resolve();
+
+  if (togglesFile) {
+    try {
+      const parsed = JSON.parse(await fs.readFile(togglesFile, 'utf8'));
+      if (Array.isArray(parsed?.disabled)) {
+        for (const name of parsed.disabled) {
+          if (typeof name === 'string' && Object.hasOwn(profiles, name)) disabledProfiles.add(name);
+        }
+      }
+    } catch {}
+  }
+
+  async function saveToggles() {
+    if (!togglesFile) return;
+    await fs.mkdir(path.dirname(togglesFile), { recursive: true, mode: 0o700 });
+    const tmp = `${togglesFile}.${randomUUID()}.tmp`;
+    try {
+      await fs.writeFile(tmp, JSON.stringify({ version: 1, disabled: [...disabledProfiles].sort() }) + '\n', { mode: 0o600, flag: 'wx' });
+      await fs.rename(tmp, togglesFile);
+    } finally {
+      await fs.rm(tmp, { force: true }).catch(() => {});
+    }
+  }
+
+  function matchesProfile(item, provider) {
+    const profile = profiles[provider];
+    if (!profile || !item || item.closed) return false;
+    return item.baseUrl === profile.endpoint && item.protocol === (profile.protocol || 'openai-chat');
+  }
+
+  function applyProfileEnabledState(provider) {
+    const disabled = disabledProfiles.has(provider);
+    for (const item of providers.values()) {
+      if (!matchesProfile(item, provider)) continue;
+      if (disabled) {
+        if (item.available !== false) item._wasAvailableBeforeDisable = true;
+        item.available = false;
+        item.disabledByUser = true;
+      } else if (item.disabledByUser) {
+        item.available = item._wasAvailableBeforeDisable !== false;
+        item.disabledByUser = false;
+      }
+    }
+  }
 
   function validateModels(models) {
     if (!Array.isArray(models) || !models.length || models.length > MAX_MODELS_PER_PROVIDER ||
@@ -174,39 +220,69 @@ export async function createProviderSettings(providers, keychain) {
       }
     }
   }
-  function profileModelsFromProviders(provider) {
+  for (const provider of Object.keys(profiles)) applyProfileEnabledState(provider);
+
+  function profileModelsFromProviders(provider, { includeDisabled = false } = {}) {
     const profile = profiles[provider];
     if (!profile) return [];
     const found = [];
     for (const item of providers.values()) {
-      if (item.baseUrl === profile.endpoint && item.protocol === (profile.protocol || 'openai-chat') && item.available !== false && !item.closed && typeof item.model === 'string') {
-        found.push(item.model);
-      }
+      if (!matchesProfile(item, provider)) continue;
+      if (!includeDisabled && item.available === false) continue;
+      if (includeDisabled && item.available === false && !item.disabledByUser) continue;
+      if (typeof item.model === 'string') found.push(item.model);
     }
     return [...new Set(found)];
   }
   function isEnvConnected(provider) {
     const profile = profiles[provider];
     if (!profile?.apiKeyEnv) return false;
-    return Boolean(process.env[profile.apiKeyEnv]) || profileModelsFromProviders(provider).length > 0;
+    return Boolean(process.env[profile.apiKeyEnv]) || profileModelsFromProviders(provider, { includeDisabled: true }).length > 0;
   }
   return {
     secrets,
+    isProviderDisabled(provider) {
+      return disabledProfiles.has(provider);
+    },
     connectedProfiles() {
       const list = [];
       for (const [provider, profile] of Object.entries(profiles)) {
         const hasKey = savedKeys.has(provider);
-        const activeModels = profileModelsFromProviders(provider);
+        const allModels = profileModelsFromProviders(provider, { includeDisabled: true });
         const hasEnv = Boolean(profile.apiKeyEnv && process.env[profile.apiKeyEnv]);
-        if (!hasKey && !activeModels.length && !hasEnv) continue;
+        if (!hasKey && !allModels.length && !hasEnv) continue;
+        const models = allModels.length ? allModels : [...(savedModels.get(provider) ?? [])];
         list.push({
           provider,
           label: profile.label,
-          models: activeModels.length ? activeModels : [...(savedModels.get(provider) ?? [])],
+          enabled: !disabledProfiles.has(provider),
+          modelCount: models.length,
+          models,
           storage: hasKey ? (keychain ? 'keychain' : 'session') : 'env',
         });
       }
       return list;
+    },
+    setProviderEnabled(body) {
+      const operation = pending.then(async () => {
+        const provider = typeof body?.provider === 'string' ? body.provider.trim().toLowerCase() : '';
+        if (!Object.hasOwn(profiles, provider)) throw Object.assign(new Error(`Choose one of: ${Object.keys(profiles).join(', ')}.`), { status: 400 });
+        if (typeof body?.enabled !== 'boolean') throw Object.assign(new Error('Specify enabled: true or false.'), { status: 400 });
+        const hasAny = savedKeys.has(provider) || profileModelsFromProviders(provider, { includeDisabled: true }).length > 0 || Boolean(profiles[provider].apiKeyEnv && process.env[profiles[provider].apiKeyEnv]);
+        if (!hasAny) throw Object.assign(new Error(`${profiles[provider].label} is not connected yet.`), { status: 400 });
+        if (body.enabled) disabledProfiles.delete(provider);
+        else disabledProfiles.add(provider);
+        applyProfileEnabledState(provider);
+        await saveToggles();
+        return {
+          provider,
+          label: profiles[provider].label,
+          enabled: !disabledProfiles.has(provider),
+          models: profileModelsFromProviders(provider, { includeDisabled: true }),
+        };
+      });
+      pending = operation.catch(() => {});
+      return operation;
     },
     connect(body) {
       const operation = pending.then(async () => {
@@ -219,13 +295,18 @@ export async function createProviderSettings(providers, keychain) {
         const provider = body.provider || detected;
         if (!Object.hasOwn(profiles, provider)) throw Object.assign(new Error(`Choose one of: ${Object.keys(profiles).join(', ')}.`), { status: 400 });
         const previous = savedModels.get(provider) ?? [];
-        const selected = body.models ?? (previous.length ? previous : profiles[provider].defaults);
+        const selected = body.models ?? [...profiles[provider].defaults, ...previous];
         if (!Array.isArray(selected) || !selected.length) throw Object.assign(new Error('Choose at least one model.'), { status: 400 });
         const models = [...new Set([...previous, ...selected])];
         const record = { key, models };
         const instances = prepare(provider, key, models);
         if (keychain) await keychain.write(provider, record);
         install(provider, record, instances);
+        if (disabledProfiles.has(provider)) {
+          disabledProfiles.delete(provider);
+          await saveToggles();
+        }
+        applyProfileEnabledState(provider);
         return { provider, registered: [...instances.keys()], storage: keychain ? 'keychain' : 'session' };
       });
       pending = operation.catch(() => {});

@@ -1120,6 +1120,7 @@ button:focus-visible, a:focus-visible { outline-offset: 2px; }
 .strip-meta-item.is-warn, .strip-meta-item.ctx-warn { color: var(--amber); }
 .strip-meta-item.ctx-high { color: var(--red); }
 .strip-model-name { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
+.strip-usage { color: var(--text-secondary); font-family: var(--mono); font-size: .71rem; letter-spacing: -.01em; }
 .strip-mode-tag { color: var(--violet); font-weight: 500; }
 .strip-meta-link { border: 0; background: transparent; padding: 0 2px; color: var(--lime); font: inherit; cursor: pointer; border-radius: 4px; }
 .strip-meta-link:hover { text-decoration: underline; }
@@ -3400,6 +3401,103 @@ body.artifact-open.sidebar-collapsed .artifact-dock { grid-column: 3; }
   border-color: var(--line);
   color: var(--text);
   background: var(--panel-soft);
+}
+.live-browser-btn.is-inspecting {
+  border-color: var(--violet);
+  color: var(--violet);
+  background: rgba(193, 175, 255, .14);
+}
+.agent-browser-meta {
+  font: 500 .71rem/1.4 var(--mono);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.live-console-row.level-network .live-console-lvl {
+  color: var(--amber);
+}
+
+/* ── Active API Provider Enable/Disable Toggles & Picker Filters ── */
+.api-toggles-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.api-toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-soft); transition: border-color .14s, opacity .14s; }
+.api-toggle-row.is-disabled { opacity: .68; background: var(--bg); }
+.api-toggle-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.api-toggle-title { display: inline-flex; align-items: center; gap: 7px; font-size: .875rem; font-weight: 600; color: var(--text); }
+.api-toggle-meta { font-size: .75rem; color: var(--muted); }
+.api-switch { position: relative; display: inline-flex; align-items: center; gap: 7px; padding: 4px 10px 4px 6px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--muted); font-size: .74rem; font-weight: 600; cursor: pointer; flex-shrink: 0; transition: background-color .14s, border-color .14s, color .14s; }
+.api-switch:hover:not(:disabled) { border-color: var(--violet); color: var(--text); }
+.api-switch:disabled { opacity: .5; cursor: wait; }
+.api-switch-track { position: relative; width: 28px; height: 16px; border-radius: 999px; background: var(--line); transition: background-color .15s; flex-shrink: 0; }
+.api-switch-thumb { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--text); transition: transform .15s ease; }
+.api-switch[aria-checked="true"] { border-color: rgba(168, 217, 178, .45); color: var(--text); background: rgba(168, 217, 178, .08); }
+.api-switch[aria-checked="true"] .api-switch-track { background: var(--lime); }
+.api-switch[aria-checked="true"] .api-switch-thumb { transform: translateX(12px); background: #0f1310; }
+.model-picker-filters { display: flex; flex-wrap: wrap; gap: 5px; padding: 0 12px 8px; }
+.model-filter-chip { padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel-soft); color: var(--muted); font-size: .72rem; font-weight: 600; cursor: pointer; transition: background-color .12s, border-color .12s, color .12s; }
+.model-filter-chip:hover { color: var(--text); border-color: var(--control-line); }
+.model-filter-chip.active { border-color: var(--violet); background: rgba(193, 175, 255, .15); color: var(--text); }
+
+/* ── Calm Single-Row Composer & Diff File Filter ────────────────── */
+.composer-toolbar {
+  padding: 6px 9px;
+  gap: 6px;
+}
+.composer-options {
+  gap: 3px;
+  flex: 1 1 auto;
+}
+.composer-options .composer-option {
+  min-height: 29px;
+  padding: 4px 8px;
+  font-size: .78rem;
+  gap: 4px;
+}
+.composer-options .plan-mode-switch,
+.composer-options .ultra-switch {
+  min-height: 29px;
+  padding: 4px 8px;
+  margin: 0;
+  font-size: .76rem;
+}
+.composer-options #composer-model {
+  max-width: 210px;
+}
+.composer-options #composer-model-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-options #composer-race {
+  font-size: .72rem;
+  letter-spacing: .04em;
+  padding: 4px 7px;
+}
+.conversation-controls {
+  padding: 3px 10px 0;
+  opacity: .78;
+}
+.conversation-controls:hover,
+.conversation-controls:focus-within {
+  opacity: 1;
+}
+.recovery-strip {
+  margin-top: 2px;
+  min-height: 20px;
+  opacity: .72;
+}
+.recovery-strip:hover { opacity: 1; }
+.diff-file-filter {
+  width: 100%;
+  margin: 0 0 6px;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: .75rem;
+}
+.diff-file-filter:focus {
+  outline: none;
+  border-color: var(--violet);
 }
 .artifact-console {
   height: var(--artifact-console-height, 150px);

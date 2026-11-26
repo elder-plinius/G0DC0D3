@@ -379,6 +379,10 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
                     return
                 }
             }
+            if remaining == 442 {
+                self.loadingTitle.stringValue = "Waiting for macOS Keychain…"
+                self.loadingDetail.stringValue = "Local state: \(self.environment["G0D_DATA_DIR"] ?? "~/Library/Application Support/G0DC0D3")\nIf a macOS Keychain popup appeared, click Always Allow to unlock your saved API keys and open the workspace."
+            }
             if remaining <= 0 { self.showError("The runtime is taking longer than expected", "Inspect native-runtime.log in the configured data directory, then retry. G0DM0D3 has not created a second server."); return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.waitForRuntime(epoch: epoch, remaining: remaining - 1) }
         }

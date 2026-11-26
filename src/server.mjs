@@ -90,7 +90,7 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
   const configuredProviders = !providers;
   providers ||= new Map([...createScriptedProviders(),...environmentProviders()]);
   if (configuredProviders) await loadProviderReferences({dataDir,providers});
-  const providerSettings = await createProviderSettings(providers, keychain);
+  const providerSettings = await createProviderSettings(providers, keychain, { dataDir });
   const redact = value => redactDiagnostics(value, [...environmentSecrets(), ...providerSettings.secrets]);
   const cliConnections = await createCliConnections({...cliDiscovery,dataDir,providers});
   const modelCatalog = await createModelCatalog({dataDir, ...(fetchOpenRouterCatalog ? { fetchImpl: fetchOpenRouterCatalog } : {})});
@@ -343,8 +343,16 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
         return send(res,200,result);
       }
       if(req.method==='GET' && url.pathname==='/api/learning')return send(res,200,runtime.getLearning());
-      if(req.method==='GET' && url.pathname==='/api/providers/venice-models')return send(res,200,await catalog.list(url.searchParams.get('refresh')==='1'));
+      if(req.method==='GET' && url.pathname==='/api/providers/venice-models') {
+        if (providerSettings.isProviderDisabled('venice')) {
+          return send(res, 200, { connected: false, disabled: true, models: [], fetchedAt: null, stale: false, warning: '' });
+        }
+        return send(res,200,await catalog.list(url.searchParams.get('refresh')==='1'));
+      }
       if(req.method==='GET' && url.pathname==='/api/providers/openrouter-models') {
+        if (providerSettings.isProviderDisabled('openrouter')) {
+          return send(res, 200, { connected: false, disabled: true, models: [], registered: [], count: 0, fetchedAt: null, stale: false, warning: '' });
+        }
         const openrouterEndpoint = 'https://openrouter.ai/api/v1';
         const connectedProviders = [...providers.values()].filter(p => p.baseUrl === openrouterEndpoint && p.available !== false && !p.closed);
         const connected = connectedProviders.length > 0 || Boolean(process.env.OPENROUTER_API_KEY);
@@ -412,6 +420,16 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
       if(req.method==='POST' && url.pathname==='/api/providers/key') {
         const result = await providerSettings.connect(await readBody(req));
         return send(res,200,{...result,connectedApiProviders:providerSettings.connectedProfiles(),providers:[...providers.values()].map(({id,label,kind,available=true,tier='standard'})=>({id,label,kind,available,tier}))});
+      }
+      if(req.method==='PATCH' && url.pathname==='/api/providers/profile') {
+        const result = await providerSettings.setProviderEnabled(await readBody(req));
+        return send(res,200,{
+          ...result,
+          connectedApiProviders:providerSettings.connectedProfiles(),
+          veniceConnectionId:[...providers.values()].find(provider=>provider.baseUrl===veniceEndpoint && provider.available && !provider.closed)?.id || null,
+          openrouterConnectionId:[...providers.values()].find(provider=>provider.baseUrl==='https://openrouter.ai/api/v1' && provider.available && !provider.closed)?.id || null,
+          providers:[...providers.values()].map(({id,label,kind,available=true,tier='standard'})=>({id,label,kind,available,tier}))
+        });
       }
       if(req.method==='POST' && url.pathname==='/api/providers/models') {
         const result = await providerSettings.addModels(await readBody(req));
