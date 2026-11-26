@@ -1871,6 +1871,33 @@ button:focus-visible, a:focus-visible { outline-offset: 2px; }
 .models-stack { display: flex; flex-direction: column; }
 .models-stack > .settings-card { margin-bottom: 18px; }
 .api-key-subblock { padding-bottom: 14px; border-bottom: 1px solid var(--line-subtle, var(--line)); }
+.custom-model-setup { padding: 14px 0; border-bottom: 1px solid var(--line-subtle, var(--line)); }
+.custom-model-setup h5 { margin: 0 0 4px; font-size: .875rem; font-weight: 600; }
+.openrouter-browser { display: grid; gap: .65rem; }
+.openrouter-browser-head { display: flex; align-items: flex-start; justify-content: space-between; gap: .75rem; }
+.openrouter-browser-head h3 { margin: 0 0 2px; font-size: 1rem; }
+.openrouter-browser-head .field-help { margin: 0; }
+#openrouter-filter {
+  display: block; width: 100%; min-width: 0; box-sizing: border-box;
+  padding: .55rem .7rem; color: var(--text); background: var(--bg);
+  border: 1px solid var(--line); border-radius: .45rem; font: inherit; font-size: .85rem;
+}
+.openrouter-list {
+  display: grid; gap: .35rem; max-height: 300px; overflow-y: auto;
+  padding-right: 4px; scrollbar-width: thin;
+}
+.openrouter-row {
+  display: flex; align-items: center; justify-content: space-between; gap: .65rem;
+  padding: .5rem .65rem; border: 1px solid var(--line-subtle, var(--line));
+  border-radius: .5rem; background: var(--panel-soft);
+}
+.openrouter-row.is-added { border-color: var(--signal-line, var(--signal)); }
+.openrouter-row-info { min-width: 0; display: grid; gap: .12rem; }
+.openrouter-row-info strong { font-size: .84rem; font-weight: 560; overflow-wrap: anywhere; }
+.openrouter-row-info small { color: var(--muted); font-size: .74rem; overflow-wrap: anywhere; }
+.openrouter-row-actions { display: flex; align-items: center; gap: .35rem; flex-shrink: 0; }
+.openrouter-row-btn { padding: .3rem .6rem; font-size: .76rem; min-height: 28px; }
+.openrouter-list-more { margin: .35rem 0 0; }
 .local-model-setup { padding-top: 6px; }
 .settings-connections-card .model-connections { margin-top: 12px; padding-top: 12px; }
 .settings-modal .permission-presets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }

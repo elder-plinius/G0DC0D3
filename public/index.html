@@ -409,6 +409,11 @@
         <p class="field-help">Supports Anthropic, OpenAI, Google Gemini, OpenRouter, Nous Portal, and Venice.</p>
         <form id="api-key-form" autocomplete="off"><div class="api-key-row"><select id="api-key-provider" class="api-key-provider" aria-label="API key provider"><option value="">Auto-detect</option><option value="anthropic">Anthropic</option><option value="openai">OpenAI</option><option value="gemini">Google Gemini</option><option value="openrouter">OpenRouter</option><option value="nous">Nous Portal</option><option value="venice">Venice</option></select><input id="api-key-input" aria-label="Provider API key" type="password" placeholder="sk-ant-…, sk-…, AIza…, sk-or-v1-…" autocomplete="off" spellcheck="false" maxlength="512"><button type="submit" class="button button-primary" id="api-key-submit">Connect</button></div><p class="form-feedback" id="api-key-feedback" role="status"></p></form>
       </div>
+      <div id="custom-model-setup" class="custom-model-setup" hidden>
+        <h5>Add any model ID to a connected provider</h5>
+        <p class="field-help">Register any OpenRouter, Anthropic, OpenAI, Gemini, Nous, or Venice model slug using your saved key.</p>
+        <form id="custom-model-form" autocomplete="off"><div class="api-key-row"><select id="custom-model-provider" class="api-key-provider" aria-label="Connected provider"></select><input id="custom-model-name" type="text" placeholder="e.g. moonshotai/kimi-k2 or anthropic/claude-sonnet-4.6" aria-label="Model identifier" autocomplete="off" spellcheck="false" maxlength="160" required><button type="submit" class="button button-secondary" id="custom-model-submit">Add model</button></div><p class="form-feedback" id="custom-model-feedback" role="status"></p></form>
+      </div>
       <div class="local-model-setup">
         <h5>Local model (Ollama / LM Studio / vLLM / MLX)</h5>
         <p class="field-help">No API key required — runs 100% locally on this device for private or Tier-0 routing.</p>
@@ -423,6 +428,17 @@
       <p class="field-help">Two Venice models draft in parallel. A judge scores the anonymous drafts for fidelity, completeness, and clarity. Each comparison uses up to three calls.</p>
       <div class="race-selectors"><label>First writer<select id="race-first"></select></label><label>Second writer<select id="race-second"></select></label><label>Judge<select id="race-judge"></select></label></div>
       <button type="button" class="button button-secondary" id="race-save">Apply comparison</button><p id="race-feedback" class="form-feedback" role="status"></p>
+    </section>
+    <section id="openrouter-browser" class="settings-card openrouter-browser" hidden>
+      <div class="openrouter-browser-head">
+        <div>
+          <h3>OpenRouter Catalog</h3>
+          <p class="field-help" id="openrouter-count" role="status"></p>
+        </div>
+        <button type="button" class="button button-quiet" id="openrouter-refresh">Refresh catalog</button>
+      </div>
+      <input id="openrouter-filter" type="search" placeholder="Search all OpenRouter models (e.g. claude, deepseek, kimi, qwen, grok, free)…" aria-label="Filter OpenRouter models" autocomplete="off" spellcheck="false">
+      <div id="openrouter-list" class="openrouter-list" role="region" aria-label="OpenRouter models"></div>
     </section>
     <section id="venice-browser" class="settings-card" hidden>
       <h3>Venice backup</h3>

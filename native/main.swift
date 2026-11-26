@@ -293,8 +293,16 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
 
     private func launchRuntime() throws {
         if let process = runtimeProcess, process.isRunning { return }
+        let bundled = Bundle.main.resourceURL?.appendingPathComponent("runtime")
         let adjacent = Bundle.main.bundleURL.deletingLastPathComponent().deletingLastPathComponent()
-        var runtime = environment["G0D_PROJECT_DIR"].map { URL(fileURLWithPath: $0) } ?? adjacent
+        var runtime: URL
+        if let explicit = environment["G0D_PROJECT_DIR"], !explicit.isEmpty {
+            runtime = URL(fileURLWithPath: explicit)
+        } else if let bundled = bundled, FileManager.default.fileExists(atPath: bundled.appendingPathComponent("src/server.mjs").path) {
+            runtime = bundled
+        } else {
+            runtime = adjacent
+        }
         if !FileManager.default.fileExists(atPath: runtime.appendingPathComponent("src/server.mjs").path),
            let saved = UserDefaults.standard.string(forKey: "runtimeProject") { runtime = URL(fileURLWithPath: saved) }
         if !FileManager.default.fileExists(atPath: runtime.appendingPathComponent("src/server.mjs").path) {

@@ -16,6 +16,8 @@
   "engines": { "node": ">=22.13.0" },
   "scripts": {
     "desktop:build": "sh scripts/build-macos.sh",
+    "package:macos": "sh scripts/package-macos.sh",
+    "package:linux": "sh scripts/package-linux.sh",
     "start": "node src/server.mjs",
     "pretest": "node --check test/smoke.test.mjs",
     "test": "node --test test/*.test.mjs",

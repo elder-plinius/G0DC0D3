@@ -573,20 +573,29 @@ export function resolveCatalogEntry(provider, liveMap = null) {
 export async function createModelCatalog({ dataDir, fetchImpl = globalThis.fetch } = {}) {
   const filename = dataDir ? path.join(path.resolve(dataDir), 'model-catalog-cache.json') : null;
   let liveMap = new Map();
+  let liveEntries = [];
   let updatedAt = null;
   let liveCount = 0;
+  let expiresAt = 0;
+  let pendingRefresh = null;
 
   const hydrate = entries => {
     const next = new Map();
+    const cleaned = [];
+    const seen = new Set();
     for (const item of entries || []) {
-      if (!item || typeof item.id !== 'string') continue;
+      if (!item || typeof item.id !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9:._/+~-]{0,159}$/.test(item.id)) continue;
+      if (seen.has(item.id)) continue;
+      seen.add(item.id);
+      cleaned.push(item);
       const lower = item.id.toLowerCase();
       next.set(lower, item);
       const short = lower.split('/').pop();
       if (short && !next.has(short)) next.set(short, item);
     }
     liveMap = next;
-    liveCount = Array.isArray(entries) ? entries.length : 0;
+    liveEntries = cleaned;
+    liveCount = cleaned.length;
   };
 
   if (filename) {
@@ -619,8 +628,87 @@ export async function createModelCatalog({ dataDir, fetchImpl = globalThis.fetch
     }
   }
 
+  async function doRefresh({ privacy = DEFAULT_PRIVACY_SETTINGS, onOutbound } = {}) {
+    const gate = checkProviderPrivacyAllowed({ id: 'openrouter:catalog', label: 'OpenRouter Model Catalog', baseUrl: OPENROUTER_MODELS_URL }, privacy);
+    if (!gate.allowed) {
+      onOutbound?.({
+        providerId: 'catalog:openrouter',
+        host: 'openrouter.ai',
+        protocol: 'catalog-sync',
+        zdrClass: gate.posture.zdrClass,
+        zdrFlags: [],
+        secretsRedacted: 0,
+        blocked: true,
+        reason: gate.message
+      });
+      throw Object.assign(new Error(gate.message), { code: gate.code, status: 403 });
+    }
+    if (typeof fetchImpl !== 'function') {
+      throw Object.assign(new Error('Fetch API unavailable for catalog refresh.'), { code: 'CATALOG_UNAVAILABLE', status: 503 });
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 12000);
+    try {
+      onOutbound?.({
+        providerId: 'catalog:openrouter',
+        host: 'openrouter.ai',
+        protocol: 'catalog-sync',
+        zdrClass: 'provider-policy',
+        zdrFlags: ['public-readonly-catalog', 'zero-auth'],
+        secretsRedacted: 0,
+        blocked: false,
+        reason: null
+      });
+      const response = await fetchImpl(OPENROUTER_MODELS_URL, {
+        method: 'GET',
+        headers: { accept: 'application/json' },
+        redirect: 'error',
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        throw Object.assign(new Error(`OpenRouter catalog returned HTTP ${response.status}.`), { code: 'CATALOG_HTTP_ERROR', status: 502 });
+      }
+      const payload = await response.json();
+      const rows = Array.isArray(payload?.data) ? payload.data : [];
+      const entries = [];
+      for (const row of rows) {
+        if (!row || typeof row.id !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9:._/+~-]{0,159}$/.test(row.id)) continue;
+        // Skip models whose output modality explicitly excludes text (e.g. pure embedding/image-only).
+        const outMods = Array.isArray(row.architecture?.output_modalities) ? row.architecture.output_modalities : null;
+        if (outMods && outMods.length && !outMods.includes('text')) continue;
+        const price = value => value == null || value === '' ? NaN : Number(value);
+        const pIn = price(row.pricing?.prompt);
+        const pOut = price(row.pricing?.completion);
+        const inputPer1M = Number.isFinite(pIn) && pIn >= 0 ? Number((pIn * 1e6).toFixed(4)) : null;
+        const outputPer1M = Number.isFinite(pOut) && pOut >= 0 ? Number((pOut * 1e6).toFixed(4)) : null;
+        const contextWindow = Number(row.context_length ?? row.contextLength ?? 0) || null;
+        const maxOutput = Number(row.top_provider?.max_completion_tokens ?? row.topProvider?.maxCompletionTokens ?? 0) || null;
+        const params = Array.isArray(row.supported_parameters) ? row.supported_parameters : [];
+        const name = typeof row.name === 'string' && row.name.trim() ? row.name.trim().slice(0, 160) : null;
+        entries.push({
+          id: row.id,
+          ...(name ? { name } : {}),
+          contextWindow,
+          maxOutput,
+          pricing: inputPer1M !== null && outputPer1M !== null ? { inputPer1M, outputPer1M } : null,
+          ...(params.includes('tools') ? { supportsTools: true } : {}),
+          ...(params.includes('reasoning') || params.includes('include_reasoning') ? { supportsReasoning: true } : {}),
+        });
+      }
+      const now = new Date().toISOString();
+      hydrate(entries);
+      updatedAt = now;
+      expiresAt = Date.now() + 15 * 60000;
+      await save(entries, now);
+      return { ok: true, count: entries.length, updatedAt: now, source: 'openrouter-live' };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   return {
     get liveMap() { return liveMap; },
+    listEntries() { return liveEntries.slice(); },
     meta() {
       return {
         catalogVersion: CATALOG_VERSION,
@@ -633,73 +721,36 @@ export async function createModelCatalog({ dataDir, fetchImpl = globalThis.fetch
     lookup(provider) {
       return resolveCatalogEntry(provider, liveMap);
     },
-    async refresh({ privacy = DEFAULT_PRIVACY_SETTINGS, onOutbound } = {}) {
-      const gate = checkProviderPrivacyAllowed({ id: 'openrouter:catalog', label: 'OpenRouter Model Catalog', baseUrl: OPENROUTER_MODELS_URL }, privacy);
-      if (!gate.allowed) {
-        onOutbound?.({
-          providerId: 'catalog:openrouter',
-          host: 'openrouter.ai',
-          protocol: 'catalog-sync',
-          zdrClass: gate.posture.zdrClass,
-          zdrFlags: [],
-          secretsRedacted: 0,
-          blocked: true,
-          reason: gate.message
-        });
-        throw Object.assign(new Error(gate.message), { code: gate.code, status: 403 });
+    refresh(opts = {}) {
+      return doRefresh(opts);
+    },
+    async ensureFresh({ privacy = DEFAULT_PRIVACY_SETTINGS, onOutbound, force = false } = {}) {
+      if (privacy?.localOnly) {
+        return {
+          entries: liveEntries.slice(),
+          updatedAt,
+          stale: true,
+          warning: 'Local-only inference is enabled. OpenRouter catalog refresh is paused.'
+        };
       }
-      if (typeof fetchImpl !== 'function') {
-        throw Object.assign(new Error('Fetch API unavailable for catalog refresh.'), { code: 'CATALOG_UNAVAILABLE', status: 503 });
-      }
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 12000);
-      try {
-        onOutbound?.({
-          providerId: 'catalog:openrouter',
-          host: 'openrouter.ai',
-          protocol: 'catalog-sync',
-          zdrClass: 'provider-policy',
-          zdrFlags: ['public-readonly-catalog', 'zero-auth'],
-          secretsRedacted: 0,
-          blocked: false,
-          reason: null
-        });
-        const response = await fetchImpl(OPENROUTER_MODELS_URL, {
-          method: 'GET',
-          headers: { accept: 'application/json' },
-          redirect: 'error',
-          signal: controller.signal
-        });
-        if (!response.ok) {
-          throw Object.assign(new Error(`OpenRouter catalog returned HTTP ${response.status}.`), { code: 'CATALOG_HTTP_ERROR', status: 502 });
+      if (force || !liveEntries.length || Date.now() >= expiresAt) {
+        try {
+          pendingRefresh ??= doRefresh({ privacy, onOutbound }).finally(() => { pendingRefresh = null; });
+          await pendingRefresh;
+          return { entries: liveEntries.slice(), updatedAt, stale: false, warning: '' };
+        } catch (error) {
+          expiresAt = Date.now() + 30000;
+          return {
+            entries: liveEntries.slice(),
+            updatedAt,
+            stale: true,
+            warning: liveEntries.length
+              ? 'OpenRouter catalog is temporarily unreachable. Showing cached models.'
+              : (error?.message || 'Could not load the OpenRouter catalog. Refresh to try again.')
+          };
         }
-        const payload = await response.json();
-        const rows = Array.isArray(payload?.data) ? payload.data : [];
-        const entries = [];
-        for (const row of rows) {
-          if (!row || typeof row.id !== 'string') continue;
-          const price = value => value == null || value === '' ? NaN : Number(value);
-          const pIn = price(row.pricing?.prompt);
-          const pOut = price(row.pricing?.completion);
-          const inputPer1M = Number.isFinite(pIn) && pIn >= 0 ? Number((pIn * 1e6).toFixed(4)) : null;
-          const outputPer1M = Number.isFinite(pOut) && pOut >= 0 ? Number((pOut * 1e6).toFixed(4)) : null;
-          const contextWindow = Number(row.context_length ?? row.contextLength ?? 0) || null;
-          const maxOutput = Number(row.top_provider?.max_completion_tokens ?? row.topProvider?.maxCompletionTokens ?? 0) || null;
-          entries.push({
-            id: row.id,
-            contextWindow,
-            maxOutput,
-            pricing: inputPer1M !== null && outputPer1M !== null ? { inputPer1M, outputPer1M } : null
-          });
-        }
-        const now = new Date().toISOString();
-        hydrate(entries);
-        updatedAt = now;
-        await save(entries, now);
-        return { ok: true, count: entries.length, updatedAt: now, source: 'openrouter-live' };
-      } finally {
-        clearTimeout(timer);
       }
-    }
+      return { entries: liveEntries.slice(), updatedAt, stale: false, warning: '' };
+    },
   };
 }

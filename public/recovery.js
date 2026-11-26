@@ -43,6 +43,14 @@ const RecoveryUI = (() => {
     const fuzzy = available.find(entry => isUncensored(entry) || /uncensored/i.test(`${entry.id} ${entry.model || ''} ${entry.label || ''}`));
     return fuzzy?.id || null;
   }
+  function findOpenRouterGodmode(connected = []) {
+    const liveOr = (connected || []).filter(entry => entry?.available !== false && String(entry?.id || '').startsWith('openrouter:'));
+    if (!liveOr.length) return null;
+    const exact = liveOr.find(entry => entry.id === 'openrouter:nousresearch-hermes-4-405b' || entry.model === 'nousresearch/hermes-4-405b');
+    if (exact) return exact.id;
+    const fuzzy = liveOr.find(entry => /hermes[-_.\s]?4[-_.\s]?405b|venice[-_.\s]?edition|uncensored/i.test(`${entry.id} ${entry.model || ''} ${entry.label || ''}`));
+    return fuzzy?.id || null;
+  }
   function findGemini4Neon(connected = [], veniceConnectionId = null, models = []) {
     const isNeon = entry => /(?:gemini[-_.\s]?4(?:[._-]0)?[-_.\s]?neon|\bneon[-_.\s]?4\b)/i.test(`${entry?.id || ''} ${entry?.model || ''} ${entry?.label || ''}`);
     const liveMatch = (connected || []).find(entry => entry?.available !== false && isNeon(entry));
@@ -135,5 +143,5 @@ const RecoveryUI = (() => {
     if (locked && (!task || ['queued','completed'].includes(task.status))) detail = 'Turn on to set up a Venice outage backup';
     return { label, state, detail, enabled, locked, policy: value };
   }
-  return { defaults, findVeniceUncensored, findGemini4Neon, recommendedBackup, initialChatRoute, preferences, policy, presentation, validate, milliseconds, updatedPolicy, liberationMessage };
+  return { defaults, findVeniceUncensored, findOpenRouterGodmode, findGemini4Neon, recommendedBackup, initialChatRoute, preferences, policy, presentation, validate, milliseconds, updatedPolicy, liberationMessage };
 })();
