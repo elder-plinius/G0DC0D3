@@ -176,6 +176,7 @@
             <div class="pantheon-standby-formations hidden" id="pantheon-standby-formations"></div>
           </div>
           <div class="pantheon-diff-actions hidden" id="pantheon-diff-actions"></div>
+          <div class="pantheon-live-ticker hidden" id="pantheon-live-ticker" aria-label="Live latent activity feed"></div>
           <div class="pantheon-legend" id="pantheon-legend">
             <span><i class="p-dot p-dot-violet"></i>Streaming</span>
             <span><i class="p-dot p-dot-amber"></i>Tool</span>
@@ -228,6 +229,8 @@
       if (adoptBtn) { adoptDiffCandidate(adoptBtn.dataset.diffWt, adoptBtn.dataset.diffAdopt); return; }
       const cardBtn = e.target.closest('[data-pantheon-select]');
       if (cardBtn) { selectWorker(cardBtn.dataset.pantheonSelect); return; }
+      const tickerRow = e.target.closest('[data-ticker-select]');
+      if (tickerRow) { selectWorker(tickerRow.dataset.tickerSelect); return; }
       const approveBtn = e.target.closest('[data-pantheon-approve]');
       if (approveBtn) { resolveApprovalFromPantheon(approveBtn.dataset.pantheonApprove); return; }
       if (e.target.closest('#roster-forge-new')) { openBuilder(null); return; }
@@ -287,6 +290,7 @@
         replayPlaying = false;
         replayProgress = Math.max(0, Math.min(100, Number(e.target.value) || 0));
         updateReplayBar();
+        renderLiveTicker();
         if (activeLens === 'stage') drawStage();
         if (activeLens === 'timeline') drawTimeline();
       }
@@ -524,6 +528,8 @@
   function startDemo(initialTick = 1) {
     stopDemo();
     demoMode = true;
+    replayPlaying = false;
+    replayProgress = 100;
     let tick = initialTick;
     data = buildDemoState(tick);
     if (!selectedWorkerId && data.workers[0]) selectedWorkerId = null;
@@ -558,7 +564,7 @@
   function updateDemoButton() {
     const btn = document.getElementById('pantheon-demo-btn');
     if (!btn) return;
-    btn.textContent = demoMode ? 'Exit Preview' : 'Preview Swarm';
+    btn.textContent = demoMode ? 'Exit Demo' : 'Preview';
     btn.classList.toggle('is-active', demoMode);
   }
 
@@ -664,11 +670,13 @@
       const contenders = (data.arena.contenders || []).map((c) => {
         const maxD = Math.max(1000, ...(data.arena.contenders || []).map(x => x.durationMs || 2000));
         const ratio = Math.min(1, (frac * maxD * 1.12) / Math.max(600, c.durationMs || 2000));
+        const revealed = frac >= 0.88;
         return {
           ...c,
           _replayProg: ratio,
+          _replayGradeRevealed: revealed,
           status: ratio >= 1 ? c.status : 'streaming',
-          isWinner: frac >= 0.92 ? c.isWinner : false,
+          isWinner: revealed ? c.isWinner : false,
         };
       });
       return {
@@ -676,8 +684,9 @@
         arena: {
           ...data.arena,
           contenders,
-          winnerId: frac >= 0.92 ? data.arena.winnerId : null,
-          judge: data.arena.judge ? { ...data.arena.judge, status: frac >= 0.92 ? 'completed' : frac >= 0.72 ? 'grading' : 'waiting' } : null,
+          winnerId: frac >= 0.88 ? data.arena.winnerId : null,
+          note: frac >= 0.88 ? data.arena.note : (frac >= 0.65 ? 'Blind judge evaluating fidelity, completeness & clarity…' : 'Contenders drafting independently in parallel…'),
+          judge: data.arena.judge ? { ...data.arena.judge, status: frac >= 0.88 ? 'completed' : frac >= 0.65 ? 'grading' : 'waiting' } : null,
         },
       };
     }
@@ -716,6 +725,7 @@
         replayProgress = Math.min(100, replayProgress + dt * speedPctPerSec);
         if (replayProgress >= 100) replayPlaying = false;
         updateReplayBar();
+        renderLiveTicker();
         if (activeLens === 'stage') drawStage();
         if (activeLens === 'timeline') drawTimeline();
       } else if (!motionReduced()) {
@@ -798,6 +808,35 @@
     wrap.classList.toggle('hidden', !formations.length);
     if (!formations.length) return;
     wrap.innerHTML = `<span class="pantheon-sf-label">Formations</span>${formations.slice(0, 4).map(f => `<button type="button" class="pantheon-formation-chip" data-formation-launch="${esc(f.id)}" title="${esc(`${f.name}: ${f.agents.join(', ')}`)}">${esc(f.sigil || '✦')} ${esc(f.name)} <small>${esc(f.agents.length)}</small></button>`).join('')}`;
+  }
+
+  function renderLiveTicker() {
+    const el = document.getElementById('pantheon-live-ticker');
+    if (!el) return;
+    const viewData = getEffectiveData();
+    const workers = viewData?.workers || [];
+    const show = activeLens === 'stage' && (viewData?.mode === 'swarm' || viewData?.mode === 'crew') && workers.length > 0;
+    el.classList.toggle('hidden', !show);
+    if (!show) return;
+    el.innerHTML = workers.slice(0, 4).map(wk => {
+      const st = statusInfo(wk.status);
+      const isSel = wk.workerId === selectedWorkerId;
+      const actionBadge = wk.status === 'recovering'
+        ? '⚡ GODMODƎ surge'
+        : wk.tool && st.active
+          ? `⌁ ${wk.tool}${wk.target ? ` ${wk.target.split('/').pop()}` : ''}`
+          : wk.isMvp
+            ? '★ MVP'
+            : st.label;
+      const thought = String(wk.streamTail || wk.summary || wk.prompt || 'Reasoning in latent space…').replace(/\s+/g, ' ').slice(0, 88);
+      return `<button type="button" class="plt-row tone-${st.tone} ${isSel ? 'is-selected' : ''}" data-ticker-select="${esc(wk.workerId)}" title="Click to inspect &amp; steer ${esc(wk.role)}">
+        <i class="plt-dot ${st.active ? 'is-pulsing' : ''}"></i>
+        <span class="plt-role">${esc(wk.role)}</span>
+        <span class="plt-phase">${esc(actionBadge)}</span>
+        <span class="plt-thought">${esc(thought)}</span>
+        <span class="plt-time">${fmtMs(wk.durationMs)}</span>
+      </button>`;
+    }).join('');
   }
 
   function renderDiffActionsBar() {
@@ -893,6 +932,7 @@
 
     updateReplayBar();
     renderDiffActionsBar();
+    renderLiveTicker();
     updateHeaderBadge();
     if (activeLens === 'stage') drawStage();
     if (activeLens === 'cards') renderCards();
@@ -1060,13 +1100,24 @@
     }
 
     const cx = w * 0.5;
-    const cy = viewData?.mode === 'standby' ? h * 0.36 : h * 0.48;
-    const rx = Math.min(w * 0.34, 230);
-    const ry = Math.min(h * 0.32, 148);
+    const hasTicker = (viewData?.mode === 'swarm' || viewData?.mode === 'crew') && (viewData?.workers || []).length > 0;
+    const cy = viewData?.mode === 'standby' ? h * 0.35 : hasTicker ? h * 0.38 : h * 0.48;
+    const rx = Math.min(w * 0.33, 215);
+    const ry = Math.min(h * (hasTicker ? 0.25 : 0.31), hasTicker ? 132 : 148);
 
-    // Concentric orbital guides
+    // Latent-space harmonic resonance ripples & soft ambient stardust
     ctx.save();
-    ctx.strokeStyle = pal.isLight ? 'rgba(24,25,27,0.09)' : 'rgba(255,255,255,0.08)';
+    for (let ring = 0; ring < 3; ring++) {
+      const wave = ((animPhase * 0.28 + ring / 3) % 1);
+      const alpha = (1 - wave) * (pal.isLight ? 0.08 : 0.11);
+      ctx.strokeStyle = pal.isLight ? `rgba(109, 40, 217, ${alpha.toFixed(3)})` : `rgba(167, 139, 250, ${alpha.toFixed(3)})`;
+      ctx.lineWidth = 1.1;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, rx * (0.28 + wave * 0.92), ry * (0.28 + wave * 0.92), 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    // Subtle orbital guides
+    ctx.strokeStyle = pal.isLight ? 'rgba(24,25,27,0.10)' : 'rgba(255,255,255,0.09)';
     ctx.setLineDash([4, 6]);
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -1087,31 +1138,70 @@
 
     const coords = new Map();
     const count = workers.length;
+    const standbyDrift = workers[0]?.ghost ? Math.sin(animPhase * 0.35) * 0.08 : 0;
     workers.forEach((wk, i) => {
-      const angle = -Math.PI / 2 + (i * Math.PI * 2) / Math.max(1, count);
+      const angle = -Math.PI / 2 + standbyDrift + (i * Math.PI * 2) / Math.max(1, count);
       const x = cx + Math.cos(angle) * rx;
       const y = cy + Math.sin(angle) * ry;
       coords.set(wk.workerId, { x, y, angle });
     });
 
-    // Draw file conflict arcs between workers touching the same file
+    // Soft inter-agent latent attention web (links active peers gently)
+    if (!workers[0]?.ghost && workers.length >= 2) {
+      ctx.save();
+      ctx.strokeStyle = pal.isLight ? 'rgba(109, 40, 217, 0.09)' : 'rgba(167, 139, 250, 0.12)';
+      ctx.lineWidth = 1;
+      for (let i = 0; i < workers.length; i++) {
+        for (let j = i + 1; j < workers.length; j++) {
+          const pA = coords.get(workers[i].workerId);
+          const pB = coords.get(workers[j].workerId);
+          if (!pA || !pB) continue;
+          ctx.beginPath();
+          ctx.moveTo(pA.x, pA.y);
+          ctx.lineTo(pB.x, pB.y);
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
+    }
+
+    // Labeled shared-file overlap arcs between workers touching the same file
     for (const conflict of (data?.fileConflicts || [])) {
       const a = coords.get(conflict.owners[0]?.workerId);
       const b = coords.get(conflict.owners[1]?.workerId);
       if (a && b) {
+        const ctrlX = (a.x + b.x) / 2 + (cx - (a.x + b.x) / 2) * 0.35;
+        const ctrlY = (a.y + b.y) / 2 - 22;
         ctx.save();
-        ctx.strokeStyle = 'rgba(245, 158, 11, 0.55)';
-        ctx.lineWidth = 1.6;
+        ctx.strokeStyle = 'rgba(245, 158, 11, 0.62)';
+        ctx.lineWidth = 1.7;
         ctx.setLineDash([5, 4]);
         ctx.beginPath();
         ctx.moveTo(a.x, a.y);
-        ctx.quadraticCurveTo(cx, cy - 22, b.x, b.y);
+        ctx.quadraticCurveTo(ctrlX, ctrlY, b.x, b.y);
         ctx.stroke();
+        ctx.setLineDash([]);
+        // Labeled overlap pill right on arc midpoint
+        const midX = 0.25 * a.x + 0.5 * ctrlX + 0.25 * b.x;
+        const midY = 0.25 * a.y + 0.5 * ctrlY + 0.25 * b.y;
+        const fname = `⚠ ${String(conflict.file || '').split('/').pop()}`.slice(0, 18);
+        ctx.font = '600 9px ui-monospace, SFMono-Regular, monospace';
+        const fw = ctx.measureText(fname).width + 12;
+        ctx.fillStyle = pal.isLight ? 'rgba(255, 251, 235, 0.96)' : 'rgba(34, 24, 12, 0.92)';
+        ctx.strokeStyle = 'rgba(245, 158, 11, 0.65)';
+        ctx.lineWidth = 1;
+        drawRoundedRect(ctx, midX - fw / 2, midY - 8, fw, 16, 8);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = pal.amber;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(fname, midX, midY + 0.5);
         ctx.restore();
       }
     }
 
-    // Draw signal conduits from Orchestrator Core to each Worker
+    // Draw bi-directional signal conduits + GODMODƎ golden lightning surge
     workers.forEach((wk, idx) => {
       const pos = coords.get(wk.workerId);
       if (!pos) return;
@@ -1132,23 +1222,51 @@
       ctx.moveTo(cx, cy);
       ctx.quadraticCurveTo(mx, my, pos.x, pos.y);
       ctx.strokeStyle = stroke;
-      ctx.globalAlpha = wk.ghost ? 0.5 : st.active ? 0.65 : 0.35;
+      ctx.globalAlpha = wk.ghost ? 0.5 : st.active ? 0.68 : 0.36;
       ctx.lineWidth = st.active ? 2.2 : 1.4;
       ctx.stroke();
 
-      // Travelling luminous energy packets on active conduits
+      // GODMODƎ golden recovery lightning bypass arc
+      if (wk.status === 'recovering' && !wk.ghost) {
+        ctx.beginPath();
+        ctx.globalAlpha = 0.85;
+        ctx.strokeStyle = pal.gold;
+        ctx.lineWidth = 1.6;
+        for (let s = 0; s <= 10; s++) {
+          const t = s / 10;
+          const u = 1 - t;
+          const bx = u * u * cx + 2 * u * t * mx + t * t * pos.x;
+          const by = u * u * cy + 2 * u * t * my + t * t * pos.y;
+          const jitter = s > 0 && s < 10 ? Math.sin(animPhase * 18 + s * 2.7 + idx) * 6 : 0;
+          if (s === 0) ctx.moveTo(bx, by);
+          else ctx.lineTo(bx + jitter, by - jitter * 0.7);
+        }
+        ctx.stroke();
+      }
+
+      // Bi-directional travelling luminous energy packets (dispatch out + synthesis return!)
       if (st.active && !wk.ghost) {
         for (let p = 0; p < 2; p++) {
-          const t = (animPhase * 0.65 + idx * 0.23 + p * 0.5) % 1;
-          const u = 1 - t;
-          const px = u * u * cx + 2 * u * t * mx + t * t * pos.x;
-          const py = u * u * cy + 2 * u * t * my + t * t * pos.y;
+          const tOut = (animPhase * 0.68 + idx * 0.23 + p * 0.5) % 1;
+          const u = 1 - tOut;
+          const px = u * u * cx + 2 * u * tOut * mx + tOut * tOut * pos.x;
+          const py = u * u * cy + 2 * u * tOut * my + tOut * tOut * pos.y;
           ctx.globalAlpha = 0.95;
           ctx.fillStyle = st.tone === 'gold' ? pal.gold : stroke;
           ctx.beginPath();
-          ctx.arc(px, py, 3.6, 0, Math.PI * 2);
+          ctx.arc(px, py, 3.4, 0, Math.PI * 2);
           ctx.fill();
         }
+        // Return insight spark flowing back to GODMODƎ nucleus
+        const tBack = 1 - ((animPhase * 0.45 + idx * 0.37) % 1);
+        const ub = 1 - tBack;
+        const rpx = ub * ub * cx + 2 * ub * tBack * mx + tBack * tBack * pos.x;
+        const rpy = ub * ub * cy + 2 * ub * tBack * my + tBack * tBack * pos.y;
+        ctx.globalAlpha = 0.72;
+        ctx.fillStyle = pal.sage;
+        ctx.beginPath();
+        ctx.arc(rpx, rpy, 2.4, 0, Math.PI * 2);
+        ctx.fill();
       }
       ctx.restore();
     });
@@ -1259,17 +1377,52 @@
       ctx.fillStyle = pal.text;
       ctx.fillText(caption, pos.x, pillY + 10.5);
 
-      // Golden ★ MVP crown pill above winning worker
+      // Rotating velocity arc + orbiting tool sparks for active workers
+      if (st.active && !wk.ghost) {
+        ctx.save();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2.4;
+        ctx.lineCap = 'round';
+        ctx.globalAlpha = 0.92;
+        const arcStart = animPhase * 2.8 + (wk.workerId?.length || 1);
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, r + 5, arcStart, arcStart + Math.PI * 0.72);
+        ctx.stroke();
+        if (wk.status === 'tool') {
+          for (let sp = 0; sp < 3; sp++) {
+            const sa = -animPhase * 3.4 + (sp * Math.PI * 2) / 3;
+            ctx.fillStyle = pal.amber;
+            ctx.beginPath();
+            ctx.arc(pos.x + Math.cos(sa) * (r + 9), pos.y + Math.sin(sa) * (r + 9), 2.3, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+        ctx.restore();
+      }
+
+      // Golden ★ MVP crown OR live elapsed stopwatch pill above node
       if (!wk.ghost && wk.isMvp) {
         ctx.fillStyle = 'rgba(251, 191, 36, 0.18)';
         ctx.strokeStyle = pal.gold;
         ctx.lineWidth = 1.2;
-        drawRoundedRect(ctx, pos.x - 24, pos.y - r - 22, 48, 16, 8);
+        drawRoundedRect(ctx, pos.x - 24, pos.y - r - 23, 48, 16, 8);
         ctx.fill();
         ctx.stroke();
         ctx.fillStyle = pal.gold;
         ctx.font = '700 8.5px ui-monospace, SFMono-Regular, monospace';
-        ctx.fillText('★ MVP', pos.x, pos.y - r - 13.5);
+        ctx.fillText('★ MVP', pos.x, pos.y - r - 14.5);
+      } else if (!wk.ghost && wk.durationMs > 0) {
+        const tLabel = fmtMs(wk.durationMs);
+        ctx.font = '600 8.5px ui-monospace, SFMono-Regular, monospace';
+        const etw = Math.max(34, ctx.measureText(tLabel).width + 10);
+        ctx.fillStyle = pal.isLight ? 'rgba(255,255,255,0.92)' : 'rgba(18,19,22,0.88)';
+        ctx.strokeStyle = st.active ? color : pal.line;
+        ctx.lineWidth = 1;
+        drawRoundedRect(ctx, pos.x - etw / 2, pos.y - r - 22, etw, 15, 7);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = st.active ? color : pal.muted;
+        ctx.fillText(tLabel, pos.x, pos.y - r - 14);
       }
 
       // File territory chip if present
@@ -1292,44 +1445,80 @@
     ctx.fillStyle = pal.muted;
     ctx.font = '600 10px ui-monospace, SFMono-Regular, monospace';
     ctx.textAlign = 'left';
-    ctx.fillText(`CODE DIFF RACE · ${String(race.repository || 'worktree').toUpperCase()} (${race.branch || 'branch'})`, leftX, 24);
+    ctx.fillText(`CODE DIFF RACE · ${String(race.repository || 'worktree').toUpperCase()} (${race.branch || 'branch'})`, leftX, 26);
     ctx.restore();
 
-    const usableH = Math.max(120, h - 108);
-    const laneStep = usableH / Math.max(1, cands.length);
-    cands.slice(0, 4).forEach((c, idx) => {
-      const ly = 56 + idx * laneStep + laneStep * 0.35;
+    const visible = cands.slice(0, 4);
+    const maxLines = Math.max(1, ...visible.map(c => (c.additions || 0) + (c.deletions || 0)));
+    const readyTimes = visible.filter(c => (c.status === 'ready' || c.status === 'applied') && c.elapsedMs > 0).map(c => c.elapsedMs);
+    const fastestMs = readyTimes.length > 1 ? Math.min(...readyTimes) : null;
+    const readyTotals = visible.filter(c => c.status === 'ready' || c.status === 'applied').map(c => (c.additions || 0) + (c.deletions || 0));
+    const tightestTotal = readyTotals.length > 1 ? Math.min(...readyTotals) : null;
+
+    const laneStep = Math.min(112, Math.max(76, (h - 150) / Math.max(1, visible.length)));
+    const totalBlockH = laneStep * visible.length;
+    const startY = Math.max(64, (h - 90 - totalBlockH) / 2 + 24);
+
+    visible.forEach((c, idx) => {
+      const ly = startY + idx * laneStep;
       const done = c.status === 'ready' || c.status === 'applied';
       const failed = c.status === 'failed';
       const isApplied = c.status === 'applied';
-      const prog = done ? 1 : failed ? 0.38 : (0.25 + 0.55 * ((Math.sin(animPhase * 1.9 + idx * 1.3) + 1) / 2));
-      const color = isApplied ? pal.gold : done ? pal.sage : failed ? pal.coral : pal.violet;
+      const totalChg = (c.additions || 0) + (c.deletions || 0);
+      const isFastest = done && fastestMs !== null && c.elapsedMs === fastestMs;
+      const isTightest = done && tightestTotal !== null && totalChg === tightestTotal && totalChg < maxLines;
 
       ctx.save();
+      // Subtle lane card backdrop
+      ctx.fillStyle = pal.isLight ? 'rgba(255,255,255,0.68)' : 'rgba(255,255,255,0.025)';
+      ctx.strokeStyle = isApplied ? pal.gold : pal.line;
+      ctx.lineWidth = isApplied ? 1.5 : 1;
+      drawRoundedRect(ctx, leftX - 10, ly - 32, trackW + 20, 74, 12);
+      ctx.fill();
+      ctx.stroke();
+
       ctx.fillStyle = pal.text;
       ctx.font = '600 12px -apple-system, BlinkMacSystemFont, sans-serif';
       ctx.textAlign = 'left';
-      ctx.fillText(`${isApplied ? '♛ ' : ''}${c.slot} · ${shortModel(c.label)}`, leftX, ly - 14);
+      const badge = isApplied ? ' · ♛ ADOPTED' : isTightest ? ' · ✦ SURGICAL' : isFastest ? ' · ⚡ FASTEST' : '';
+      ctx.fillText(`${c.slot} · ${shortModel(c.label)}${badge}`, leftX, ly - 14);
 
       ctx.fillStyle = isApplied ? pal.gold : done ? pal.sage : pal.muted;
       ctx.font = '600 11px ui-monospace, SFMono-Regular, monospace';
       ctx.textAlign = 'right';
-      const statTxt = done ? `+${c.additions}/-${c.deletions} · ${fmtMs(c.elapsedMs)}` : failed ? 'FAILED' : 'BUILDING…';
+      const statTxt = done ? `+${c.additions} / -${c.deletions} · ${fmtMs(c.elapsedMs)}` : failed ? 'FAILED' : 'GENERATING PATCH…';
       ctx.fillText(statTxt, leftX + trackW, ly - 14);
 
+      // Track rail
       ctx.fillStyle = pal.isLight ? 'rgba(24,25,27,0.08)' : 'rgba(255,255,255,0.08)';
-      drawRoundedRect(ctx, leftX, ly - 4, trackW, 12, 6);
+      drawRoundedRect(ctx, leftX, ly - 2, trackW, 14, 7);
       ctx.fill();
 
-      ctx.fillStyle = color;
-      drawRoundedRect(ctx, leftX, ly - 4, Math.max(18, trackW * prog), 12, 6);
-      ctx.fill();
+      if (done && totalChg > 0) {
+        // Proportional stacked emerald (+additions) + coral (-deletions) bar!
+        const footprintW = Math.max(48, trackW * (0.35 + 0.65 * (totalChg / maxLines)));
+        const addW = Math.max(c.additions ? 10 : 0, footprintW * (c.additions / totalChg));
+        const delW = Math.max(c.deletions ? 8 : 0, footprintW - addW);
+        ctx.fillStyle = isApplied ? pal.gold : pal.sage;
+        drawRoundedRect(ctx, leftX, ly - 2, addW, 14, delW > 0 ? [7, 0, 0, 7] : 7);
+        ctx.fill();
+        if (delW > 0) {
+          ctx.fillStyle = pal.coral;
+          drawRoundedRect(ctx, leftX + addW, ly - 2, delW, 14, [0, 7, 7, 0]);
+          ctx.fill();
+        }
+      } else {
+        const prog = failed ? 0.35 : (0.25 + 0.55 * ((Math.sin(animPhase * 1.9 + idx * 1.3) + 1) / 2));
+        ctx.fillStyle = failed ? pal.coral : pal.violet;
+        drawRoundedRect(ctx, leftX, ly - 2, Math.max(18, trackW * prog), 14, 7);
+        ctx.fill();
+      }
 
       if (c.files?.length) {
         ctx.fillStyle = pal.muted;
         ctx.font = '500 9.5px ui-monospace, SFMono-Regular, monospace';
         ctx.textAlign = 'left';
-        ctx.fillText(c.files.slice(0, 3).map(f => f.split('/').pop()).join(' · '), leftX, ly + 20);
+        ctx.fillText(`Files: ${c.files.slice(0, 3).map(f => f.split('/').pop()).join(' · ')}`, leftX, ly + 26);
       }
       ctx.restore();
     });
@@ -1338,95 +1527,162 @@
   function drawArenaRace(ctx, w, h, pal, arena) {
     const contenders = arena.contenders || [];
     const leftX = 28;
-    const judgeX = w - 92;
-    const trackW = Math.max(120, judgeX - leftX - 42);
-    const lanes = [h * 0.34, h * 0.68];
+    const judgeX = w - 82;
+    const trackW = Math.max(130, judgeX - leftX - 48);
+    const centerY = h * 0.45;
+    const lanes = [centerY - 78, centerY + 78];
 
     // Header title inside stage
     ctx.save();
     ctx.fillStyle = pal.muted;
     ctx.font = '600 10px ui-monospace, SFMono-Regular, monospace';
     ctx.textAlign = 'left';
-    ctx.fillText('ULTRA-PLINIAN HEAD-TO-HEAD ARENA', leftX, 24);
+    ctx.fillText('ULTRA-PLINIAN HEAD-TO-HEAD ARENA', leftX, 26);
     ctx.restore();
 
     contenders.slice(0, 2).forEach((c, idx) => {
-      const ly = lanes[idx] || h * 0.5;
+      const ly = lanes[idx] || centerY;
       const done = c.status === 'completed';
       const failed = c.status === 'declined' || c.status === 'failed';
+      const gradeRevealed = c._replayGradeRevealed !== undefined ? c._replayGradeRevealed : Boolean(c.grade);
       const prog = typeof c._replayProg === 'number'
         ? c._replayProg
         : done ? 1 : failed ? 0.45 : (0.28 + 0.58 * ((Math.sin(animPhase * 1.8 + idx * 1.4) + 1) / 2));
       const color = c.isWinner ? pal.gold : done ? pal.sage : failed ? pal.coral : (idx === 0 ? pal.violet : pal.blue);
 
       ctx.save();
+      // Subtle lane panel
+      ctx.fillStyle = pal.isLight ? 'rgba(255,255,255,0.72)' : 'rgba(255,255,255,0.025)';
+      ctx.strokeStyle = c.isWinner ? pal.gold : pal.line;
+      ctx.lineWidth = c.isWinner ? 1.5 : 1;
+      drawRoundedRect(ctx, leftX - 10, ly - 34, trackW + 20, 82, 12);
+      ctx.fill();
+      ctx.stroke();
+
       // Label above track
       ctx.fillStyle = pal.text;
       ctx.font = '600 12px -apple-system, BlinkMacSystemFont, sans-serif';
       ctx.textAlign = 'left';
-      ctx.fillText(`${c.isWinner ? '♛ ' : ''}${c.slot} · ${c.label}`, leftX, ly - 16);
+      ctx.fillText(`${c.isWinner ? '♛ ' : ''}${c.slot} · ${c.label}`, leftX, ly - 15);
 
-      // Duration / Score right-aligned
+      // Duration / Score right-aligned (only reveal final score after Judge finishes!)
       ctx.fillStyle = c.isWinner ? pal.gold : pal.muted;
       ctx.font = '600 11px ui-monospace, SFMono-Regular, monospace';
       ctx.textAlign = 'right';
-      const rightTxt = c.grade ? `${c.grade.total}/15 · ${fmtMs(c.durationMs)}` : (done ? fmtMs(c.durationMs) : c.status.toUpperCase());
-      ctx.fillText(rightTxt, leftX + trackW, ly - 16);
+      const rightTxt = (c.grade && gradeRevealed)
+        ? `${c.grade.total}/15 · ${fmtMs(c.durationMs)}`
+        : (done ? `DRAFT READY · ${fmtMs(c.durationMs)}` : 'DRAFTING…');
+      ctx.fillText(rightTxt, leftX + trackW, ly - 15);
 
       // Track rail
       ctx.fillStyle = pal.isLight ? 'rgba(24,25,27,0.08)' : 'rgba(255,255,255,0.08)';
-      drawRoundedRect(ctx, leftX, ly - 6, trackW, 12, 6);
+      drawRoundedRect(ctx, leftX, ly - 3, trackW, 13, 6.5);
       ctx.fill();
 
-      // Active bar
+      // Active velocity bar + glowing lead tip while streaming
+      const barW = Math.max(16, trackW * prog);
       ctx.fillStyle = color;
-      drawRoundedRect(ctx, leftX, ly - 6, Math.max(16, trackW * prog), 12, 6);
+      drawRoundedRect(ctx, leftX, ly - 3, barW, 13, 6.5);
       ctx.fill();
+      if (!done && !failed) {
+        ctx.fillStyle = '#ffffff';
+        ctx.globalAlpha = 0.85;
+        ctx.beginPath();
+        ctx.arc(leftX + barW - 5, ly + 3.5, 3.2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
 
-      // Converging smooth S-curve wire to Judge
+      // Converging smooth S-curve wire + animated pulse to Blind Judge
       ctx.strokeStyle = color;
-      ctx.globalAlpha = c.isWinner ? 0.9 : 0.45;
+      ctx.globalAlpha = c.isWinner ? 0.92 : 0.45;
       ctx.lineWidth = c.isWinner ? 2.4 : 1.5;
+      const sx = leftX + trackW + 10;
       ctx.beginPath();
-      ctx.moveTo(leftX + trackW, ly);
-      ctx.bezierCurveTo(leftX + trackW + 32, ly, judgeX - 58, h * 0.51, judgeX - 30, h * 0.51);
+      ctx.moveTo(sx, ly + 3);
+      ctx.bezierCurveTo(sx + 26, ly + 3, judgeX - 48, centerY, judgeX - 30, centerY);
       ctx.stroke();
 
-      if (c.grade) {
+      if (c.grade && gradeRevealed) {
+        ctx.globalAlpha = 1;
+        // 3 mini rubric score meters (Fidelity, Completeness, Clarity)
+        const rubrics = [
+          ['Fidelity', c.grade.fidelity],
+          ['Complete', c.grade.completeness],
+          ['Clarity', c.grade.clarity]
+        ];
+        const colW = Math.floor(trackW / 3);
+        rubrics.forEach(([lbl, val], ri) => {
+          const rx0 = leftX + ri * colW;
+          ctx.fillStyle = pal.muted;
+          ctx.font = '500 9.5px ui-monospace, SFMono-Regular, monospace';
+          ctx.textAlign = 'left';
+          ctx.fillText(`${lbl} ${val}/5`, rx0, ly + 25);
+          ctx.fillStyle = pal.isLight ? 'rgba(24,25,27,0.1)' : 'rgba(255,255,255,0.1)';
+          drawRoundedRect(ctx, rx0, ly + 31, colW - 14, 4, 2);
+          ctx.fill();
+          ctx.fillStyle = color;
+          drawRoundedRect(ctx, rx0, ly + 31, ((colW - 14) * Math.max(0, Math.min(5, val))) / 5, 4, 2);
+          ctx.fill();
+        });
+      } else {
         ctx.globalAlpha = 1;
         ctx.fillStyle = pal.muted;
-        ctx.font = '500 10px ui-monospace, SFMono-Regular, monospace';
+        ctx.font = '500 9.5px ui-monospace, SFMono-Regular, monospace';
         ctx.textAlign = 'left';
-        ctx.fillText(`Fidelity ${c.grade.fidelity}/5 · Completeness ${c.grade.completeness}/5 · Clarity ${c.grade.clarity}/5`, leftX, ly + 22);
+        ctx.fillText(done ? 'Submitted blindly to Judge — awaiting rubric scores…' : 'Streaming independent draft in isolated lane…', leftX, ly + 27);
       }
       ctx.restore();
     });
 
-    // Blind Judge Diamond Node
-    const jy = h * 0.51;
+    // Blind Judge Diamond Node with gentle halo
+    const jy = centerY;
     ctx.save();
+    const jHalo = ctx.createRadialGradient(judgeX, jy, 6, judgeX, jy, 52);
+    jHalo.addColorStop(0, arena.winnerId ? 'rgba(251, 191, 36, 0.28)' : 'rgba(245, 158, 11, 0.22)');
+    jHalo.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = jHalo;
+    ctx.beginPath();
+    ctx.arc(judgeX, jy, 52, 0, Math.PI * 2);
+    ctx.fill();
+
     ctx.translate(judgeX, jy);
     ctx.rotate(Math.PI / 4);
     ctx.fillStyle = pal.panel;
     ctx.strokeStyle = arena.winnerId ? pal.gold : pal.amber;
-    ctx.lineWidth = 2.2;
-    drawRoundedRect(ctx, -24, -24, 48, 48, 8);
+    ctx.lineWidth = 2.4;
+    drawRoundedRect(ctx, -26, -26, 52, 52, 9);
     ctx.fill();
     ctx.stroke();
     ctx.restore();
 
     ctx.save();
     ctx.fillStyle = arena.winnerId ? pal.gold : pal.amber;
-    ctx.font = '700 11px ui-monospace, SFMono-Regular, monospace';
+    ctx.font = '700 13px ui-monospace, SFMono-Regular, monospace';
     ctx.textAlign = 'center';
     ctx.fillText(arena.winnerId ? '♛' : '⚖', judgeX, jy - 3);
     ctx.fillStyle = pal.text;
     ctx.font = '600 9px ui-monospace, SFMono-Regular, monospace';
-    ctx.fillText('JUDGE', judgeX, jy + 11);
+    ctx.fillText('JUDGE', judgeX, jy + 12);
     if (arena.judge?.label) {
       ctx.fillStyle = pal.muted;
       ctx.font = '500 9.5px -apple-system, BlinkMacSystemFont, sans-serif';
-      ctx.fillText(shortModel(arena.judge.label).slice(0, 14), judgeX, jy + 46);
+      ctx.fillText(shortModel(arena.judge.label).slice(0, 14), judgeX, jy + 48);
+    }
+
+    // Verdict / live phase banner neatly anchored below both lanes
+    if (arena.note) {
+      const bannerY = Math.min(h - 52, centerY + 150);
+      ctx.fillStyle = pal.isLight ? 'rgba(255,255,255,0.82)' : 'rgba(255,255,255,0.035)';
+      ctx.strokeStyle = arena.winnerId ? pal.gold : pal.line;
+      ctx.lineWidth = 1;
+      drawRoundedRect(ctx, leftX - 10, bannerY - 14, w - leftX * 2 + 20, 28, 8);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = arena.winnerId ? pal.gold : pal.text;
+      ctx.font = '600 10.5px -apple-system, BlinkMacSystemFont, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(arena.note.slice(0, 78), w / 2, bannerY + 1);
     }
     ctx.restore();
   }
