@@ -25,6 +25,8 @@ const profiles = {
       'qwen/qwen3-coder',
       'moonshotai/kimi-k3.1-pro',
       'x-ai/grok-4.7',
+      'meta-llama/muse-spark',
+      'meta-llama/llama-4-maverick',
     ],
   },
   anthropic: {
@@ -32,22 +34,44 @@ const profiles = {
     protocol: 'anthropic',
     endpoint: 'https://api.anthropic.com/v1',
     apiKeyEnv: 'ANTHROPIC_API_KEY',
-    defaults: ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
+    defaults: ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
   },
   openai: {
     label: 'OpenAI',
     protocol: 'openai-responses',
     endpoint: 'https://api.openai.com/v1',
     apiKeyEnv: 'OPENAI_API_KEY',
-    defaults: ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'o3', 'o4-mini'],
+    defaults: ['gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-6.1-terra', 'gpt-5.6-sol', 'gpt-5.4', 'gpt-5.3-codex', 'o3'],
   },
-  gemini: { label: 'Gemini API', protocol: 'openai-chat', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai', apiKeyEnv: 'GEMINI_API_KEY', defaults: ['gemini-4-neon', 'gemini-3-pro', 'gemini-2.5-pro', 'gemini-2.5-flash'] },
+  xai: {
+    label: 'xAI (Grok)',
+    protocol: 'openai-chat',
+    endpoint: 'https://api.x.ai/v1',
+    apiKeyEnv: 'XAI_API_KEY',
+    defaults: ['grok-4.7', 'grok-4.7-fast', 'grok-4', 'grok-code-fast-1'],
+  },
+  gemini: {
+    label: 'Gemini API',
+    protocol: 'openai-chat',
+    endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    apiKeyEnv: 'GEMINI_API_KEY',
+    defaults: ['gemini-4-neon', 'gemini-4-pro', 'gemini-3-pro', 'gemini-2.5-pro', 'gemini-2.5-flash'],
+  },
+  meta: {
+    label: 'Meta AI (Muse / Llama)',
+    protocol: 'openai-chat',
+    endpoint: 'https://api.llama.com/compat/v1',
+    apiKeyEnv: 'LLAMA_API_KEY',
+    defaults: ['Muse-Spark', 'Llama-4-Maverick-17B-128E-Instruct-FP8', 'Llama-4-Scout-17B-16E-Instruct-FP8'],
+  },
   nous: { label: 'Nous Portal', protocol: 'openai-chat', endpoint: 'https://inference-api.nousresearch.com/v1', apiKeyEnv: 'NOUS_API_KEY', defaults: ['Hermes-4-405B', 'Hermes-4-70B'] },
 };
 
 const OPENAI_EXCLUDED_MODEL_RE = /^(?:text-embedding|whisper|tts-|dall-e|gpt-image|chatgpt-image|omni-moderation|text-moderation|babbage|davinci|ada|curie|sora|ft:)|(?:embedding|moderation|realtime|audio-preview|transcribe|tts|whisper|dall-e|image-1)/i;
+const XAI_EXCLUDED_MODEL_RE = /(?:image|imagine|video|tts|whisper|embedding)/i;
+const GEMINI_EXCLUDED_MODEL_RE = /(?:embedding|imagen|veo|aqa|tts|native-audio|live-)/i;
 const DIRECT_CATALOG_TTL_MS = 15 * 60 * 1000;
-const DIRECT_CATALOG_PROVIDERS = new Set(['openai', 'anthropic']);
+const DIRECT_CATALOG_PROVIDERS = new Set(['openai', 'anthropic', 'xai', 'gemini', 'meta']);
 
 export function nativeKeychain(executable, dataDir) {
   if (process.platform !== 'darwin' || !path.isAbsolute(executable)) throw new Error('Invalid native Keychain helper.');
@@ -309,6 +333,8 @@ export async function createProviderSettings(providers, keychain, { dataDir, fet
         const key = typeof body.key === 'string' ? body.key.trim() : '';
         const detected = key.startsWith('sk-ant-') ? 'anthropic'
           : key.startsWith('sk-or-') ? 'openrouter'
+          : key.startsWith('xai-') ? 'xai'
+          : key.startsWith('LLM|') ? 'meta'
           : key.startsWith('AIza') ? 'gemini'
           : key.startsWith('sk-') ? 'openai'
           : 'venice';
@@ -431,7 +457,7 @@ export async function createProviderSettings(providers, keychain, { dataDir, fet
     async listLiveModels(rawProvider, { privacy = DEFAULT_PRIVACY_SETTINGS, onOutbound, force = false } = {}) {
       const provider = typeof rawProvider === 'string' ? rawProvider.trim().toLowerCase() : '';
       if (!DIRECT_CATALOG_PROVIDERS.has(provider)) {
-        throw Object.assign(new Error('Direct model catalog supports openai or anthropic.'), { status: 400 });
+        throw Object.assign(new Error('Direct model catalog supports openai, anthropic, xai, gemini, or meta.'), { status: 400 });
       }
       const profile = profiles[provider];
       if (disabledProfiles.has(provider)) {
@@ -488,9 +514,12 @@ export async function createProviderSettings(providers, keychain, { dataDir, fet
           });
         };
         for (const row of liveRows) {
-          const id = typeof row?.id === 'string' ? row.id.trim() : '';
+          let id = typeof row?.id === 'string' ? row.id.trim() : '';
           if (!id) continue;
+          if (provider === 'gemini') id = id.replace(/^models\//, '');
           if (provider === 'openai' && OPENAI_EXCLUDED_MODEL_RE.test(id) && !registeredSet.has(id)) continue;
+          if (provider === 'xai' && XAI_EXCLUDED_MODEL_RE.test(id) && !registeredSet.has(id)) continue;
+          if (provider === 'gemini' && GEMINI_EXCLUDED_MODEL_RE.test(id) && !registeredSet.has(id)) continue;
           const created = typeof row.created === 'number'
             ? row.created
             : (typeof row.created_at === 'string' ? Math.floor(Date.parse(row.created_at) / 1000) : null);

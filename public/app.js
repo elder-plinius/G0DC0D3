@@ -199,7 +199,7 @@ function applyAppMode(mode, { persist = true, notify = false, switchView = false
   const headline = $('#welcome-headline');
   if (headline) {
     headline.innerHTML = isCode
-      ? 'Build with <span class="wordmark" role="img" aria-label="GodCode">GODCODƎ</span>'
+      ? 'What are we building<span class="welcome-punctuation">?</span>'
       : 'What can we do<span class="welcome-punctuation">?</span>';
   }
   setVisible('#welcome-godcode-sub', isCode);
@@ -360,20 +360,23 @@ let openrouterCatalogConnection = null;
 let openrouterFilter = '';
 let openrouterBusyModel = null;
 let openrouterRefreshBusy = false;
+const DIRECT_CATALOG_KEYS = ['openai', 'anthropic', 'xai', 'gemini', 'meta'];
 const directCatalogs = {
   openai: { connected: false, models: [], registered: [], warning: '' },
   anthropic: { connected: false, models: [], registered: [], warning: '' },
+  xai: { connected: false, models: [], registered: [], warning: '' },
+  gemini: { connected: false, models: [], registered: [], warning: '' },
+  meta: { connected: false, models: [], registered: [], warning: '' },
 };
-const directCatalogFilters = { openai: '', anthropic: '' };
-const directCatalogRefreshBusy = { openai: false, anthropic: false };
+const directCatalogFilters = { openai: '', anthropic: '', xai: '', gemini: '', meta: '' };
+const directCatalogRefreshBusy = { openai: false, anthropic: false, xai: false, gemini: false, meta: false };
 let directCatalogBusyModel = null;
 const catalogId = id => typeof id === 'string' && id.startsWith('venice-catalog:');
 function providerById(id) {
   return state.providers.find(provider => provider.id === id)
     || (catalogId(id) && (veniceCatalog.models.find(model => model.id === id) || {id, label:id.slice('venice-catalog:'.length)}))
     || openrouterCatalog.models.find(model => model.id === id)
-    || directCatalogs.openai.models.find(model => model.id === id)
-    || directCatalogs.anthropic.models.find(model => model.id === id);
+    || DIRECT_CATALOG_KEYS.map(k => directCatalogs[k].models.find(model => model.id === id)).find(Boolean);
 }
 function liveProviders() { return state.providers.filter(provider => provider.kind !== 'scripted' && provider.available !== false); }
 function newConversationProviders() {
@@ -2187,8 +2190,7 @@ function renderDirectProviderCatalog(provider) {
 }
 
 function renderDirectProviderCatalogs() {
-  renderDirectProviderCatalog('openai');
-  renderDirectProviderCatalog('anthropic');
+  for (const key of DIRECT_CATALOG_KEYS) renderDirectProviderCatalog(key);
 }
 
 let apiToggleBusy = null;
@@ -3062,9 +3064,17 @@ function renderCliNativeSettings(connection) {
     const eff = st.reasoningEffort || '';
     const tier = st.serviceTier || '';
     const verb = st.verbosity || '';
-    const localHint = connection.localDefaults && (connection.localDefaults.model || connection.localDefaults.reasoningEffort || connection.localDefaults.serviceTier)
-      ? `<p class="sub-local-hint">Detected in <code>~/.codex/config.toml</code>: ${escapeHTML([connection.localDefaults.model, connection.localDefaults.reasoningEffort ? `effort=${connection.localDefaults.reasoningEffort}` : '', connection.localDefaults.serviceTier ? `tier=${connection.localDefaults.serviceTier}` : ''].filter(Boolean).join(' · '))}</p>`
-      : '';
+    const localParts = [];
+    if (connection.localDefaults) {
+      if (connection.localDefaults.model) localParts.push(connection.localDefaults.model);
+      if (connection.localDefaults.reasoningEffort) localParts.push(`effort=${connection.localDefaults.reasoningEffort}`);
+      if (connection.localDefaults.serviceTier) localParts.push(`tier=${connection.localDefaults.serviceTier}`);
+    }
+    const hintSegments = [
+      localParts.length ? `Config (<code>~/.codex/config.toml</code>): ${escapeHTML(localParts.join(' · '))}` : '',
+      connection.localCacheCount > 0 ? `Synced ${connection.localCacheCount} live models from <code>~/.codex/models_cache.json</code>` : ''
+    ].filter(Boolean);
+    const localHint = hintSegments.length ? `<p class="sub-local-hint">${hintSegments.join(' · ')}</p>` : '';
     return `<div class="sub-settings-block">
       <div class="sub-settings-grid">
         <label class="sub-setting-field"><span>Reasoning effort</span><select data-sub-setting-id="codex-cli" data-sub-setting-key="reasoningEffort" ${disabled}>
@@ -3073,10 +3083,13 @@ function renderCliNativeSettings(connection) {
           <option value="medium" ${eff === 'medium' ? 'selected' : ''}>Medium</option>
           <option value="high" ${eff === 'high' ? 'selected' : ''}>High</option>
           <option value="xhigh" ${eff === 'xhigh' ? 'selected' : ''}>Extra High (xhigh)</option>
+          <option value="max" ${eff === 'max' ? 'selected' : ''}>Max</option>
+          <option value="ultra" ${eff === 'ultra' ? 'selected' : ''}>Ultra</option>
         </select></label>
         <label class="sub-setting-field"><span>Service tier</span><select data-sub-setting-id="codex-cli" data-sub-setting-key="serviceTier" ${disabled}>
           <option value="" ${tier === '' ? 'selected' : ''}>Default</option>
-          <option value="fast" ${tier === 'fast' ? 'selected' : ''}>Fast / Priority</option>
+          <option value="priority" ${tier === 'priority' ? 'selected' : ''}>Priority</option>
+          <option value="fast" ${tier === 'fast' ? 'selected' : ''}>Fast</option>
           <option value="flex" ${tier === 'flex' ? 'selected' : ''}>Flex</option>
         </select></label>
         <label class="sub-setting-field"><span>Verbosity</span><select data-sub-setting-id="codex-cli" data-sub-setting-key="verbosity" ${disabled}>
@@ -7560,7 +7573,7 @@ $('#openrouter-list')?.addEventListener('click', event => {
   const removeBtn = event.target.closest('[data-or-remove]');
   if (removeBtn) { void removeProviderModel('openrouter', removeBtn.dataset.orRemove); }
 });
-for (const prov of ['openai', 'anthropic']) {
+for (const prov of DIRECT_CATALOG_KEYS) {
   $(`#${prov}-filter`)?.addEventListener('input', event => {
     directCatalogFilters[prov] = event.target.value || '';
     renderDirectProviderCatalog(prov);
@@ -8080,7 +8093,7 @@ function selectableModels(task) {
     }
   }
   if (!task?.fixtureId) {
-    for (const prov of ['openai', 'anthropic']) {
+    for (const prov of DIRECT_CATALOG_KEYS) {
       const dcat = directCatalogs[prov];
       if (!dcat?.connected || !Array.isArray(dcat.models) || !dcat.models.length) continue;
       const existingIds = new Set(base.map(p => p.id));
@@ -8138,7 +8151,9 @@ function pickerBucketOf(p) {
   if (catalogId(id) || id.startsWith('venice:') || /venice/i.test(id)) return 'venice';
   if (p?.catalogProvider === 'anthropic' || id.startsWith('anthropic:')) return 'anthropic';
   if (p?.catalogProvider === 'openai' || id.startsWith('openai:')) return 'openai';
-  if (id.startsWith('gemini:')) return 'gemini';
+  if (p?.catalogProvider === 'xai' || id.startsWith('xai:')) return 'xai';
+  if (p?.catalogProvider === 'gemini' || id.startsWith('gemini:')) return 'gemini';
+  if (p?.catalogProvider === 'meta' || id.startsWith('meta:')) return 'meta';
   if (id.startsWith('nous:')) return 'nous';
   if (p?.tier === 'local' || id.startsWith('local:')) return 'local';
   if (p?.kind === 'cli') return 'cli';
@@ -8155,7 +8170,9 @@ const PICKER_BUCKET_LABELS = {
   venice: 'Venice',
   anthropic: 'Anthropic',
   openai: 'OpenAI',
+  xai: 'Grok (xAI)',
   gemini: 'Gemini',
+  meta: 'Meta / Muse',
   nous: 'Nous',
   local: 'Local',
   cli: 'CLI',
@@ -8186,7 +8203,7 @@ function renderModelPicker() {
   if (filterBar) {
     if (bucketCounts.size >= 2) {
       filterBar.classList.remove('hidden');
-      const order = ['codex-cli', 'claude-code', 'gemini-cli', 'copilot-cli', 'openai', 'anthropic', 'openrouter', 'gemini', 'venice', 'nous', 'local', 'cli', 'other'].filter(b => bucketCounts.has(b));
+      const order = ['codex-cli', 'claude-code', 'gemini-cli', 'copilot-cli', 'openai', 'anthropic', 'xai', 'gemini', 'meta', 'openrouter', 'venice', 'nous', 'local', 'cli', 'other'].filter(b => bucketCounts.has(b));
       const chips = [
         `<button type="button" class="model-filter-chip${pickerProviderFilter === 'all' ? ' active' : ''}" data-picker-filter="all" aria-pressed="${pickerProviderFilter === 'all'}">All · ${models.length}</button>`,
         ...order.map(b => `<button type="button" class="model-filter-chip${pickerProviderFilter === b ? ' active' : ''}" data-picker-filter="${b}" aria-pressed="${pickerProviderFilter === b}">${escapeHTML(PICKER_BUCKET_LABELS[b] || b)} · ${bucketCounts.get(b)}</button>`)
@@ -8239,11 +8256,17 @@ function renderModelPicker() {
     const isOr = p.id?.startsWith('openrouter:') || p.catalogProvider === 'openrouter';
     const isOpenAi = p.id?.startsWith('openai:') || p.catalogProvider === 'openai';
     const isAnthropic = p.id?.startsWith('anthropic:') || p.catalogProvider === 'anthropic';
+    const isXai = p.id?.startsWith('xai:') || p.catalogProvider === 'xai';
+    const isGemini = p.id?.startsWith('gemini:') || p.catalogProvider === 'gemini';
+    const isMeta = p.id?.startsWith('meta:') || p.catalogProvider === 'meta';
     const connection = catalogId(p.id) || /venice/i.test(p.id)
       ? 'Venice'
       : isOr ? 'OpenRouter'
       : isOpenAi ? 'OpenAI API'
       : isAnthropic ? 'Anthropic API'
+      : isXai ? 'xAI (Grok)'
+      : isGemini ? 'Gemini API'
+      : isMeta ? 'Meta AI'
       : kindLabel(p.kind || 'http');
     const meta = metaOf(p);
     const detail = [
@@ -8285,8 +8308,7 @@ async function openModelPicker(scope = selectedId, anchor = document.activeEleme
   await Promise.all([
     loadVeniceCatalog(),
     state.openrouterConnectionId && (openrouterCatalog.stale || openrouterCatalog.models.length <= 20) ? loadOpenRouterCatalog() : Promise.resolve(),
-    activeApis.has('openai') && (!directCatalogs.openai.connected || directCatalogs.openai.stale) ? loadDirectProviderCatalog('openai') : Promise.resolve(),
-    activeApis.has('anthropic') && (!directCatalogs.anthropic.connected || directCatalogs.anthropic.stale) ? loadDirectProviderCatalog('anthropic') : Promise.resolve(),
+    ...DIRECT_CATALOG_KEYS.map(prov => activeApis.has(prov) && (!directCatalogs[prov].connected || directCatalogs[prov].stale) ? loadDirectProviderCatalog(prov) : Promise.resolve()),
     Array.isArray(state.modelGroups) && state.modelGroups.length ? Promise.resolve() : loadModelGroups()
   ]);
   pickerLoading = false;

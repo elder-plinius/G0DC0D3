@@ -23,8 +23,8 @@ const DEFINITIONS = Object.freeze({
     modelEnv: 'G0D_CLAUDE_MODEL',
     args: ['auth', 'status', '--json'],
     loginHint: 'Run "claude auth login" in your terminal, then refresh.',
-    suggestedModels: ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5', 'opus', 'sonnet', 'haiku'],
-    defaultModels: ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
+    suggestedModels: ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5', 'opus', 'sonnet', 'haiku'],
+    defaultModels: ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
     Provider: ClaudeCodeProvider
   },
   'codex-cli': {
@@ -34,8 +34,8 @@ const DEFINITIONS = Object.freeze({
     modelEnv: 'G0D_CODEX_MODEL',
     args: ['login', 'status'],
     loginHint: 'Run "codex login" in your terminal, then refresh.',
-    suggestedModels: ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.2-codex', 'o3', 'o4-mini'],
-    defaultModels: ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.2-codex', 'o3', 'o4-mini'],
+    suggestedModels: ['gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-6.1-terra', 'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.4', 'gpt-5.3-codex', 'o3'],
+    defaultModels: ['gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-6.1-terra', 'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.4', 'gpt-5.3-codex'],
     Provider: CodexProvider
   },
   'gemini-cli': {
@@ -45,8 +45,8 @@ const DEFINITIONS = Object.freeze({
     modelEnv: 'G0D_GEMINI_MODEL',
     args: ['--version'],
     loginHint: 'Run "gemini" in your terminal and sign in with Google, then refresh.',
-    suggestedModels: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-3-pro-preview'],
-    defaultModels: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-3-pro-preview'],
+    suggestedModels: ['gemini-4-neon', 'gemini-4-pro', 'gemini-3-pro', 'gemini-2.5-pro', 'gemini-2.5-flash'],
+    defaultModels: ['gemini-4-neon', 'gemini-4-pro', 'gemini-3-pro', 'gemini-2.5-pro', 'gemini-2.5-flash'],
     Provider: GeminiCliProvider
   },
   'copilot-cli': {
@@ -56,8 +56,8 @@ const DEFINITIONS = Object.freeze({
     modelEnv: 'G0D_COPILOT_MODEL',
     args: ['--version'],
     loginHint: 'Run "copilot login" (or "gh auth login") in your terminal, then refresh.',
-    suggestedModels: ['claude-opus-4.6', 'claude-sonnet-4.6', 'gpt-5.4', 'gpt-5.3-codex', 'gemini-2.5-pro'],
-    defaultModels: ['claude-opus-4.6', 'claude-sonnet-4.6', 'gpt-5.4', 'gpt-5.3-codex', 'gemini-2.5-pro'],
+    suggestedModels: ['claude-opus-5.5', 'claude-sonnet-5.5', 'gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-5.6-sol', 'gemini-4-neon'],
+    defaultModels: ['claude-opus-5.5', 'claude-sonnet-5.5', 'gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-5.6-sol', 'gemini-4-neon'],
     Provider: CopilotCliProvider
   }
 });
@@ -137,7 +137,7 @@ export async function readLocalCodexConfig(env, home) {
     const handle = await fs.open(cfgPath, constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
     try {
       const st = await handle.stat();
-      if (!st.isFile() || st.size > 16384) return null;
+      if (!st.isFile() || st.size > 512 * 1024) return null;
       const text = await handle.readFile('utf8');
       const topLines = [];
       for (const line of text.split(/\r?\n/)) {
@@ -150,10 +150,51 @@ export async function readLocalCodexConfig(env, home) {
       const mEffort = /^model_reasoning_effort\s*=\s*["']([^"'\n]+)["']/m.exec(top);
       const mTier = /^service_tier\s*=\s*["']([^"'\n]+)["']/m.exec(top);
       const model = mModel && validModel(mModel[1].trim()) ? mModel[1].trim() : null;
-      const reasoningEffort = mEffort && ['low', 'medium', 'high', 'xhigh'].includes(mEffort[1].trim()) ? mEffort[1].trim() : null;
-      const serviceTier = mTier && ['fast', 'flex'].includes(mTier[1].trim()) ? mTier[1].trim() : null;
+      const reasoningEffort = mEffort && ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(mEffort[1].trim()) ? mEffort[1].trim() : null;
+      const serviceTier = mTier && ['fast', 'priority', 'flex'].includes(mTier[1].trim()) ? mTier[1].trim() : null;
       if (!model && !reasoningEffort && !serviceTier) return null;
       return { model, reasoningEffort, serviceTier };
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
+export async function readLocalCodexModelsCache(env, home) {
+  // Non-destructive read of Codex CLI's local model list (~/.codex/models_cache.json) — pure model metadata, zero credentials.
+  const codexHome = env.CODEX_HOME && path.isAbsolute(env.CODEX_HOME) ? env.CODEX_HOME : path.join(home, '.codex');
+  const cachePath = path.join(codexHome, 'models_cache.json');
+  try {
+    const handle = await fs.open(cachePath, constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
+    try {
+      const st = await handle.stat();
+      if (!st.isFile() || st.size > 2 * 1024 * 1024) return null;
+      const parsed = JSON.parse(await handle.readFile('utf8'));
+      const list = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.models) ? parsed.models : Array.isArray(parsed?.data) ? parsed.data : []);
+      const seen = new Set();
+      const slugs = [];
+      const displayNames = {};
+      const reasoningLevels = {};
+      for (const item of list) {
+        if (!item || typeof item !== 'object') continue;
+        if (String(item.visibility || '').toLowerCase() === 'hide') continue;
+        const slug = String(item.slug || item.id || '').trim();
+        if (!slug || !validModel(slug) || seen.has(slug)) continue;
+        seen.add(slug);
+        slugs.push(slug);
+        if (typeof item.display_name === 'string' && item.display_name.trim()) displayNames[slug] = item.display_name.trim().slice(0, 80);
+        if (Array.isArray(item.supported_reasoning_levels)) {
+          const levels = item.supported_reasoning_levels
+            .map(l => typeof l === 'string' ? l : l?.effort)
+            .filter(v => ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(v));
+          if (levels.length) reasoningLevels[slug] = [...new Set(levels)];
+        }
+        if (slugs.length >= MAX_CLI_MODELS) break;
+      }
+      if (!slugs.length) return null;
+      return { slugs, displayNames, reasoningLevels, count: slugs.length };
     } finally {
       await handle.close();
     }
@@ -207,6 +248,7 @@ export async function createCliConnections({ dataDir, providers, environment = p
   const filename = path.join(path.resolve(dataDir), 'cli-connections.json');
   let preferences = {}, preferenceError = false, cache = null, refreshing = null, writeQueue = Promise.resolve();
   let localDefaultsMap = {};
+  let localCacheMap = {};
   try {
     const handle = await fs.open(filename, constants.O_RDONLY | constants.O_NOFOLLOW);
     try {
@@ -215,7 +257,7 @@ export async function createCliConnections({ dataDir, providers, environment = p
       const saved = JSON.parse(await handle.readFile('utf8'));
       if (saved.version !== 1 || !saved.connections || typeof saved.connections !== 'object' || Array.isArray(saved.connections)) throw new Error();
       for (const [id, value] of Object.entries(saved.connections)) {
-        if (!Object.hasOwn(DEFINITIONS, id) || !value || Object.keys(value).some(key => !['enabled', 'model', 'models', 'settings', 'consent'].includes(key)) || typeof value.enabled !== 'boolean' || !validModel(value.model)) throw new Error();
+        if (!Object.hasOwn(DEFINITIONS, id) || !value || Object.keys(value).some(key => !['enabled', 'model', 'models', 'customModels', 'settings', 'consent'].includes(key)) || typeof value.enabled !== 'boolean' || !validModel(value.model)) throw new Error();
         if (value.consent && (value.consent.version !== CLI_INFERENCE_CONSENT.version || value.consent.scope !== 'inference' || !Number.isFinite(Date.parse(value.consent.acceptedAt)))) throw new Error();
         const models = Array.isArray(value.models) ? normalizeModelList(value.models) : undefined;
         const settings = value.settings && typeof value.settings === 'object' ? normalizeCliSettings(id, value.settings) : normalizeCliSettings(id, {});
@@ -223,6 +265,7 @@ export async function createCliConnections({ dataDir, providers, environment = p
           enabled: value.enabled,
           model: value.model,
           ...(models !== undefined ? { models } : {}),
+          ...(value.customModels === true ? { customModels: true } : {}),
           settings,
           ...(value.consent ? { consent: { version: value.consent.version, scope: 'inference', acceptedAt: value.consent.acceptedAt } } : {})
         };
@@ -262,13 +305,16 @@ export async function createCliConnections({ dataDir, providers, environment = p
   const resolveEnabledModels = (id, pref) => {
     const def = DEFINITIONS[id];
     const localModel = localDefaultsMap[id]?.model || null;
-    if (Array.isArray(pref?.models)) {
+    const cachedSlugs = localCacheMap[id]?.slugs || [];
+    if (pref?.customModels === true && Array.isArray(pref?.models)) {
       return normalizeModelList(pref.models);
     }
-    const base = [...(def.defaultModels || def.suggestedModels || [])];
+    const base = cachedSlugs.length
+      ? [...cachedSlugs]
+      : [...(def.defaultModels || def.suggestedModels || [])];
     if (localModel && !base.includes(localModel)) base.unshift(localModel);
     if (pref?.model && !base.includes(pref.model)) base.unshift(pref.model);
-    return base;
+    return normalizeModelList(base);
   };
 
   const installSubscriptionProviders = async (id, binary, { primaryModel, models, settings, available = true }) => {
@@ -307,8 +353,12 @@ export async function createCliConnections({ dataDir, providers, environment = p
         }
       };
       if (id === 'codex-cli') {
-        const localCfg = await readLocalCodexConfig(environment, home);
+        const [localCfg, localModels] = await Promise.all([
+          readLocalCodexConfig(environment, home),
+          readLocalCodexModelsCache(environment, home),
+        ]);
         if (localCfg) localDefaultsMap[id] = localCfg;
+        if (localModels) localCacheMap[id] = localModels;
       }
       const binary = await discover(id, environment, home);
       if (!binary) { setAvailableForKind(false); return { id, binary: null, installed: false, authenticated: false, detail: `CLI not installed. ${definition.loginHint}` }; }
@@ -341,9 +391,11 @@ export async function createCliConnections({ dataDir, providers, environment = p
       const configured = providers.get(id), enabled = Boolean(configured), def = DEFINITIONS[id];
       const pref = preferences[id] || {};
       const localDef = localDefaultsMap[id] || null;
+      const localCache = localCacheMap[id] || null;
       const enabledModels = resolveEnabledModels(id, pref);
       const availableModels = [...new Set([
         ...(localDef?.model ? [localDef.model] : []),
+        ...(localCache?.slugs || []),
         ...(def.suggestedModels || []),
         ...enabledModels,
         ...(pref.model ? [pref.model] : [])
@@ -365,6 +417,7 @@ export async function createCliConnections({ dataDir, providers, environment = p
         suggestedModels: availableModels,
         settings: normalizeCliSettings(id, configured?.cliSettings || pref.settings || {}),
         localDefaults: localDef,
+        localCacheCount: localCache?.count || 0,
         registeredIds,
         loginHint: def.loginHint,
         detail
@@ -382,9 +435,13 @@ export async function createCliConnections({ dataDir, providers, environment = p
     } finally { await fs.rm(temporary, { force: true }); }
   };
 
-  // Pre-read local Codex config (non-destructive) before restoring persisted connections
-  const initialCodexCfg = await readLocalCodexConfig(environment, home);
+  // Pre-read local Codex config & local models_cache.json (non-destructive) before restoring persisted connections
+  const [initialCodexCfg, initialCodexCache] = await Promise.all([
+    readLocalCodexConfig(environment, home),
+    readLocalCodexModelsCache(environment, home),
+  ]);
   if (initialCodexCfg) localDefaultsMap['codex-cli'] = initialCodexCfg;
+  if (initialCodexCache) localCacheMap['codex-cli'] = initialCodexCache;
 
   // Restoring an explicit persisted opt-in never creates a model request.
   for (const [id, pref] of Object.entries(preferences)) if (pref.enabled && !providers.has(id)) {
@@ -442,6 +499,7 @@ export async function createCliConnections({ dataDir, providers, environment = p
             enabled: true,
             model,
             models,
+            ...(input.models !== undefined || preferences[id]?.customModels === true ? { customModels: true } : {}),
             settings,
             consent: { version: CLI_INFERENCE_CONSENT.version, scope: 'inference', acceptedAt: new Date().toISOString() }
           }
@@ -483,6 +541,7 @@ export async function createCliConnections({ dataDir, providers, environment = p
             enabled: true,
             model,
             models,
+            ...(input.models !== undefined || cur?.customModels === true ? { customModels: true } : {}),
             settings
           }
         };

@@ -196,7 +196,7 @@ test('GET /api/models/groups supports sort modes and GET /api/services reports a
     const svcRes = await dispatch(app, { method: 'GET', url: '/api/services' });
     assert.equal(svcRes.status, 200);
     assert.equal(svcRes.json.subscriptions.length, 4);
-    assert.equal(svcRes.json.apis.length, 6);
+    assert.equal(svcRes.json.apis.length, 8);
     assert.ok(svcRes.json.devtools.some(d => d.id === 'github-cli'));
     assert.ok(svcRes.json.devtools.some(d => d.id === 'git-cli'));
     const localSvc = svcRes.json.devtools.find(d => d.id === 'local-inference');

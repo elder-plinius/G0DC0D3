@@ -92,9 +92,11 @@
       <div class="workspace-loading" id="initial-loading"><span class="spinner"></span><p>Opening the workspace</p></div>
       <section class="welcome hidden" id="welcome">
         <div class="welcome-banner">
-          <div class="welcome-mark" aria-hidden="true">
-            <span class="welcome-logo"></span>
-            <svg class="ultra-volcano" viewBox="0 0 360 190" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Ultra-Plinian volcanic eruption">
+          <div class="welcome-hero-row">
+            <h1 id="welcome-headline">What can we do<span class="welcome-punctuation">?</span></h1>
+            <div class="welcome-mark" aria-hidden="true">
+              <span class="welcome-logo"></span>
+              <svg class="ultra-volcano" viewBox="0 0 360 190" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Ultra-Plinian volcanic eruption">
               <defs>
                 <radialGradient id="volc-glow" cx="50%" cy="62%" r="48%">
                   <stop offset="0%" stop-color="#ffe49e" stop-opacity="0.58"/>
@@ -210,8 +212,8 @@
               <!-- Fiery molten horizon line -->
               <rect x="20" y="183" width="320" height="2" rx="1" fill="url(#volc-horizon)"/>
             </svg>
+            </div>
           </div>
-          <h1 id="welcome-headline">What can we do<span class="welcome-punctuation">?</span></h1>
           <p class="welcome-mode-sub hidden" id="welcome-godcode-sub">Autonomous engineering workspace — attach a Git repo, run isolated worktree branches, edit files, and run tests.</p>
           <div class="godcode-launcher godcode-only" id="godcode-launcher">
             <button type="button" class="godcode-launch-btn" id="godcode-open-repo"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 5h5l2 2h8v9h-15z"/></svg><span>Open Repository</span></button>
@@ -221,8 +223,8 @@
         <div class="welcome-setup hidden" id="welcome-setup">
           <form id="welcome-key-form" autocomplete="off">
             <label for="welcome-key-input">Provider API key</label>
-            <p id="welcome-key-help">Paste an API key (Anthropic, OpenAI, Gemini, OpenRouter, Nous, Venice) or connect a CLI subscription in Settings → Models.</p>
-            <div class="api-key-row"><input id="welcome-key-input" type="password" aria-describedby="welcome-key-help" placeholder="sk-ant-…, sk-…, AIza…, sk-or-v1-…" autocomplete="off" spellcheck="false" maxlength="512"><button type="submit" class="button button-primary">Connect</button></div>
+            <p id="welcome-key-help">Paste an API key (Anthropic, OpenAI, xAI Grok, Gemini, Meta AI, OpenRouter, Nous, Venice) or connect a CLI subscription in Settings → Models.</p>
+            <div class="api-key-row"><input id="welcome-key-input" type="password" aria-describedby="welcome-key-help" placeholder="sk-ant-…, sk-…, xai-…, AIza…, LLM|…, sk-or-v1-…" autocomplete="off" spellcheck="false" maxlength="512"><button type="submit" class="button button-primary">Connect</button></div>
             <p class="form-feedback" id="welcome-key-feedback" role="status"></p>
           </form>
         </div>
@@ -411,8 +413,8 @@
       </div>
       <div class="api-key-subblock">
         <h5>Cloud API key</h5>
-        <p class="field-help">Supports Anthropic, OpenAI, Google Gemini, OpenRouter, Nous Portal, and Venice.</p>
-        <form id="api-key-form" autocomplete="off"><div class="api-key-row"><select id="api-key-provider" class="api-key-provider" aria-label="API key provider"><option value="">Auto-detect</option><option value="anthropic">Anthropic</option><option value="openai">OpenAI</option><option value="gemini">Google Gemini</option><option value="openrouter">OpenRouter</option><option value="nous">Nous Portal</option><option value="venice">Venice</option></select><input id="api-key-input" aria-label="Provider API key" type="password" placeholder="sk-ant-…, sk-…, AIza…, sk-or-v1-…" autocomplete="off" spellcheck="false" maxlength="512"><button type="submit" class="button button-primary" id="api-key-submit">Connect</button></div><p class="form-feedback" id="api-key-feedback" role="status"></p></form>
+        <p class="field-help">Supports Anthropic, OpenAI, xAI (Grok), Google Gemini, Meta AI (Muse / Llama), OpenRouter, Nous Portal, and Venice.</p>
+        <form id="api-key-form" autocomplete="off"><div class="api-key-row"><select id="api-key-provider" class="api-key-provider" aria-label="API key provider"><option value="">Auto-detect</option><option value="anthropic">Anthropic</option><option value="openai">OpenAI</option><option value="xai">xAI (Grok)</option><option value="gemini">Google Gemini</option><option value="meta">Meta AI (Muse / Llama)</option><option value="openrouter">OpenRouter</option><option value="nous">Nous Portal</option><option value="venice">Venice</option></select><input id="api-key-input" aria-label="Provider API key" type="password" placeholder="sk-ant-…, sk-…, xai-…, AIza…, LLM|…, sk-or-v1-…" autocomplete="off" spellcheck="false" maxlength="512"><button type="submit" class="button button-primary" id="api-key-submit">Connect</button></div><p class="form-feedback" id="api-key-feedback" role="status"></p></form>
       </div>
       <div id="custom-model-setup" class="custom-model-setup" hidden>
         <h5>Add any model ID to a connected provider</h5>
@@ -466,6 +468,39 @@
       </div>
       <input id="anthropic-filter" type="search" placeholder="Search your Anthropic account models (e.g. opus, sonnet, haiku)…" aria-label="Filter Anthropic models" autocomplete="off" spellcheck="false">
       <div id="anthropic-list" class="openrouter-list" role="region" aria-label="Anthropic models"></div>
+    </section>
+    <section id="xai-browser" class="settings-card openrouter-browser direct-catalog-browser" data-model-subtab="catalog" hidden>
+      <div class="openrouter-browser-head">
+        <div>
+          <h3>xAI (Grok) Catalog</h3>
+          <p class="field-help" id="xai-count" role="status"></p>
+        </div>
+        <button type="button" class="button button-quiet" id="xai-refresh">Refresh catalog</button>
+      </div>
+      <input id="xai-filter" type="search" placeholder="Search your xAI models (e.g. grok-4.7, grok-code)…" aria-label="Filter xAI models" autocomplete="off" spellcheck="false">
+      <div id="xai-list" class="openrouter-list" role="region" aria-label="xAI models"></div>
+    </section>
+    <section id="gemini-browser" class="settings-card openrouter-browser direct-catalog-browser" data-model-subtab="catalog" hidden>
+      <div class="openrouter-browser-head">
+        <div>
+          <h3>Google Gemini Catalog</h3>
+          <p class="field-help" id="gemini-count" role="status"></p>
+        </div>
+        <button type="button" class="button button-quiet" id="gemini-refresh">Refresh catalog</button>
+      </div>
+      <input id="gemini-filter" type="search" placeholder="Search your Gemini models (e.g. gemini-4-neon, gemini-3-pro, flash)…" aria-label="Filter Gemini models" autocomplete="off" spellcheck="false">
+      <div id="gemini-list" class="openrouter-list" role="region" aria-label="Gemini models"></div>
+    </section>
+    <section id="meta-browser" class="settings-card openrouter-browser direct-catalog-browser" data-model-subtab="catalog" hidden>
+      <div class="openrouter-browser-head">
+        <div>
+          <h3>Meta AI (Muse / Llama) Catalog</h3>
+          <p class="field-help" id="meta-count" role="status"></p>
+        </div>
+        <button type="button" class="button button-quiet" id="meta-refresh">Refresh catalog</button>
+      </div>
+      <input id="meta-filter" type="search" placeholder="Search Meta AI models (e.g. Muse-Spark, Llama-4-Maverick)…" aria-label="Filter Meta AI models" autocomplete="off" spellcheck="false">
+      <div id="meta-list" class="openrouter-list" role="region" aria-label="Meta AI models"></div>
     </section>
     <section id="venice-browser" class="settings-card" data-model-subtab="catalog" hidden>
       <h3>Venice backup</h3>

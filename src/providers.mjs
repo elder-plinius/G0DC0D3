@@ -341,7 +341,7 @@ export function inferProviderTier({ id, baseUrl, model, tier } = {}) {
   try { host = baseUrl ? new URL(baseUrl).hostname.toLowerCase() : ''; } catch {}
   if (['localhost', '127.0.0.1', '::1', '[::1]', '0.0.0.0'].includes(host)) return 'local';
   if (/(?:ollama|mlx|vllm|llama\.?cpp|lmstudio)/i.test(`${id || ''} ${baseUrl || ''}`)) return 'local';
-  if (/(?:opus|fable[-_.]?5|sonnet[-_.]?(?:4|5)|claude[-_.]?(?:4|5)|claude-3-7|gpt[-_.]?(?:5|6)|astra|gemini[-_.]?(?:2\.5[-_.]?pro|3|4)|grok[-_.]?4|\bo3\b|\bo4\b|deepseek[-_.]?(?:r1|v4)|kimi[-_.]?k3|qwen[-_.]?(?:4|3[-_.]?(?:235b|8)))/i.test(String(model || ''))) return 'frontier';
+  if (/(?:opus|fable[-_.]?5|sonnet[-_.]?(?:4|5)|claude[-_.]?(?:4|5)|claude-3-7|gpt[-_.]?(?:5|6)|astra|gemini[-_.]?(?:2\.5[-_.]?pro|3|4)|grok[-_.]?(?:4|code)|muse[-_.]?spark|\bo3\b|\bo4\b|deepseek[-_.]?(?:r1|v4)|kimi[-_.]?k3|qwen[-_.]?(?:4|3[-_.]?(?:235b|8)))/i.test(String(model || ''))) return 'frontier';
   return 'standard';
 }
 
@@ -1602,8 +1602,8 @@ export function normalizeCliSettings(kind, raw = {}) {
   const input = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
   const k = String(kind || '').toLowerCase();
   if (k === 'codex' || k === 'codex-cli') {
-    const reasoningEffort = ['low', 'medium', 'high', 'xhigh'].includes(input.reasoningEffort) ? input.reasoningEffort : null;
-    const serviceTier = ['fast', 'flex'].includes(input.serviceTier) ? input.serviceTier : null;
+    const reasoningEffort = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(input.reasoningEffort) ? input.reasoningEffort : null;
+    const serviceTier = ['fast', 'priority', 'flex'].includes(input.serviceTier) ? input.serviceTier : null;
     const verbosity = ['low', 'medium', 'high'].includes(input.verbosity) ? input.verbosity : null;
     return { reasoningEffort, serviceTier, verbosity };
   }
@@ -2109,6 +2109,16 @@ export function environmentProviders() {
   for(const model of (process.env.G0D_GEMINI_MODELS||'').split(',').map(s=>s.trim()).filter(Boolean)) {
     const id=`gemini:${model.replace(/[/:]/g,'-')}`;
     try { result.set(id,new HttpProvider({id,label:`${model} · Gemini API`,protocol:'openai-chat',baseUrl:'https://generativelanguage.googleapis.com/v1beta/openai',model,apiKeyEnv:'GEMINI_API_KEY',timeoutMs:180000,maxOutputTokens:16000,maxOutputTokensCeiling:64000})); }
+    catch(error) { if(error.code==='provider_configuration') throw error; }
+  }
+  for(const model of (process.env.G0D_XAI_MODELS||'').split(',').map(s=>s.trim()).filter(Boolean)) {
+    const id=`xai:${model.replace(/[/:]/g,'-')}`;
+    try { result.set(id,new HttpProvider({id,label:`${model} · xAI (Grok)`,protocol:'openai-chat',baseUrl:'https://api.x.ai/v1',model,apiKeyEnv:'XAI_API_KEY',timeoutMs:180000,maxOutputTokens:16000,maxOutputTokensCeiling:64000})); }
+    catch(error) { if(error.code==='provider_configuration') throw error; }
+  }
+  for(const model of (process.env.G0D_META_MODELS||'').split(',').map(s=>s.trim()).filter(Boolean)) {
+    const id=`meta:${model.replace(/[/:]/g,'-')}`;
+    try { result.set(id,new HttpProvider({id,label:`${model} · Meta AI`,protocol:'openai-chat',baseUrl:'https://api.llama.com/compat/v1',model,apiKeyEnv:'LLAMA_API_KEY',timeoutMs:180000,maxOutputTokens:16000,maxOutputTokensCeiling:64000})); }
     catch(error) { if(error.code==='provider_configuration') throw error; }
   }
   for(const model of (process.env.G0D_NOUS_MODELS||'').split(',').map(s=>s.trim()).filter(Boolean)) {

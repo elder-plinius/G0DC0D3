@@ -77,7 +77,7 @@ export const EXTERNAL_HARNESSES = Object.freeze([
     shortName: 'Codex',
     command: 'codex',
     providerPrefix: 'codex-cli:',
-    benchmarkProbe: { id: 'codex-cli:gpt-5.4-codex', model: 'gpt-5.4-codex', label: 'GPT-5.4 Codex · CLI' },
+    benchmarkProbe: { id: 'codex-cli:gpt-6.2-astra', model: 'gpt-6.2-astra', label: 'GPT-6.2-Astra · Codex' },
     description: 'OpenAI Codex local coding harness subscription.'
   },
   {
@@ -85,18 +85,19 @@ export const EXTERNAL_HARNESSES = Object.freeze([
     name: 'Claude Code CLI',
     shortName: 'Claude Code',
     command: 'claude',
-    providerPrefix: 'claude-cli:',
-    benchmarkProbe: { id: 'claude-cli:claude-opus-5-5', model: 'claude-opus-5-5', label: 'Claude Opus 5.5 · Claude Code' },
+    providerPrefix: 'claude-code:',
+    benchmarkProbe: { id: 'claude-code:claude-opus-5-5', model: 'claude-opus-5-5', label: 'Claude Opus 5.5 · Claude Code' },
     description: 'Anthropic Claude Code CLI agent harness.'
   },
   {
     id: 'gemini-cli',
-    name: 'Gemini CLI',
-    shortName: 'Gemini CLI',
+    name: 'Gemini CLI & API',
+    shortName: 'Gemini',
     command: 'gemini',
     providerPrefix: 'gemini-cli:',
-    benchmarkProbe: { id: 'gemini-cli:gemini-4-neon', model: 'gemini-4-neon', label: 'Gemini 4 Neon · CLI' },
-    description: 'Google Gemini CLI agent harness.'
+    providerRegex: /^gemini:|gemini[-_.]?[234]/i,
+    benchmarkProbe: { id: 'gemini-cli:gemini-4-neon', model: 'gemini-4-neon', label: 'Gemini 4 Neon · Gemini' },
+    description: 'Google Gemini CLI & direct Gemini 4 Neon / Pro models.'
   },
   {
     id: 'antigravity',
@@ -121,9 +122,20 @@ export const EXTERNAL_HARNESSES = Object.freeze([
     name: 'Grok / xAI',
     shortName: 'Grok',
     command: 'grok',
-    providerRegex: /grok|xai/i,
-    benchmarkProbe: { id: 'xai:grok-4', model: 'grok-4', label: 'Grok 4 · xAI' },
-    description: 'xAI Grok frontier reasoning & high-agency API/CLI.'
+    providerPrefix: 'xai:',
+    providerRegex: /grok|xai|x-ai/i,
+    benchmarkProbe: { id: 'xai:grok-4.7', model: 'grok-4.7', label: 'Grok 4.7 · xAI' },
+    description: 'xAI Grok 4.7 frontier reasoning & high-agency API/CLI.'
+  },
+  {
+    id: 'meta',
+    name: 'Meta AI (Muse / Llama)',
+    shortName: 'Muse / Meta',
+    command: 'llama',
+    providerPrefix: 'meta:',
+    providerRegex: /^meta:|muse[-_.]?spark|meta-llama|llama[-_.]?4/i,
+    benchmarkProbe: { id: 'meta:Muse-Spark', model: 'Muse-Spark', label: 'Muse Spark · Meta AI' },
+    description: 'Meta AI Muse Spark & Llama 4 Maverick / Scout multimodal agents.'
   },
   {
     id: 'copilot-cli',
@@ -178,6 +190,7 @@ export async function detectExternalHarnesses({ providers = new Map(), catalog =
   const out = [];
   for (const h of EXTERNAL_HARNESSES) {
     const matchedProvider = liveProviders.find(p => {
+      if (p.id === h.id) return true;
       if (h.providerPrefix && p.id.startsWith(h.providerPrefix)) return true;
       if (h.providerRegex && h.providerRegex.test(`${p.id} ${p.model || ''} ${p.label || ''}`)) return true;
       return false;

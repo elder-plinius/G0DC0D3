@@ -10,7 +10,7 @@ import {
   buildClaudeExecArgs,
   normalizeCliSettings,
 } from '../src/providers.mjs';
-import { readLocalCodexConfig } from '../src/provider-connections.mjs';
+import { readLocalCodexConfig, readLocalCodexModelsCache } from '../src/provider-connections.mjs';
 
 async function fakeCli(dir, name, script) {
   const file = path.join(dir, name);
@@ -347,4 +347,189 @@ test('HttpProvider forwards generation parameters properly to openai-responses (
   assert.equal(sent[1].body.max_tokens, 1024);
   assert.equal(sent[1].body.temperature, 0.4);
   assert.equal(sent[1].body.top_p, 0.85);
+});
+
+test('readLocalCodexModelsCache syncs live Codex models (gpt-6.2-astra, gpt-5.6-sol, etc.), skips hidden models, and parses large config.toml with priority tier', async t => {
+  const home = await mkdtemp(path.join(tmpdir(), 'godmode-codex-cache-'));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  await mkdir(path.join(home, '.codex'), { recursive: true });
+  // Simulate a large (>24 KiB) real-world ~/.codex/config.toml with priority tier & ultra/xhigh effort
+  const padding = '\n'.concat(Array.from({ length: 400 }, (_, i) => `[projects."/repo/project-${i}"]\ntrust_level = "trusted"`).join('\n'));
+  await writeFile(
+    path.join(home, '.codex', 'config.toml'),
+    `model = "gpt-6.2-astra"\nmodel_reasoning_effort = "ultra"\nservice_tier = "priority"\n${padding}\n`
+  );
+  await writeFile(
+    path.join(home, '.codex', 'models_cache.json'),
+    JSON.stringify({
+      models: [
+        { slug: 'gpt-6.2-astra', display_name: 'GPT-6.2-Astra', visibility: 'list', supported_reasoning_levels: [{ effort: 'low' }, { effort: 'xhigh' }, { effort: 'max' }, { effort: 'ultra' }] },
+        { slug: 'gpt-6.2-sol', display_name: 'GPT-6.2-Sol', visibility: 'list' },
+        { slug: 'gpt-5.6-sol', display_name: 'GPT-5.6-Sol', visibility: 'list' },
+        { slug: 'gpt-reserve', display_name: 'GPT-Reserve', visibility: 'hide' },
+      ],
+    })
+  );
+  const cfg = await readLocalCodexConfig({}, home);
+  assert.deepEqual(cfg, { model: 'gpt-6.2-astra', reasoningEffort: 'ultra', serviceTier: 'priority' });
+  const cache = await readLocalCodexModelsCache({}, home);
+  assert.deepEqual(cache.slugs, ['gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-5.6-sol']);
+  assert.ok(!cache.slugs.includes('gpt-reserve'));
+  assert.deepEqual(cache.reasoningLevels['gpt-6.2-astra'], ['low', 'xhigh', 'max', 'ultra']);
+});
+
+test('Direct xAI (Grok), Gemini, and Meta AI (Muse / Llama) API keys auto-detect and expose live catalogs', async t => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'godmode-xai-gem-meta-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const fetchProviderCatalog = async (url) => {
+    if (url.startsWith('https://api.x.ai/v1/models')) {
+      return Response.json({ data: [{ id: 'grok-4.7' }, { id: 'grok-code-fast-1' }, { id: 'grok-2-image-1212' }] });
+    }
+    if (url.startsWith('https://generativelanguage.googleapis.com/v1beta/openai/models')) {
+      return Response.json({ data: [{ id: 'models/gemini-4-neon' }, { id: 'models/gemini-3-pro' }, { id: 'models/text-embedding-004' }] });
+    }
+    if (url.startsWith('https://api.llama.com/compat/v1/models')) {
+      return Response.json({ data: [{ id: 'Muse-Spark' }, { id: 'Llama-4-Maverick-17B-128E-Instruct-FP8' }] });
+    }
+    return new Response('not found', { status: 404 });
+  };
+  const app = await createApp({ dataDir: dir, auth: false, providers: new Map(), fetchProviderCatalog });
+  t.after(() => app.close());
+  const url = await app.listen(0);
+  const api = async (route, method = 'GET', body) => {
+    const res = await fetch(url + route, {
+      method,
+      headers: { 'x-g0d-request': '1', 'content-type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const json = await res.json();
+    assert.equal(res.status, 200, JSON.stringify(json));
+    return json;
+  };
+  const xaiKey = await api('/api/providers/key', 'POST', { key: 'xai-test-key-12345' });
+  assert.equal(xaiKey.provider, 'xai');
+  const gemKey = await api('/api/providers/key', 'POST', { key: 'AIzaSyTestGeminiKey12345' });
+  assert.equal(gemKey.provider, 'gemini');
+  const metaKey = await api('/api/providers/key', 'POST', { key: 'LLM|test-meta-key-12345' });
+  assert.equal(metaKey.provider, 'meta');
+
+  const xaiCat = await api('/api/providers/catalog?provider=xai');
+  assert.ok(xaiCat.models.some(m => m.model === 'grok-4.7'));
+  assert.ok(!xaiCat.models.some(m => m.model === 'grok-2-image-1212'));
+
+  const gemCat = await api('/api/providers/catalog?provider=gemini');
+  assert.ok(gemCat.models.some(m => m.model === 'gemini-4-neon'));
+  assert.ok(!gemCat.models.some(m => m.model === 'text-embedding-004'));
+
+  const metaCat = await api('/api/providers/catalog?provider=meta');
+  assert.ok(metaCat.models.some(m => m.model === 'Muse-Spark'));
+});
+
+test('Multi-provider Conclave dispatches 4 parallel specialist agents across Claude, Codex, OpenRouter, and Venice simultaneously', async t => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'godmode-conclave-4way-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const wsDir = path.join(dir, 'ws');
+  await mkdir(wsDir, { recursive: true });
+  await writeFile(path.join(wsDir, 'app.js'), 'export const VERSION = "0.2.0";\n');
+
+  const invoked = [];
+  const mkSpecialist = (id, label, model, kind, text) => ({
+    id, label, model, kind, tier: 'frontier', available: true,
+    maxOutputTokensCeiling: 16000,
+    async turn() {
+      invoked.push(id);
+      await new Promise(r => setTimeout(r, 25));
+      return { type: 'message', finish: 'done', text };
+    },
+  });
+
+  let orchTurn = 0;
+  const orchestrator = {
+    id: 'openrouter:anthropic-claude-sonnet-5.5',
+    label: 'Claude Sonnet 5.5 · OpenRouter',
+    model: 'anthropic/claude-sonnet-5.5',
+    kind: 'http',
+    tier: 'frontier',
+    available: true,
+    maxOutputTokensCeiling: 16000,
+    async turn() {
+      orchTurn += 1;
+      if (orchTurn === 1) {
+        return {
+          type: 'tool',
+          text: 'Summoning all 4 specialist engines in parallel.',
+          calls: [
+            { id: 'c-claude', name: 'agent.spawn', args: { role: 'claude_arch', prompt: 'Audit architecture', model: 'claude-code:claude-opus-5-5' } },
+            { id: 'c-codex', name: 'agent.spawn', args: { role: 'codex_surgeon', prompt: 'Inspect code paths', model: 'codex-cli:gpt-6.2-astra' } },
+            { id: 'c-openrouter', name: 'agent.spawn', args: { role: 'or_grok', prompt: 'Review performance', model: 'openrouter:x-ai-grok-4.7' } },
+            { id: 'c-venice', name: 'agent.spawn', args: { role: 'venice_oracle', prompt: 'Red-team edge cases', model: 'venice-catalog:venice-uncensored-1-2' } },
+          ],
+        };
+      }
+      return { type: 'message', finish: 'done', text: 'All 4 Conclave agents (Claude, Codex, OpenRouter, Venice) reported back cleanly.' };
+    },
+  };
+
+  const veniceDirect = new HttpProvider({
+    id: 'venice:venice-uncensored-1-2',
+    label: 'Venice Uncensored · Venice',
+    protocol: 'openai-chat',
+    baseUrl: 'https://api.venice.ai/api/v1',
+    model: 'venice-uncensored-1-2',
+    credential: 'test-venice-key',
+  });
+  const realFetch = globalThis.fetch;
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    if (String(url).startsWith('https://api.venice.ai/api/v1/chat/completions')) {
+      invoked.push('venice-catalog:venice-uncensored-1-2');
+      return Response.json({ choices: [{ message: { content: 'Venice Red-Team Oracle: zero blockers found.' }, finish_reason: 'stop' }] });
+    }
+    return realFetch(url, init);
+  });
+
+  const providers = new Map([
+    [orchestrator.id, orchestrator],
+    ['claude-code:claude-opus-5-5', mkSpecialist('claude-code:claude-opus-5-5', 'Claude Code · claude-opus-5-5', 'claude-opus-5-5', 'claude', 'Claude Opus 5.5 Architect: clean module boundaries.')],
+    ['codex-cli:gpt-6.2-astra', mkSpecialist('codex-cli:gpt-6.2-astra', 'Codex · gpt-6.2-astra', 'gpt-6.2-astra', 'codex', 'Codex GPT-6.2-Astra Surgeon: verified exports in app.js:1.')],
+    ['openrouter:x-ai-grok-4.7', mkSpecialist('openrouter:x-ai-grok-4.7', 'Grok 4.7 · OpenRouter', 'x-ai/grok-4.7', 'http', 'OpenRouter Grok 4.7: zero regressions detected.')],
+    ['venice:venice-uncensored-1-2', veniceDirect],
+  ]);
+
+  const app = await createApp({
+    dataDir: path.join(dir, 'data'),
+    auth: false,
+    providers,
+    fetchCatalog: async () => Response.json({ data: [{ id: 'venice-uncensored-1-2', type: 'text', model_spec: { maxCompletionTokens: 16384 } }] }),
+  });
+  t.after(() => app.close());
+  await app.catalog?.list?.();
+
+  // Register custom Conclave agents for all 4 engines
+  await app.runtime.saveConclaveAgent({ slug: 'claude_arch', name: 'Claude Architect', sigil: '◈', engineType: 'api', providerId: 'claude-code:claude-opus-5-5', primarySpecialty: 'long_context' });
+  await app.runtime.saveConclaveAgent({ slug: 'codex_surgeon', name: 'Codex Surgeon', sigil: '⌘', engineType: 'api', providerId: 'codex-cli:gpt-6.2-astra', primarySpecialty: 'swe_coding' });
+  await app.runtime.saveConclaveAgent({ slug: 'or_grok', name: 'OpenRouter Grok', sigil: '⚡', engineType: 'api', providerId: 'openrouter:x-ai-grok-4.7', primarySpecialty: 'math_reasoning' });
+  await app.runtime.saveConclaveAgent({ slug: 'venice_oracle', name: 'Venice Oracle', sigil: '⛨', engineType: 'api', providerId: 'venice-catalog:venice-uncensored-1-2', primarySpecialty: 'security_research' });
+
+  const task = await app.runtime.createTask({
+    title: '4-Engine Conclave Smoke',
+    objective: 'Run a 4-way Conclave across Claude, Codex, OpenRouter, and Venice.',
+    workspace: wsDir,
+    workspaceKind: 'conversation',
+    providers: [orchestrator.id],
+  });
+  await app.runtime.run(task.id);
+
+  assert.ok(invoked.includes('claude-code:claude-opus-5-5'), `Claude missed: ${JSON.stringify(invoked)}`);
+  assert.ok(invoked.includes('codex-cli:gpt-6.2-astra'), `Codex missed: ${JSON.stringify(invoked)}`);
+  assert.ok(invoked.includes('openrouter:x-ai-grok-4.7'), `OpenRouter missed: ${JSON.stringify(invoked)}`);
+  assert.ok(invoked.includes('venice-catalog:venice-uncensored-1-2'), `Venice missed: ${JSON.stringify(invoked)}`);
+
+  const conclave = app.runtime.getConclaveState(task.id);
+  const completedWorkers = conclave.workers.filter(w => w.status === 'completed');
+  assert.equal(completedWorkers.length, 4, `Expected 4 completed workers, got ${JSON.stringify(conclave.workers)}`);
+  const providerIds = new Set(completedWorkers.map(w => w.providerId));
+  assert.ok(providerIds.has('claude-code:claude-opus-5-5'));
+  assert.ok(providerIds.has('codex-cli:gpt-6.2-astra'));
+  assert.ok(providerIds.has('openrouter:x-ai-grok-4.7'));
+  assert.ok(providerIds.has('venice-catalog:venice-uncensored-1-2'));
 });

@@ -128,6 +128,15 @@ export async function discoverSubagents(task, runtime = null) {
 }
 
 function selectSubagentProvider(runtime, parentTask, spec, modelHint, privacy) {
+  const rawHint = String(modelHint || spec?.model || '').trim();
+  const hint = rawHint.toLowerCase();
+  // Support direct Venice catalog IDs (e.g. `venice-catalog:venice-uncensored-1-2`) on Conclave roster agents!
+  if (rawHint && typeof runtime.catalog?.get === 'function') {
+    const directCat = runtime.catalog.get(rawHint);
+    if (directCat && directCat.available !== false && !directCat.closed && checkProviderPrivacyAllowed(directCat, privacy).allowed) {
+      return directCat;
+    }
+  }
   const live = [...runtime.providers.values()].filter(p =>
     p && p.available !== false && !p.closed && p.kind !== 'scripted' && checkProviderPrivacyAllowed(p, privacy).allowed
   );
@@ -135,7 +144,6 @@ function selectSubagentProvider(runtime, parentTask, spec, modelHint, privacy) {
     ? live
     : [...runtime.providers.values()].filter(p => p && p.available !== false && !p.closed && checkProviderPrivacyAllowed(p, privacy).allowed);
 
-  const hint = String(modelHint || spec?.model || '').trim().toLowerCase();
   if (hint) {
     const exact = allEligible.find(p => p.id.toLowerCase() === hint || String(p.model || '').toLowerCase() === hint || String(p.label || '').toLowerCase().includes(hint));
     if (exact) return exact;
