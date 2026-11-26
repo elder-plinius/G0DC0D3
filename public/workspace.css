@@ -745,7 +745,7 @@ body.sidebar-collapsed .inspector { grid-column: 2; }
 .ultra-switch.enabled{color:#d2c5ff;background:#b8a4ef14;border-color:#796799}
 #composer-ultra-state{font-size:.625rem;font-weight:600;letter-spacing:.055em;text-transform:uppercase;line-height:1;border-left:1px solid var(--line);padding-left:7px}
 .ultra-switch.enabled #composer-ultra-state{border-left-color:#796799}
-@container composer-bar (max-width: 740px) {
+@container composer-bar (max-width: 460px) {
   #composer-ultra-state { display: none; }
 }
 .composer-shell.composer-compact:not(.composer-options-open) #composer-ultra-state { display: none; }
@@ -864,8 +864,8 @@ fieldset.setting-row{padding:18px 0;border-bottom:1px solid var(--line)}
 @keyframes cursorBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 
 /* Toast enter/exit — override .hidden's display:none for animated fade */
-.toast.hidden { display: block !important; opacity: 0; transform: translate(-50%, 12px); pointer-events: none; visibility: hidden; transition: opacity .25s, transform .25s, visibility 0s .25s; }
-.toast:not(.hidden) { opacity: 1; transform: translate(-50%, 0); visibility: visible; transition: opacity .25s, transform .25s; }
+.toast.hidden { display: block !important; opacity: 0; transform: translateY(10px); pointer-events: none; visibility: hidden; transition: opacity .22s, transform .22s, visibility 0s .22s; }
+.toast:not(.hidden) { opacity: 1; transform: translateY(0); visibility: visible; transition: opacity .22s, transform .22s; }
 
 /* Modal enter animation */
 dialog[open] { animation: modalIn .2s ease-out; }
@@ -3459,7 +3459,7 @@ body.artifact-open.sidebar-collapsed .artifact-dock { grid-column: 3; }
   font-size: .76rem;
 }
 .composer-options #composer-model {
-  max-width: 210px;
+  max-width: 255px;
 }
 .composer-options #composer-model-label {
   overflow: hidden;
@@ -3471,14 +3471,25 @@ body.artifact-open.sidebar-collapsed .artifact-dock { grid-column: 3; }
   letter-spacing: .04em;
   padding: 4px 7px;
 }
-.conversation-controls {
-  padding: 3px 10px 0;
-  opacity: .78;
+/* Keep textarea crisp at top of card: tuck idle Model controls neatly into top-right corner */
+.composer-form { position: relative; }
+.conversation-controls:not(:has(#composer-delivery-label:not([hidden]))) {
+  position: absolute;
+  top: 7px;
+  right: 40px;
+  z-index: 2;
+  padding: 0;
+  gap: 0;
+  opacity: .55;
+  transition: opacity .15s;
 }
+.conversation-controls:not(:has(#composer-delivery-label:not([hidden]))) > span:empty { display: none; }
 .conversation-controls:hover,
 .conversation-controls:focus-within {
   opacity: 1;
 }
+.composer-entry { padding-top: 2px; }
+.ultra-pop-card:disabled { opacity: .48; cursor: not-allowed; }
 .recovery-strip {
   margin-top: 2px;
   min-height: 20px;

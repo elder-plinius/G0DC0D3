@@ -6,12 +6,23 @@ import { reframe as reframeObjective } from './reframe.mjs';
 import { isCatalogModel } from './venice-catalog.mjs';
 import { classifyPromptDomain } from './ultra-router.mjs';
 
-export function validateAnswerRace(value, catalog, workspaceKind) {
+function resolveRaceModel(id, catalog, providers) {
+  if (typeof id !== 'string' || !id) return null;
+  if (isCatalogModel(id)) {
+    const m = catalog?.get(id);
+    return m?.draft ? m : null;
+  }
+  const p = providers?.get(id);
+  if (p && p.available !== false && !p.closed && typeof p.draft === 'function') return p;
+  return null;
+}
+
+export function validateAnswerRace(value, catalog, workspaceKind, providers = null) {
   if (value == null) return null;
   const models = value.models;
   if (workspaceKind !== 'conversation' || !Array.isArray(models) || models.length !== 2 || new Set(models).size !== 2
-    || ![...models,value.judge].every(id=>isCatalogModel(id) && catalog?.get(id)?.draft))
-    throw new Error('Choose two different Venice text models and an available Venice judge for this chat.');
+    || ![...models,value.judge].every(id => Boolean(resolveRaceModel(id, catalog, providers))))
+    throw new Error('Choose two different models and an available judge for this chat.');
   return {models:[...models],judge:value.judge};
 }
 
@@ -86,8 +97,8 @@ export async function runAnswerRace(runtime, task, epoch, signal) {
   const current = () => runtime._current(id,epoch,signal);
   const superseded = () => runtime.getTask(id).pendingMessages?.length > 0;
   const stop = (code,message,extra={}) => runtime._status(id,epoch,'waiting_input',{code,message,...extra});
-  const ids = race.models, judge = runtime.catalog.get(race.judge), models = ids.map(key=>runtime.catalog.get(key));
-  if (!judge || models.some(model=>!model)) return stop('RACE_UNAVAILABLE','A selected Venice model is unavailable. Update the Ultra-Plinian choices in Models.');
+  const ids = race.models, judge = resolveRaceModel(race.judge, runtime.catalog, runtime.providers), models = ids.map(key => resolveRaceModel(key, runtime.catalog, runtime.providers));
+  if (!judge || models.some(model=>!model)) return stop('RACE_UNAVAILABLE','A selected arena model is unavailable. Update the Ultra-Plinian choices in Models.');
   const budget = () => runtime._status(id,epoch,'paused_budget',{code:'CALL_BUDGET',message:'Ultra-Plinian needs two drafting calls and one grading call. Increase the chat’s call limit to continue.'});
   if (task.calls+3>task.policy.maxCalls) return budget();
   const godmodeOn = task.policy?.mode !== 'ask' && (task.policy?.maxAttempts || 0) > 0;

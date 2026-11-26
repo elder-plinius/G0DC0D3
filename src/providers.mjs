@@ -409,6 +409,50 @@ export class HttpProvider {
       maxOutputTokensCeiling: this.maxOutputTokensCeiling,
     });
   }
+  draft(messages, signal, draftLimit = 4096, parameters = {}, opts = {}) {
+    const bound = Math.min(this.maxOutputTokensCeiling || draftLimit, draftLimit);
+    if (this.protocol === 'openai-chat') {
+      return this.plainChat(
+        { id: this.id, label: this.label, model: this.model, protocol: this.protocol, baseUrl: this.baseUrl, tier: this.tier, maxOutputTokens: bound, maxOutputTokensCeiling: this.maxOutputTokensCeiling },
+        messages,
+        signal,
+        { ...parameters, max_tokens: Math.min(parameters?.max_tokens ?? bound, bound) },
+        opts
+      );
+    }
+    const list = Array.isArray(messages) ? messages : [];
+    const sys = list.filter(m => m?.role === 'system').map(m => typeof m.content === 'string' ? m.content : '').filter(Boolean).join('\n\n');
+    const rest = list.filter(m => m?.role !== 'system');
+    const lastUser = [...rest].reverse().find(m => m?.role === 'user');
+    const prior = rest.slice(0, lastUser ? rest.lastIndexOf(lastUser) : rest.length);
+    const prompt = typeof lastUser?.content === 'string' ? lastUser.content : JSON.stringify(lastUser?.content || '');
+    const syntheticHistory = prior.map((m, idx) => m?.role === 'assistant'
+      ? { id: idx + 1, type: 'model.response', data: { response: { type: 'message', text: typeof m.content === 'string' ? m.content : '' } } }
+      : { id: idx + 1, type: 'owner.message', data: { message: typeof m.content === 'string' ? m.content : '' } }
+    );
+    return this.turn(
+      {
+        task: { id: 'draft', objective: prompt, workspaceKind: 'conversation', generation: { ...parameters, max_tokens: Math.min(parameters?.max_tokens ?? bound, bound) } },
+        history: syntheticHistory,
+        files: [],
+        tools: [],
+        instructions: sys || undefined,
+      },
+      { signal, ...opts }
+    );
+  }
+  continueDraft(messages, partialText, signal, draftLimit = 8192, parameters = {}, opts = {}) {
+    if (this.protocol !== 'openai-chat') return this.draft([...(messages || []), { role: 'assistant', content: partialText }, { role: 'user', content: AUTO_CONTINUE_PROMPT }], signal, draftLimit, parameters, opts);
+    const boosted = Math.min(this.maxOutputTokensCeiling || 32768, Math.max(draftLimit, 24576));
+    const contMessages = [...messages, { role: 'assistant', content: partialText }, { role: 'user', content: AUTO_CONTINUE_PROMPT }];
+    return this.plainChat(
+      { id: this.id, label: this.label, model: this.model, protocol: this.protocol, baseUrl: this.baseUrl, tier: this.tier, maxOutputTokens: boosted, maxOutputTokensCeiling: this.maxOutputTokensCeiling },
+      contMessages,
+      signal,
+      { ...parameters, max_tokens: Math.min(parameters?.max_tokens ?? boosted, boosted) },
+      opts
+    );
+  }
   catalogChoice({ id, label, model, limit, supportsReasoning = false, supportsFunctionCalling = false, modelMetadata }) {
     const reasoningFloor = supportsReasoning ? Math.max(this.maxOutputTokens, 16384) : this.maxOutputTokens;
     const initialTokens = Math.min(limit, reasoningFloor);

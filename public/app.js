@@ -450,7 +450,7 @@ function syncAdaptiveCompactUI() {
   const shell = $('#composer-shell');
   if (shell) {
     const w = shell.getBoundingClientRect().width;
-    const widthThreshold = appMode === 'godcode' ? 660 : 540;
+    const widthThreshold = appMode === 'godcode' ? 790 : 560;
     const manuallySquished = manualComposerHeight !== null && manualComposerHeight <= 72;
     const isCompact = (w > 0 && w < widthThreshold) || manuallySquished;
     const wasCompact = shell.classList.contains('composer-compact');
@@ -569,7 +569,7 @@ function renderComposer() {
   setText('#composer-project-label', task?.codeWorkspace ? task.codeWorkspace.repository : label || (task?.workspaceKind === 'conversation' ? 'Attach repository' : 'Add project'));
   const preferred = providerById(newConversationProviders()[0]);
   const race = task ? task.answerRace : RecoveryUI.preferences().answerRace;
-  setText('#composer-model-label', race ? '2 Venice writers' : task ? providerById(task.providerId)?.label || task.providerId || 'Model' : preferred?.label || 'Connect model');
+  setText('#composer-model-label', race ? '2 arena writers' : task ? providerById(task.providerId)?.label || task.providerId || 'Model' : preferred?.label || 'Connect model');
   $('#composer-project').title = task?.workspaceKind === 'conversation' ? (task.codeWorkspace ? 'Open GodCode in this chat' : 'Attach a repository to this chat') : task ? 'Project locations and working copy' : 'Start a new task in a project copy';
   setVisible('#composer-permissions', true);
   const permRulesNow = task && Array.isArray(task.permissionRules)
@@ -2032,10 +2032,14 @@ function renderApiToggles() {
   const section = $('#api-toggles-section');
   if (!section) return;
   const profiles = Array.isArray(state.connectedApiProviders) ? state.connectedApiProviders : [];
-  section.hidden = profiles.length === 0;
-  if (!profiles.length) return;
-  const activeCount = profiles.filter(p => p.enabled !== false).length;
-  const rows = profiles.map(p => {
+  const liveCli = liveProviders().filter(p => ['codex', 'claude', 'gemini-cli', 'copilot-cli'].includes(p.kind));
+  const liveLocal = liveProviders().filter(p => p.tier === 'local' || String(p.id || '').startsWith('local:'));
+  section.hidden = profiles.length === 0 && liveCli.length === 0 && liveLocal.length === 0;
+  if (section.hidden) return;
+  const activeApiCount = profiles.filter(p => p.enabled !== false).length;
+  const totalCount = profiles.length + liveCli.length + (liveLocal.length ? 1 : 0);
+  const activeCount = activeApiCount + liveCli.length + (liveLocal.length ? 1 : 0);
+  const apiRows = profiles.map(p => {
     const enabled = p.enabled !== false;
     const busy = apiToggleBusy === p.provider;
     const count = Number(p.modelCount ?? p.models?.length ?? 0);
@@ -2058,11 +2062,25 @@ function renderApiToggles() {
         <span>${busy ? 'Saving…' : enabled ? 'Active' : 'Disabled'}</span>
       </button>
     </div>`;
-  }).join('');
+  });
+  const cliRows = liveCli.map(p => `<div class="api-toggle-row">
+    <div class="api-toggle-info">
+      <span class="api-toggle-title"><span class="svc-dot svc-connected" aria-hidden="true"></span>${escapeHTML(p.label || p.id)}</span>
+      <span class="api-toggle-meta">CLI subscription · active</span>
+    </div>
+    <button type="button" class="button button-quiet svc-action-btn" data-disconnect-cli-quick="${escapeHTML(p.id)}" ${connectionBusy ? 'disabled' : ''}>Disconnect</button>
+  </div>`);
+  const localRows = liveLocal.length ? [`<div class="api-toggle-row">
+    <div class="api-toggle-info">
+      <span class="api-toggle-title"><span class="svc-dot svc-connected" aria-hidden="true"></span>Local Models</span>
+      <span class="api-toggle-meta">${liveLocal.length} on-device ${liveLocal.length === 1 ? 'model' : 'models'} (${escapeHTML(liveLocal.map(p => p.model || p.label).slice(0, 2).join(', '))})</span>
+    </div>
+    <span class="svc-status-pill svc-connected">Local</span>
+  </div>`] : [];
   section.innerHTML = `<div class="settings-card-head">
-    <h4>Active API Providers</h4>
-    <p>${activeCount} of ${profiles.length} connected API${profiles.length === 1 ? '' : 's'} enabled. Turn any API off to hide its models from the picker &amp; routing without deleting your saved key.</p>
-  </div><div class="api-toggles-list">${rows}</div>`;
+    <h4>Active Providers &amp; APIs</h4>
+    <p>${activeCount} of ${totalCount} connected provider${totalCount === 1 ? '' : 's'} active. Toggle any API off to hide its models from the picker &amp; routing without deleting your saved key.</p>
+  </div><div class="api-toggles-list">${[...apiRows, ...cliRows, ...localRows].join('')}</div>`;
 }
 
 async function toggleApiProvider(provider, enabled) {
@@ -2206,18 +2224,20 @@ function updateHeaderServicesBadge() {
   const label = $('#header-services-label');
   if (!dot || !label) return;
   const summary = servicesData?.summary;
+  const liveCount = liveProviders().length;
   if (!summary) {
-    const liveCount = (state.providers || []).filter(p => p.kind !== 'scripted' && p.available).length;
-    label.textContent = liveCount ? `Services · ${liveCount}` : 'Services';
-    dot.className = `svc-dot ${liveCount ? 'svc-connected' : 'svc-muted'}`;
+    label.textContent = liveCount ? `AI · ${liveCount}` : 'Connect AI';
+    dot.className = `svc-dot ${liveCount ? 'svc-connected' : 'svc-signin'}`;
+    $('#header-services-btn')?.setAttribute('title', liveCount ? `${liveCount} active AI model${liveCount === 1 ? '' : 's'} connected` : 'Connect an AI API key, CLI login, or local model');
     return;
   }
-  const count = summary.connectedTotal || 0;
-  const parts = [`${count} connected`];
+  const aiCount = Number(summary.connectedAiCount || 0);
+  const parts = [`${aiCount} AI provider${aiCount === 1 ? '' : 's'} active`];
+  if (summary.connectedDevtools) parts.push(`${summary.connectedDevtools} dev tool${summary.connectedDevtools === 1 ? '' : 's'}`);
   if (summary.githubAuthenticated && summary.githubAccount) parts.push(`gh @${summary.githubAccount}`);
-  label.textContent = `Services · ${count}`;
-  $('#header-services-btn')?.setAttribute('title', `Connected coding & AI services (${parts.join(' · ')})`);
-  dot.className = `svc-dot ${count > 0 ? 'svc-connected' : 'svc-muted'}`;
+  label.textContent = aiCount > 0 ? `AI · ${aiCount}` : 'Connect AI';
+  $('#header-services-btn')?.setAttribute('title', `Connected AI & dev services (${parts.join(' · ')})`);
+  dot.className = `svc-dot ${aiCount > 0 ? 'svc-connected' : 'svc-signin'}`;
 }
 
 async function loadServices(force = false) {
@@ -6627,33 +6647,51 @@ async function applyUltraCustomArena(answerRace, targetTask = undefined) {
   if (typeof renderRaceOptions === 'function') renderRaceOptions(task);
 }
 
+function availableArenaModels() {
+  const seen = new Set();
+  const out = [];
+  for (const m of (veniceCatalog?.models || [])) {
+    if (!m?.id || seen.has(m.id)) continue;
+    seen.add(m.id);
+    out.push(m);
+  }
+  for (const p of liveProviders()) {
+    if (!p?.id || seen.has(p.id) || p.kind !== 'http') continue;
+    seen.add(p.id);
+    out.push(p);
+  }
+  return out;
+}
+
 function renderUltraPopover() {
   const pop = $('#ultra-popover');
   if (!pop || pop.classList.contains('hidden')) return;
   const task = selectedData?.task?.workspaceKind === 'conversation' ? selectedData.task : null;
   const mode = activeUltraMode(task);
   const racing = task ? task.answerRace : RecoveryUI.preferences().answerRace;
+  const arenaModels = availableArenaModels();
+  const totalLiveModels = new Set([...liveProviders().map(p => p.id), ...(veniceCatalog?.models || []).map(m => m.id)]).size;
+  const hasMultipleModels = totalLiveModels >= 2;
   const modes = [
-    ['off', 'Off', 'Direct model & waterfall'],
-    ['auto_route', 'Auto-Route', 'Best model per domain'],
-    ['auto_arena', 'Auto-Arena', 'Top-2 race + blind judge'],
-    ['manual_arena', 'Custom Arena', 'Pick 2 Venice writers + judge'],
+    ['off', 'Off', 'Direct model & waterfall', false],
+    ['auto_route', 'Auto-Route', hasMultipleModels ? 'Best model per domain' : 'Single model active (add 2+ to route)', false],
+    ['auto_arena', 'Auto-Arena', hasMultipleModels ? 'Top-2 race + blind judge (complex tasks)' : 'Needs 2+ connected models', !hasMultipleModels],
+    ['manual_arena', 'Custom Arena', arenaModels.length >= 2 ? 'Pick any 2 writers + judge' : 'Needs 2+ API models', false],
   ];
-  const models = veniceCatalog?.models || [];
   let customHtml = '';
   if (mode === 'manual_arena') {
-    if (!veniceCatalog?.connected || !models.length) {
-      customHtml = `<div class="ultra-pop-custom"><p class="ultra-pop-note">Connect a Venice API key in Settings → Models to pick custom arena writers.</p><button type="button" class="button button-secondary" data-ultra-open-settings="models">Connect Venice →</button></div>`;
+    if (arenaModels.length < 2) {
+      customHtml = `<div class="ultra-pop-custom"><p class="ultra-pop-note">Connect at least 2 API models (OpenRouter, Venice, Anthropic, OpenAI, Gemini, or local) to race custom writers.</p><button type="button" class="button button-secondary" data-ultra-open-settings="models">Manage Models →</button></div>`;
     } else {
       const preferred = task?.providerId || newConversationProviders()[0];
-      const defFirst = models.some(m => m.id === preferred) ? preferred : RecoveryUI.recommendedBackup(models, null);
-      const defSecond = RecoveryUI.recommendedBackup(models, defFirst);
-      const defJudge = models.find(m => m.id === 'venice-catalog:z-ai-glm-5-3-flash')?.id || defSecond || defFirst;
-      const curFirst = racing?.models?.[0] || defFirst || '';
-      const curSecond = racing?.models?.[1] || defSecond || '';
-      const curJudge = racing?.judge || defJudge || '';
-      const optsFor = selected => models.map(m => {
-        const label = m.label === m.model ? m.model : `${m.label} · ${m.model}`;
+      const defFirst = arenaModels.some(m => m.id === preferred) ? preferred : (RecoveryUI.recommendedBackup(arenaModels, null) || arenaModels[0]?.id);
+      const defSecond = RecoveryUI.recommendedBackup(arenaModels, defFirst) || arenaModels.find(m => m.id !== defFirst)?.id || '';
+      const defJudge = arenaModels.find(m => /glm-5-3-flash|gemini-4-neon|claude-sonnet/i.test(m.id))?.id || defSecond || defFirst;
+      const curFirst = racing?.models?.[0] && arenaModels.some(m => m.id === racing.models[0]) ? racing.models[0] : (defFirst || '');
+      const curSecond = racing?.models?.[1] && arenaModels.some(m => m.id === racing.models[1]) ? racing.models[1] : (defSecond || '');
+      const curJudge = racing?.judge && arenaModels.some(m => m.id === racing.judge) ? racing.judge : (defJudge || '');
+      const optsFor = selected => arenaModels.map(m => {
+        const label = m.label || m.model || m.id;
         return `<option value="${escapeHTML(m.id)}"${m.id === selected ? ' selected' : ''}>${escapeHTML(label)}</option>`;
       }).join('');
       const sameWarn = curFirst && curFirst === curSecond ? '<p class="ultra-pop-error">Choose two different writers.</p>' : '';
@@ -6665,14 +6703,14 @@ function renderUltraPopover() {
       </div>`;
     }
   }
-  const statusTag = mode === 'off' ? 'Off' : mode === 'auto_route' ? 'Auto-Route active' : mode === 'auto_arena' ? 'Auto-Arena active' : 'Custom Arena active';
+  const statusTag = mode === 'off' ? 'Off' : mode === 'auto_route' ? 'Auto-Route active' : mode === 'auto_arena' ? (hasMultipleModels ? 'Auto-Arena active' : 'Auto-Arena (needs 2+ models)') : 'Custom Arena active';
   pop.innerHTML = `
     <div class="ultra-popover-head">
       <div><strong>ULTRA-PLINIAN</strong><small>${escapeHTML(statusTag)}</small></div>
       <button type="button" class="icon-button" data-close-ultra-popover aria-label="Close Ultra-Plinian menu">×</button>
     </div>
     <div class="ultra-popover-modes" role="radiogroup" aria-label="Ultra-Plinian mode">
-      ${modes.map(([id, title, desc]) => `<button type="button" class="ultra-pop-card${mode === id ? ' active' : ''}" role="radio" aria-checked="${mode === id}" data-ultra-pop-mode="${id}" ${ultraRouterBusy ? 'disabled' : ''}><strong>${title}</strong><span>${desc}</span></button>`).join('')}
+      ${modes.map(([id, title, desc, unavailable]) => `<button type="button" class="ultra-pop-card${mode === id ? ' active' : ''}" role="radio" aria-checked="${mode === id}" data-ultra-pop-mode="${id}" ${ultraRouterBusy || unavailable ? 'disabled' : ''}><strong>${title}</strong><span>${desc}</span></button>`).join('')}
     </div>
     ${customHtml}
     <div class="ultra-popover-foot">
@@ -6717,15 +6755,15 @@ $('#ultra-popover')?.addEventListener('click', async event => {
   const mode = modeBtn.dataset.ultraPopMode;
   try {
     if (mode === 'manual_arena') {
-      if (!veniceCatalog?.models?.length) await loadVeniceCatalog();
-      const models = veniceCatalog?.models || [];
+      if (!veniceCatalog?.models?.length && state.veniceConnectionId) await loadVeniceCatalog();
+      const models = availableArenaModels();
       await updateUltraRouter({ mode: 'manual_arena' }, 'Ultra-Plinian Custom Arena selected.');
       if (models.length >= 2) {
         const task = selectedData?.task?.workspaceKind === 'conversation' ? selectedData.task : null;
         const preferred = task?.providerId || newConversationProviders()[0];
-        const first = models.some(m => m.id === preferred) ? preferred : RecoveryUI.recommendedBackup(models, null);
+        const first = models.some(m => m.id === preferred) ? preferred : (RecoveryUI.recommendedBackup(models, null) || models[0]?.id);
         const second = RecoveryUI.recommendedBackup(models, first) || models.find(m => m.id !== first)?.id;
-        const judge = models.find(m => m.id === 'venice-catalog:z-ai-glm-5-3-flash')?.id || second || first;
+        const judge = models.find(m => /glm-5-3-flash|gemini-4-neon|claude-sonnet/i.test(m.id))?.id || second || first;
         if (first && second && first !== second && judge) {
           await applyUltraCustomArena({ models: [first, second], judge });
         }
@@ -6865,6 +6903,11 @@ $('#api-toggles-section')?.addEventListener('click', event => {
   const toggleBtn = event.target.closest('[data-toggle-api-provider]');
   if (toggleBtn) {
     void toggleApiProvider(toggleBtn.dataset.toggleApiProvider, toggleBtn.dataset.toggleEnabled === 'true');
+    return;
+  }
+  const discCli = event.target.closest('[data-disconnect-cli-quick]');
+  if (discCli && typeof disconnectCli === 'function') {
+    void disconnectCli(discCli.dataset.disconnectCliQuick);
   }
 });
 $('#connected-services-hub')?.addEventListener('click', event => {
@@ -7729,7 +7772,7 @@ function renderModelPicker() {
   pickerModels = matched.slice(0, maxVisible);
   const lock = modelSelectionLock(task);
   setText('#model-picker-scope', task ? 'This chat' : 'New chats');
-  setText('#model-picker-count', pickerLoading ? 'Loading…' : `${totalMatches} models`);
+  setText('#model-picker-count', pickerLoading ? 'Loading…' : `${totalMatches} ${totalMatches === 1 ? 'model' : 'models'}`);
   const race = task ? task.answerRace : RecoveryUI.preferences().answerRace;
   setText('#model-picker-note', lock || (race ? 'Ultra-Plinian is on. This selects the model used when comparison is off.' : task ? 'Select a model for your next message.' : 'Select the default for new chats.'));
   const rowsHtml = pickerModels.map((p,i) => {

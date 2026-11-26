@@ -711,7 +711,7 @@ export class Runtime {
     } else if (input.crewContract !== undefined) throw fault('INVALID_CREW_MEMBER', 'Crew contracts require a registered worker.');
     if (typeof input.objective !== 'string' || !input.objective.trim() || input.objective.length > messageCharLimit(input.objective, 30000)) throw fault('INVALID_TASK', 'An objective of 1–30000 characters is required.');
     if (input.workspaceKind !== undefined && input.workspaceKind !== 'conversation') throw fault('INVALID_TASK', 'Unknown workspace kind.');
-    const answerRace = validateAnswerRace(input.answerRace,this.catalog,input.workspaceKind);
+    const answerRace = validateAnswerRace(input.answerRace,this.catalog,input.workspaceKind,this.providers);
     const providerIds = input.providers || [...this.providers.keys()];
     this.validateCatalogRoute(providerIds, input.workspaceKind);
     if (!Array.isArray(providerIds) || !providerIds.length || providerIds.some(id => typeof id !== 'string' || !this.selectedProvider(id, input.workspaceKind))) throw fault('INVALID_PROVIDER', 'Select at least one configured provider.');
@@ -3416,7 +3416,7 @@ export class Runtime {
   setAnswerRace(id, value) {
     const task=this._assertOwnerSettingsIdle(id);
     if (task.workspaceKind !== 'conversation') throw fault('INVALID_TASK','Ultra-Plinian compares written answers in a chat.');
-    const answerRace=validateAnswerRace(value,this.catalog,task.workspaceKind);
+    const answerRace=validateAnswerRace(value,this.catalog,task.workspaceKind,this.providers);
     for (const id of answerRace?.models || []) parametersFor(this.selectedProvider(id, task.workspaceKind), task.generation);
     return this.store.updateTask(id,current=>{current.answerRace=answerRace;return current;},'race.configured',{answerRace});
   }

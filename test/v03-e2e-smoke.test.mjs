@@ -590,3 +590,62 @@ test('OpenRouter key upgrade (3 legacy models -> 12+ defaults) and API Enable/Di
   assert.equal(or2?.enabled, true);
   assert.ok(state2.providers.filter(p => p.id.startsWith('anthropic:')).every(p => p.available === false));
 });
+
+test('Cross-provider Custom Arena races two OpenRouter models with an OpenRouter judge (no Venice required)', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'g0d-v03-or-arena-'));
+  const ws = await fs.mkdtemp(path.join(os.tmpdir(), 'g0d-v03-or-arena-ws-'));
+  const makeDraftProvider = (id, label, model, reply) => ({
+    id, label, model, kind: 'http', tier: 'frontier', baseUrl: 'https://openrouter.ai/api/v1', available: true,
+    capabilities: { tools: true, nativeTools: true, portableContext: true, outputTokens: { initial: 4096, max: 16384 } },
+    async draft(messages) {
+      const last = messages.at(-1)?.content || '';
+      if (String(last).includes('Draft A:') || String(messages[0]?.content || '').includes('blind editor')) {
+        return {
+          type: 'message',
+          finish: 'done',
+          text: JSON.stringify({
+            winner: 'A',
+            grades: [
+              { id: 'A', fidelity: 5, completeness: 5, clarity: 5, reason: 'Concise and complete.' },
+              { id: 'B', fidelity: 4, completeness: 4, clarity: 4, reason: 'Solid alternative.' },
+            ],
+          }),
+          usage: { input_tokens: 400, output_tokens: 80 },
+        };
+      }
+      return { type: 'message', finish: 'done', text: reply, usage: { input_tokens: 300, output_tokens: 90 } };
+    },
+    async turn() { return { type: 'message', finish: 'done', text: reply }; },
+  });
+
+  const providers = new Map([
+    ['openrouter:anthropic-claude-sonnet-5.5', makeDraftProvider('openrouter:anthropic-claude-sonnet-5.5', 'Claude Sonnet 5.5 · OpenRouter', 'anthropic/claude-sonnet-5.5', 'Sonnet OpenRouter draft winner.')],
+    ['openrouter:openai-gpt-6.2-astra', makeDraftProvider('openrouter:openai-gpt-6.2-astra', 'GPT-6.2 Astra · OpenRouter', 'openai/gpt-6.2-astra', 'GPT-6.2 OpenRouter draft runner-up.')],
+    ['openrouter:google-gemini-4-neon', makeDraftProvider('openrouter:google-gemini-4-neon', 'Gemini 4 Neon · OpenRouter', 'google/gemini-4-neon', 'Judge')],
+  ]);
+  const app = await createApp({ dataDir: dir, auth: false, providers });
+  t.after(async () => {
+    await app.close();
+    await fs.rm(dir, { recursive: true, force: true });
+    await fs.rm(ws, { recursive: true, force: true });
+  });
+
+  const task = await app.runtime.createTask({
+    workspace: ws,
+    workspaceKind: 'conversation',
+    objective: 'Compare Rust and Go concurrency models',
+    providers: ['openrouter:anthropic-claude-sonnet-5.5'],
+    answerRace: {
+      models: ['openrouter:anthropic-claude-sonnet-5.5', 'openrouter:openai-gpt-6.2-astra'],
+      judge: 'openrouter:google-gemini-4-neon',
+    },
+    acceptance: { mode: 'owner' },
+  });
+  await app.runtime.run(task.id);
+  const done = app.runtime.getTask(task.id);
+  assert.equal(done.status, 'completed');
+  const events = app.runtime.getEvents(task.id);
+  const winnerEvent = events.find(e => e.type === 'model.response' && String(e.data?.response?.text || '').includes('OpenRouter draft'));
+  assert.ok(winnerEvent, 'expected winning OpenRouter arena draft to be recorded');
+  assert.ok(events.some(e => e.type === 'race.dispatched'), 'expected race.dispatched event');
+});

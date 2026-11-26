@@ -149,7 +149,9 @@ export async function createProviderSettings(providers, keychain, { dataDir } = 
   function matchesProfile(item, provider) {
     const profile = profiles[provider];
     if (!profile || !item || item.closed) return false;
-    return item.baseUrl === profile.endpoint && item.protocol === (profile.protocol || 'openai-chat');
+    const expectedProto = profile.protocol || 'openai-chat';
+    if (item.protocol && item.protocol !== expectedProto) return false;
+    return item.baseUrl === profile.endpoint || String(item.id || '').startsWith(provider + ':');
   }
 
   function applyProfileEnabledState(provider) {
