@@ -1422,7 +1422,11 @@
     const icon = document.getElementById('brand-icon');
     if (icon) icon.setAttribute('href', theme.base === 'dark' ? '/lysios-mark-reverse-white.svg' : '/lysios-mark-canonical-ink.svg');
     const metaTheme = document.querySelector('meta[name="theme-color"]');
-    if (metaTheme) metaTheme.content = getComputedStyle(root).getPropertyValue('--bg').trim() || '#171817';
+    const computedBg = getComputedStyle(root).getPropertyValue('--bg').trim() || (theme.base === 'light' ? '#f8f7f4' : '#171817');
+    if (metaTheme) metaTheme.content = computedBg;
+    try {
+      window.webkit?.messageHandlers?.setAppearance?.postMessage({ base: theme.base, bg: computedBg });
+    } catch {}
 
     if (theme.animated) startEngine(theme.id);
     else stopEngine();
@@ -1459,7 +1463,10 @@
     const open = typeof force === 'boolean' ? force : pop.classList.contains('hidden');
     pop.classList.toggle('hidden', !open);
     btn?.setAttribute('aria-expanded', String(open));
-    if (open) syncThemeUI();
+    if (open) {
+      syncThemeUI();
+      requestAnimationFrame(() => (pop.querySelector('.theme-card.is-active') || pop.querySelector('button'))?.focus({ preventScroll: true }));
+    }
   }
 
   function wireControls() {

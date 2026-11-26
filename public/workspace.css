@@ -3053,7 +3053,8 @@ button:focus-visible, a:focus-visible { outline-offset: 2px; }
   overflow: auto;
   border-top: 1px solid var(--line);
   padding: 8px 12px;
-  background: #111214;
+  background: var(--panel);
+  color: var(--text);
   font-family: var(--mono);
   font-size: .76rem;
 }
@@ -3606,7 +3607,9 @@ body.artifact-open.sidebar-collapsed .artifact-dock { grid-column: 3; }
   left: calc(var(--sidebar-width, 250px) - 4px);
   z-index: 25;
 }
-body.artifact-open .sidebar-splitter {
+body.artifact-open .sidebar-splitter,
+body.conclave-open .sidebar-splitter,
+body.browser-open .sidebar-splitter {
   left: calc(var(--sidebar-split-width, 184px) - 4px);
 }
 body.sidebar-collapsed .sidebar-splitter,
@@ -3619,7 +3622,7 @@ body.code-open .sidebar-splitter { display: none !important; }
   right: calc(var(--inspector-width, 340px) - 4px);
   z-index: 32;
 }
-body.inspector-open:not(.artifact-open):not(.code-open) .inspector-splitter { display: block; }
+body.inspector-open:not(.artifact-open):not(.code-open):not(.conclave-open):not(.browser-open) .inspector-splitter { display: block; }
 .file-tree-splitter {
   height: 100%;
   z-index: 5;
@@ -7927,4 +7930,99 @@ body.browser-open.sidebar-collapsed .browser-dock { grid-column: 2; }
   font-size: .68rem;
   overflow-x: auto;
   max-height: 220px;
+}
+
+/* ── UX Polish Pass: Bigger Home Composer, Stop Button, Responsive & Contrast ─ */
+.workspace:has(#welcome:not(.hidden)) .welcome,
+.workspace:has(#welcome:not(.hidden)) .composer-shell {
+  width: min(840px, calc(100% - 48px));
+}
+.workspace:has(#welcome:not(.hidden)) .composer-form {
+  border-radius: 16px;
+}
+.workspace:has(#welcome:not(.hidden)) #composer-input {
+  min-height: 112px;
+  padding-block: 16px 14px;
+  font-size: 1rem;
+  line-height: 1.55;
+}
+.workspace:has(#welcome:not(.hidden)) .composer-entry::before {
+  align-self: flex-start;
+  margin-top: 23px;
+}
+.workspace:has(#welcome:not(.hidden)) .composer-shortcut {
+  margin-top: 17px;
+}
+.workspace:has(#welcome:not(.hidden)) .composer-toolbar {
+  padding: 6px 12px 12px;
+}
+.composer-send.is-stop-mode {
+  background: color-mix(in srgb, var(--red, #f87171) 22%, var(--panel-raised));
+  border-color: color-mix(in srgb, var(--red, #f87171) 55%, var(--line));
+  color: var(--red, #f87171);
+}
+.composer-send.is-stop-mode:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--red, #f87171) 34%, var(--panel-raised));
+}
+.diff-hunk.is-reviewed .diff-hunk-header {
+  border-left: 3px solid var(--signal, #4ade80);
+  background: color-mix(in srgb, var(--signal, #4ade80) 9%, var(--panel-soft));
+}
+.diff-hunk:focus-within .hunk-btn,
+.hunk-btn:focus-visible {
+  opacity: 1;
+}
+@media (hover: none) {
+  .hunk-btn { opacity: 1; }
+}
+.diff-file-filter:focus:not(:focus-visible) {
+  outline: none;
+}
+/* Responsive safety: hide phantom sidebar splitter <= 900px & protect Conclave/Browser grid */
+@media (max-width: 900px) {
+  .sidebar-splitter { display: none !important; }
+  body.conclave-open .app-shell,
+  body.browser-open .app-shell {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  body.conclave-open .app-header,
+  body.browser-open .app-header,
+  body.conclave-open .workspace,
+  body.browser-open .workspace {
+    grid-column: 1 !important;
+  }
+}
+/* Keep header actions from clipping on narrow split widths */
+.app-header {
+  container-type: inline-size;
+}
+@container (max-width: 580px) {
+  .header-context { display: none; }
+  .header-actions { gap: 6px; }
+}
+@container (max-width: 430px) {
+  .header-actions { gap: 4px; }
+  .header-browser-btn > span:not(.browser-btn-dot):not(.browser-btn-tag),
+  .header-conclave-btn > span:not(.conclave-btn-sigil):not(.conclave-btn-count),
+  .details-button > span {
+    display: none;
+  }
+}
+/* Light-mode WCAG contrast for Conclave & Roster amber/gold badges */
+:root[data-theme="light"] .pb-tier-badge,
+:root[data-theme="light"] .roster-ovr-pill.tier-Sp,
+:root[data-theme="light"] .conclave-mvp-badge,
+:root[data-theme="light"] .conclave-replay-btn.is-active {
+  color: #854d0e;
+  border-color: #d97706;
+  background: #fef3c7;
+}
+:root[data-theme="light"] .live-console-row {
+  border-bottom-color: rgba(0, 0, 0, 0.08);
+}
+:root[data-theme="light"] .live-console-row.level-warn .live-console-lvl {
+  color: #92400e;
+}
+:root[data-theme="light"] .live-console-row.level-error .live-console-lvl {
+  color: #b91c1c;
 }

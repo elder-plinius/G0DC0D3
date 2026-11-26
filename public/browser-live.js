@@ -151,7 +151,7 @@
     updateHeaderButton();
     if (!dockEl()?.dataset.browserInit) return;
     const active = Boolean(statusData?.active);
-    const visibleWin = Boolean(active ? statusData?.visibleWindow : browserSettings?.visibleWindow);
+    const visibleWin = typeof statusData?.visibleWindow === 'boolean' ? statusData.visibleWindow : Boolean(browserSettings?.visibleWindow);
 
     const dot = document.getElementById('bl-live-dot');
     if (dot) dot.className = `bl-live-dot ${active ? (visibleWin ? 'is-win' : 'is-live') : ''}`;
@@ -521,8 +521,7 @@
   }
 
   function toggleWindowMode() {
-    const active = Boolean(statusData?.active);
-    const curVisible = Boolean(active ? statusData?.visibleWindow : browserSettings?.visibleWindow);
+    const curVisible = typeof statusData?.visibleWindow === 'boolean' ? statusData.visibleWindow : Boolean(browserSettings?.visibleWindow);
     return setWindowMode(!curVisible);
   }
 
@@ -557,9 +556,13 @@
   function open() {
     const dock = ensureShell();
     if (!dock) return;
-    // Keep right-hand split docks mutually exclusive without leaking artifact-open state
-    window.closeArtifactDock?.({ recordDismiss: false });
-    if (window.G0DConclave?.isOpen?.()) window.G0DConclave.close();
+    // Keep right-hand split docks mutually exclusive without leaking stale classes
+    if (typeof window.closeAllRightDocks === 'function') window.closeAllRightDocks({ except: 'browser' });
+    else {
+      window.closeArtifactDock?.({ recordDismiss: false });
+      if (window.G0DConclave?.isOpen?.()) window.G0DConclave.close();
+      window.closeChatCode?.();
+    }
     isOpenState = true;
     dock.classList.remove('hidden');
     document.body.classList.add('browser-open');

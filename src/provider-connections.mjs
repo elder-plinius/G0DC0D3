@@ -98,26 +98,58 @@ function modelProviderId(subscriptionId, model) {
   return `${subscriptionId}:${String(model).replaceAll('/', '-')}`;
 }
 
+function pathBinaries(binName, env, home) {
+  const dirs = [];
+  const rawPath = typeof env.PATH === 'string' ? env.PATH : '';
+  for (const part of rawPath.split(path.delimiter)) {
+    const clean = part.trim();
+    if (clean && path.isAbsolute(clean)) dirs.push(clean);
+  }
+  // Common developer version managers (nvm, fnm, volta, mise, asdf, pnpm, bun, nix)
+  dirs.push(
+    path.join(home, '.volta/bin'),
+    path.join(home, '.local/share/mise/shims'),
+    path.join(home, '.asdf/shims'),
+    path.join(home, '.bun/bin'),
+    path.join(home, 'Library/pnpm'),
+    path.join(home, '.local/share/pnpm'),
+    path.join(home, '.nix-profile/bin')
+  );
+  return dirs.map(d => path.join(d, binName));
+}
+
 function candidates(id, env, home) {
   const override = env[DEFINITIONS[id].env];
   // A launcher environment is trusted configuration; browser requests cannot supply a path.
   if (override && path.isAbsolute(override)) return [override];
-  if (id === 'codex-cli') return [
-    '/Applications/Codex.app/Contents/Resources/codex-cli/bin/codex',
-    '/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex',
-    '/Applications/Codex.app/Contents/Resources/codex',
-    '/Applications/ChatGPT.app/Contents/Resources/codex',
-    '/opt/homebrew/bin/codex', '/usr/local/bin/codex', path.join(home, '.local/bin/codex')
-  ];
-  if (id === 'claude-code') return [
-    '/opt/homebrew/bin/claude', '/usr/local/bin/claude', path.join(home, '.local/bin/claude'), path.join(home, '.claude/local/claude')
-  ];
-  if (id === 'gemini-cli') return [
-    '/opt/homebrew/bin/gemini', '/usr/local/bin/gemini', path.join(home, '.local/bin/gemini'), path.join(home, '.npm-global/bin/gemini'), '/usr/bin/gemini'
-  ];
-  return [
-    '/opt/homebrew/bin/copilot', '/usr/local/bin/copilot', path.join(home, '.local/bin/copilot'), path.join(home, '.npm-global/bin/copilot'), '/usr/bin/copilot'
-  ];
+  let fixed;
+  let binName;
+  if (id === 'codex-cli') {
+    binName = 'codex';
+    fixed = [
+      '/Applications/Codex.app/Contents/Resources/codex-cli/bin/codex',
+      '/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex',
+      '/Applications/Codex.app/Contents/Resources/codex',
+      '/Applications/ChatGPT.app/Contents/Resources/codex',
+      '/opt/homebrew/bin/codex', '/usr/local/bin/codex', path.join(home, '.local/bin/codex')
+    ];
+  } else if (id === 'claude-code') {
+    binName = 'claude';
+    fixed = [
+      '/opt/homebrew/bin/claude', '/usr/local/bin/claude', path.join(home, '.local/bin/claude'), path.join(home, '.claude/local/claude')
+    ];
+  } else if (id === 'gemini-cli') {
+    binName = 'gemini';
+    fixed = [
+      '/opt/homebrew/bin/gemini', '/usr/local/bin/gemini', path.join(home, '.local/bin/gemini'), path.join(home, '.npm-global/bin/gemini'), '/usr/bin/gemini'
+    ];
+  } else {
+    binName = 'copilot';
+    fixed = [
+      '/opt/homebrew/bin/copilot', '/usr/local/bin/copilot', path.join(home, '.local/bin/copilot'), path.join(home, '.npm-global/bin/copilot'), '/usr/bin/copilot'
+    ];
+  }
+  return [...new Set([...fixed, ...pathBinaries(binName, env, home)])];
 }
 function codexEnvironment(env) { return cliEnvironment(env); }
 async function discover(id, env, home) {

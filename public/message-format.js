@@ -308,12 +308,22 @@ function tryFileWrite(content, language) {
   return null;
 }
 
+const FILE_COPY_STORE = new Map();
+let fileCopyCounter = 0;
+if (typeof window !== 'undefined') window.__g0dFileCopyStore = FILE_COPY_STORE;
+
 function renderFileCard(file) {
   const ext = file.path.split('.').pop().toLowerCase();
   const lang = ext || 'text';
   const lines = file.content.split('\n').length;
   const preview = file.content.length > 2000 ? file.content.slice(0, 2000) + '\n…' : file.content;
   const highlighted = highlightCode(preview, lang);
+  const copyId = `fc_${++fileCopyCounter}`;
+  FILE_COPY_STORE.set(copyId, file.content);
+  if (FILE_COPY_STORE.size > 400) {
+    const oldest = FILE_COPY_STORE.keys().next().value;
+    if (oldest) FILE_COPY_STORE.delete(oldest);
+  }
   const isRenderable = /^(html?|svg)$/.test(ext) && !file.truncated;
   const encodeUtf8Base64 = str => {
     try {
@@ -327,7 +337,7 @@ function renderFileCard(file) {
   const previewBtn = previewPayload ? `<button type="button" class="file-card-preview" data-preview-content="${messageEscape(previewPayload)}" aria-label="Preview ${messageEscape(file.path)}">Preview</button>` : '';
   const truncNote = file.truncated ? '<span class="file-card-truncated">Content truncated in display</span>' : '';
   const lineCount = `<span class="file-card-lines">${lines}${file.truncated ? '+' : ''} line${lines !== 1 ? 's' : ''}</span>`;
-  return `<div class="file-card"><div class="file-card-header"><span class="file-card-icon" aria-hidden="true"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2.5h5.5L13 6v7.5H4z"/><path d="M9.5 2.5V6H13"/></svg></span><span class="file-card-path">${messageEscape(file.path)}</span>${lineCount}${truncNote}<span class="file-card-actions"><button type="button" class="code-copy" data-copy-code aria-label="Copy file content">Copy</button>${previewBtn}</span></div><pre class="message-code hljs file-card-code" tabindex="0" role="region" aria-label="Contents of ${messageEscape(file.path)}"><code>${highlighted}</code></pre></div>`;
+  return `<div class="file-card"><div class="file-card-header"><span class="file-card-icon" aria-hidden="true"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2.5h5.5L13 6v7.5H4z"/><path d="M9.5 2.5V6H13"/></svg></span><span class="file-card-path">${messageEscape(file.path)}</span>${lineCount}${truncNote}<span class="file-card-actions"><button type="button" class="code-copy" data-copy-code data-copy-full-id="${copyId}" aria-label="Copy file content">Copy</button>${previewBtn}</span></div><pre class="message-code hljs file-card-code" tabindex="0" role="region" aria-label="Contents of ${messageEscape(file.path)}"><code>${highlighted}</code></pre></div>`;
 }
 
 function formatMessageBody(text, markdown = false) {
@@ -342,7 +352,7 @@ function formatMessageBody(text, markdown = false) {
     const highlighted = language ? highlightCode(content, language) : (typeof hljs !== 'undefined' ? hljs.highlightAuto(content).value : messageEscape(content));
     const lineCount = content ? content.replace(/\n$/, '').split('\n').length : 0;
     const isCollapsible = lineCount >= 2;
-    const startCollapsed = lineCount > 20;
+    const startCollapsed = lineCount > 120;
     const lineLabel = lineCount > 1 ? `<span class="code-line-count">${lineCount} lines</span>` : '';
     const baseLang = language.split(/[:\s]/)[0].toLowerCase();
     const isMermaid = baseLang === 'mermaid';

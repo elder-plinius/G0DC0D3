@@ -950,7 +950,7 @@ async function applyPermissionPreset(preset, explicitTask = undefined) {
 }
 
 async function cyclePermissionMode() {
-  const order = ['permissive', 'auto', 'acceptEdits', 'safe', 'default'];
+  const order = ['safe', 'acceptEdits', 'default'];
   const task = selectedData?.task || null;
   const baseGlobal = state.permissions || globalPermissionsState;
   const activeRules = task && Array.isArray(task.permissionRules)
@@ -1100,11 +1100,20 @@ async function updatePrivacySetting(key, value) {
     }
     renderPrivacySettings(data);
     updateSettingsNavBadges();
+    if (typeof renderComposer === 'function') renderComposer();
+    if (typeof loadOverseer === 'function') void loadOverseer();
     if (selectedData?.task) renderTaskMetaStrip(selectedData.task);
+    const keyLabels = {
+      zdrRouting: 'ZDR request routing',
+      strictZdr: 'Strict ZDR enforcement',
+      localOnly: 'Local-Only airgap',
+      redactOutboundSecrets: 'Outbound secret scrubbing',
+      ephemeralSession: 'Ephemeral engagement (Burn Bag)',
+    };
     const label = payload.applyProfile
       ? `Security posture set to ${payload.applyProfile === 'lockdown' ? 'Airgap Lockdown' : payload.applyProfile === 'hardened' ? 'Hardened (Red Team / Bounty)' : 'Standard'}.`
       : typeof key === 'string'
-        ? `Privacy updated: ${key} ${value ? 'ON' : 'OFF'}`
+        ? `${keyLabels[key] || key}: ${value ? 'ON' : 'OFF'}`
         : 'Security scope saved.';
     settingsFeedback(label);
     toast(label);
@@ -1667,7 +1676,16 @@ $('#skill-add-form').addEventListener('submit', async event => {
     if (submitBtn) submitBtn.disabled = false;
   }
 });
-$('#learning-reset').addEventListener('click', async () => { try { await api('/api/learning', { method: 'DELETE', body: '{}' }); await loadLearning(); settingsFeedback('Local learning reset.'); } catch (error) { settingsFeedback(error.message, true); } });
+$('#learning-reset').addEventListener('click', async () => {
+  const ok = await confirmModal({
+    title: 'Reset local learning & routing Elo?',
+    message: 'This clears learned model win rates, latency profiles, and domain routing stats on this device.',
+    confirmLabel: 'Reset learning',
+    danger: true,
+  });
+  if (!ok) return;
+  try { await api('/api/learning', { method: 'DELETE', body: '{}' }); await loadLearning(); settingsFeedback('Local learning reset.'); } catch (error) { settingsFeedback(error.message, true); }
+});
 $('#privacy-audit-clear').addEventListener('click', async () => { try { const data = await api('/api/privacy/audit', { method: 'DELETE', body: '{}' }); renderPrivacySettings(data); settingsFeedback('Outbound audit log cleared.'); } catch (error) { settingsFeedback(error.message, true); } });
 $('#privacy-scope-save')?.addEventListener('click', () => {
   const scopeAllow = ($('#privacy-scope-allow')?.value || '').split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
@@ -1675,6 +1693,13 @@ $('#privacy-scope-save')?.addEventListener('click', () => {
   updatePrivacySetting({ scopeAllow, scopeDeny });
 });
 $('#privacy-burn-btn')?.addEventListener('click', async () => {
+  const ok = await confirmModal({
+    title: 'Burn session data?',
+    message: 'Clears outbound audit logs, local routing learning, learned refusal patterns, and closes all ephemeral browser profiles. Your saved chats remain intact.',
+    confirmLabel: 'Burn session data',
+    danger: true,
+  });
+  if (!ok) return;
   const btn = $('#privacy-burn-btn');
   if (btn) btn.disabled = true;
   settingsFeedback('Burning session telemetry, learning, and ephemeral browser profiles…');
@@ -1696,7 +1721,16 @@ $('#privacy-burn-btn')?.addEventListener('click', async () => {
     if (btn) btn.disabled = false;
   }
 });
-$('#drafts-clear').addEventListener('click', () => { composerDrafts.clear(); composerDraftTimes.clear(); saveComposerDraft('welcome', ''); $('#composer-input').value = ''; resizeComposer(); renderComposer(); settingsFeedback(draftStorageAvailable ? 'Saved drafts cleared.' : 'Could not clear stored drafts.', !draftStorageAvailable); });
+$('#drafts-clear').addEventListener('click', async () => {
+  const ok = await confirmModal({
+    title: 'Clear all saved drafts?',
+    message: 'This clears unsent composer text across all conversations and your current input box.',
+    confirmLabel: 'Clear drafts',
+    danger: true,
+  });
+  if (!ok) return;
+  composerDrafts.clear(); composerDraftTimes.clear(); saveComposerDraft('welcome', ''); $('#composer-input').value = ''; resizeComposer(); renderComposer(); settingsFeedback(draftStorageAvailable ? 'Saved drafts cleared.' : 'Could not clear stored drafts.', !draftStorageAvailable);
+});
 $('#benchmark-open')?.addEventListener('click', () => { $('#settings-dialog')?.close(); openBenchmark(); });
 $('#welcome-create')?.addEventListener('click', () => { $('#settings-dialog')?.close(); openCreate(); });
 $('#qol-reset-layout')?.addEventListener('click', () => {
@@ -2235,7 +2269,15 @@ $('#lab-injections-form')?.addEventListener('submit', async event => {
 $('#lab-reset-btn')?.addEventListener('click', () => resetTransparencyAction({ scope: 'injections' }, 'Cleared and disabled Prefills & Message Shaping.'));
 $('#trans-reset-prompts')?.addEventListener('click', () => resetTransparencyAction({ scope: 'prompts' }, 'All system prompts reset to defaults.'));
 $('#trans-reset-tools')?.addEventListener('click', () => resetTransparencyAction({ scope: 'tools' }, 'All tool schemas reset to defaults.'));
-$('#transparency-reset-all')?.addEventListener('click', () => resetTransparencyAction({ scope: 'all' }, 'Reset all prompts, tool schemas, and message shaping to defaults.'));
+$('#transparency-reset-all')?.addEventListener('click', async () => {
+  const ok = await confirmModal({
+    title: 'Reset all System Lab overrides?',
+    message: 'Restores all system prompts, 27 tool schemas, and Prefills & Message Shaping back to factory defaults.',
+    confirmLabel: 'Reset all defaults',
+    danger: true,
+  });
+  if (ok) resetTransparencyAction({ scope: 'all' }, 'Reset all prompts, tool schemas, and message shaping to defaults.');
+});
 $('#trans-prompt-search')?.addEventListener('input', renderTransparencyPrompts);
 $('#trans-tool-search')?.addEventListener('input', renderTransparencyTools);
 $('#wire-copy-prompt')?.addEventListener('click', async () => {
@@ -2282,6 +2324,10 @@ function syncScheduleFormVisibility() {
   $('#sched-expr-wrap')?.classList.toggle('hidden', kind !== 'cron');
   $('#sched-runat-wrap')?.classList.toggle('hidden', kind !== 'once');
   $('#sched-presets')?.classList.toggle('hidden', kind !== 'cron');
+  if (kind === 'once' && $('#sched-runat') && !$('#sched-runat').value) {
+    const plusOneHr = new Date(Date.now() + 3600_000);
+    $('#sched-runat').value = new Date(plusOneHr.getTime() - plusOneHr.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+  }
 }
 
 function resetScheduleForm() {
@@ -2585,6 +2631,13 @@ $('#sched-list')?.addEventListener('click', async event => {
   if (delBtn) {
     const id = delBtn.dataset.schedDelete;
     const job = (schedulesData.jobs || []).find(j => j.id === id);
+    const ok = await confirmModal({
+      title: `Delete schedule "${job?.name || id}"?`,
+      message: 'This permanently deletes the schedule and its run history. Already-created conversations remain in your sidebar.',
+      confirmLabel: 'Delete schedule',
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await api(`/api/schedules/${encodeURIComponent(id)}`, { method: 'DELETE', body: '{}' });
       schedulesDetailOpen.delete(id);

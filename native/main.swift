@@ -54,11 +54,20 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
         let appMenu = NSMenu(title: "G0DM0D3")
         appMenu.addItem(withTitle: "About G0DM0D3", action: #selector(showAbout), keyEquivalent: "")
         appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Settings…", action: #selector(openSettingsMenu), keyEquivalent: ",")
+        appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Hide G0DM0D3", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         appMenu.addItem(withTitle: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Quit G0DM0D3", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appMenuItem.submenu = appMenu
+        let fileItem = NSMenuItem()
+        let fileMenu = NSMenu(title: "File")
+        fileMenu.addItem(withTitle: "New Chat", action: #selector(newChatMenu), keyEquivalent: "n")
+        fileMenu.addItem(.separator())
+        fileMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        fileItem.submenu = fileMenu
+        menu.addItem(fileItem)
         let editItem = NSMenuItem()
         let edit = NSMenu(title: "Edit")
         edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
@@ -71,13 +80,22 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
         edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editItem.submenu = edit
         menu.addItem(editItem)
+        let viewItem = NSMenuItem()
+        let viewMenu = NSMenu(title: "View")
+        viewMenu.addItem(withTitle: "Actual Size", action: #selector(zoomReset), keyEquivalent: "0")
+        viewMenu.addItem(withTitle: "Zoom In", action: #selector(zoomIn), keyEquivalent: "+")
+        viewMenu.addItem(withTitle: "Zoom Out", action: #selector(zoomOut), keyEquivalent: "-")
+        viewMenu.addItem(.separator())
+        let fsItem = viewMenu.addItem(withTitle: "Enter Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
+        fsItem.keyEquivalentModifierMask = [.command, .control]
+        viewItem.submenu = viewMenu
+        menu.addItem(viewItem)
         let windowItem = NSMenuItem()
         let windowMenu = NSMenu(title: "Window")
         windowMenu.addItem(withTitle: "Show Workspace", action: #selector(showWindow), keyEquivalent: "1")
         windowMenu.addItem(withTitle: "Reload Workspace", action: #selector(reload), keyEquivalent: "r")
         windowMenu.addItem(withTitle: "Open in Browser", action: #selector(openBrowser), keyEquivalent: "")
         windowMenu.addItem(.separator())
-        windowMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.miniaturize(_:)), keyEquivalent: "m")
         windowItem.submenu = windowMenu
         menu.addItem(windowItem)
@@ -91,8 +109,8 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
                           backing: .buffered, defer: false)
         window.title = "G0DM0D3"
         window.minSize = NSSize(width: 760, height: 600)
-        window.appearance = NSAppearance(named: .darkAqua)
-        window.backgroundColor = NSColor(calibratedRed: 0.098, green: 0.098, blue: 0.114, alpha: 1)
+        window.appearance = nil
+        window.backgroundColor = NSColor.windowBackgroundColor
         window.isReleasedWhenClosed = false
         window.center()
 
@@ -102,6 +120,7 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
         configuration.userContentController.add(self, name: "dictation")
         configuration.userContentController.add(self, name: "chooseRepository")
         configuration.userContentController.add(self, name: "quickLook")
+        configuration.userContentController.add(self, name: "setAppearance")
         webView = WKWebView(frame: .zero, configuration: configuration)
         if #available(macOS 13.3, *) {
             webView.isInspectable = (environment["G0D_DEVTOOLS"] == "1")
@@ -173,10 +192,31 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
         window.makeKeyAndOrderFront(nil)
     }
 
+    private func parseHexColor(_ hex: String) -> NSColor? {
+        let trimmed = hex.trimmingCharacters(in: CharacterSet(charactersIn: "# "))
+        guard trimmed.count == 6, let val = UInt32(trimmed, radix: 16) else { return nil }
+        let r = CGFloat((val >> 16) & 0xFF) / 255.0
+        let g = CGFloat((val >> 8) & 0xFF) / 255.0
+        let b = CGFloat(val & 0xFF) / 255.0
+        return NSColor(srgbRed: r, green: g, blue: b, alpha: 1)
+    }
+
+    private func applyWindowAppearance(base: String, bgHex: String?) {
+        let isLight = base == "light"
+        window.appearance = NSAppearance(named: isLight ? .aqua : .darkAqua)
+        let fallback = isLight ? NSColor(srgbRed: 0.973, green: 0.969, blue: 0.957, alpha: 1) : NSColor(srgbRed: 0.098, green: 0.098, blue: 0.114, alpha: 1)
+        let color = (bgHex.flatMap { parseHexColor($0) }) ?? fallback
+        window.backgroundColor = color
+        window.contentView?.layer?.backgroundColor = color.cgColor
+        webView.underPageBackgroundColor = color
+    }
+
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
         let origin = message.frameInfo.securityOrigin
         guard message.frameInfo.isMainFrame, origin.protocol == "http", origin.host == "127.0.0.1", origin.port == port else { return }
-        if message.name == "chooseRepository" {
+        if message.name == "setAppearance", let body = message.body as? [String: String], let base = body["base"] {
+            applyWindowAppearance(base: base, bgHex: body["bg"])
+        } else if message.name == "chooseRepository" {
             let panel = NSOpenPanel()
             panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.prompt = "Choose repository"
             panel.beginSheetModal(for: window) { result in
@@ -264,8 +304,23 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
                 self.connect()
             case .legacy, .incompatible: self.showError("Port \(self.port) is occupied", "The service on this port needs a different runtime. If the previous desktop app is open, quit it and retry, or choose another G0D_PORT.")
             case .absent:
-                do { try self.launchRuntime(); self.waitForRuntime(epoch: epoch, remaining: 450) }
-                catch { self.showError("The runtime could not start", error.localizedDescription) }
+                self.loadingTitle.stringValue = "Starting local Node.js runtime"
+                self.loadingDetail.stringValue = "Locating Node.js 22.13+ and initializing local SQLite store…"
+                DispatchQueue.global(qos: .userInitiated).async {
+                    do {
+                        let nodeURL = try self.nodeExecutable()
+                        DispatchQueue.main.async {
+                            guard self.connectionEpoch == epoch, !self.quitting else { return }
+                            do { try self.launchRuntime(resolvedNode: nodeURL); self.waitForRuntime(epoch: epoch, remaining: 450) }
+                            catch { self.showError("The runtime could not start", error.localizedDescription) }
+                        }
+                    } catch {
+                        DispatchQueue.main.async {
+                            guard self.connectionEpoch == epoch, !self.quitting else { return }
+                            self.showError("The runtime could not start", error.localizedDescription)
+                        }
+                    }
+                }
             }
         }
     }
@@ -291,7 +346,7 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
         throw NSError(domain: "G0DC0D3", code: 1, userInfo: [NSLocalizedDescriptionKey: "Node.js 22.13 or newer with node:sqlite is required. Install a supported Node version, or launch with G0D_NODE_BINARY pointing to its executable. No model credentials are bundled with this app."])
     }
 
-    private func launchRuntime() throws {
+    private func launchRuntime(resolvedNode: URL? = nil) throws {
         if let process = runtimeProcess, process.isRunning { return }
         let bundled = Bundle.main.resourceURL?.appendingPathComponent("runtime")
         let adjacent = Bundle.main.bundleURL.deletingLastPathComponent().deletingLastPathComponent()
@@ -339,7 +394,7 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
         }
         // G0D_ENABLE_CODEX is opt-in. Existing authentication belongs to the user.
         let process = Process()
-        process.executableURL = try nodeExecutable()
+        process.executableURL = try (resolvedNode ?? nodeExecutable())
         guard let nativeExecutable = Bundle.main.executableURL else { throw CocoaError(.fileNoSuchFile) }
         process.arguments = [entry.path, "--native-keychain", nativeExecutable.path, "--exit-on-stdin-eof"]
         process.currentDirectoryURL = runtime
@@ -545,6 +600,7 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
         alert.accessoryView = field
         alert.addButton(withTitle: "OK")
         alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
         alert.beginSheetModal(for: window) { response in completionHandler(response == .alertFirstButtonReturn ? field.stringValue : nil) }
     }
     func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
@@ -611,13 +667,16 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
             if scheme == "http" && url.host == "127.0.0.1" && url.port == port && url.path.hasPrefix("/preview/") {
                 decisionHandler(.allow); return
             }
+            if navigationAction.navigationType == .linkActivated && ["http", "https", "mailto"].contains(scheme) {
+                NSWorkspace.shared.open(url)
+            }
             decisionHandler(.cancel); return
         }
         if scheme == "blob" && navigationAction.shouldPerformDownload { decisionHandler(.download); return }
         let local = scheme == "http" && url.host == "127.0.0.1" && url.port == port
         if local { decisionHandler(navigationAction.shouldPerformDownload ? .download : .allow) }
         else {
-            if navigationAction.navigationType == .linkActivated && ["http", "https"].contains(scheme) { NSWorkspace.shared.open(url) }
+            if navigationAction.navigationType == .linkActivated && ["http", "https", "mailto"].contains(scheme) { NSWorkspace.shared.open(url) }
             decisionHandler(.cancel)
         }
     }
@@ -654,12 +713,21 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
 
     @objc private func retry() { webContentRestarts = 0; connect() }
     @objc private func showWindow() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
-    @objc private func reload() { webContentRestarts = 0; connect() }
+    @objc private func openSettingsMenu() { showWindow(); webView.evaluateJavaScript("typeof openSettings==='function'&&openSettings('general')", completionHandler: nil) }
+    @objc private func newChatMenu() { showWindow(); webView.evaluateJavaScript("typeof newConversation==='function'&&newConversation()", completionHandler: nil) }
+    @objc private func zoomIn() { webView.pageZoom = min(2.0, webView.pageZoom + 0.1) }
+    @objc private func zoomOut() { webView.pageZoom = max(0.6, webView.pageZoom - 0.1) }
+    @objc private func zoomReset() { webView.pageZoom = 1.0 }
+    @objc private func reload() {
+        if !webView.isHidden { webView.reload() }
+        else { webContentRestarts = 0; connect() }
+    }
     @objc private func openBrowser() {
         do { NSWorkspace.shared.open(try launchURL()) }
         catch { showError("The local session could not be opened", error.localizedDescription) }
     }
     @objc private func showAbout() {
+        showWindow()
         let alert = NSAlert()
         alert.messageText = "G0DM0D3 0.2.0"
         alert.informativeText = "Local developer alpha\n\nNative AppKit/WKWebView client with a portable Node.js runtime. Ad-hoc signed, not notarized. Node 22.13+ is required. Project commands use an experimental macOS filesystem/network boundary; detached process cleanup is best effort.\n\nScripted fault checks and live model results are labeled separately."
