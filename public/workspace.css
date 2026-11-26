@@ -6453,3 +6453,190 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
 .roster-card-foot .button:first-child {
   flex: 1 1 auto;
 }
+
+/* ── Pantheon Power Upgrades: Replay 4x, Formations, Diff Race, MVP & XP ── */
+.pantheon-replay-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-soft);
+  flex-shrink: 0;
+}
+.pantheon-replay-bar.hidden { display: none; }
+.pantheon-replay-btn {
+  padding: 3px 10px;
+  font: 600 .73rem/1.3 var(--mono);
+  white-space: nowrap;
+}
+.pantheon-replay-btn.is-active {
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, .45);
+}
+.pantheon-replay-scrub {
+  flex: 1 1 auto;
+  accent-color: #fbbf24;
+  cursor: pointer;
+}
+.pantheon-replay-time {
+  font: 600 .7rem/1 var(--mono);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.pantheon-card-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.pantheon-mvp-badge {
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid rgba(251, 191, 36, .55);
+  background: rgba(251, 191, 36, .14);
+  color: #fbbf24;
+  font: 700 .66rem/1.3 var(--mono);
+  letter-spacing: .03em;
+}
+.pantheon-standby-formations {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.pantheon-standby-formations.hidden { display: none; }
+.pantheon-sf-label {
+  font: 600 .68rem/1 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text-muted);
+}
+.roster-formations {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.pantheon-formation-wrap {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  overflow: hidden;
+}
+.pantheon-formation-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: .74rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+.pantheon-formation-chip:hover {
+  background: color-mix(in srgb, var(--violet, #a78bfa) 14%, var(--panel));
+}
+.pantheon-formation-chip small {
+  font: 600 .67rem/1 var(--mono);
+  color: var(--text-muted);
+}
+.pantheon-formation-del {
+  padding: 4px 7px;
+  border: 0;
+  border-left: 1px solid var(--line);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: .78rem;
+}
+.pantheon-formation-del:hover {
+  color: var(--danger, #f87171);
+}
+.rf-form {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--violet, #a78bfa) 45%, var(--line));
+  background: var(--panel);
+}
+.rf-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) minmax(180px, 1.4fr);
+  gap: 8px;
+}
+.rf-row input {
+  padding: 6px 9px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--bg, #121315);
+  color: var(--text);
+  font-size: .77rem;
+}
+.rf-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.rf-hint {
+  margin-right: auto;
+  font-size: .72rem;
+  color: var(--text-muted);
+}
+.roster-badges-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+.roster-xp-pill {
+  font: 600 .64rem/1.2 var(--mono);
+  color: var(--ok, #34d399);
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--ok, #34d399) 35%, var(--line));
+  background: color-mix(in srgb, var(--ok, #34d399) 10%, var(--panel));
+}
+.pantheon-diff-actions {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  backdrop-filter: blur(10px);
+}
+.pantheon-diff-actions.hidden { display: none; }
+.pantheon-legend.hidden { display: none; }
+.pantheon-stat { white-space: nowrap; }
+.pda-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: .76rem;
+  color: var(--text-muted);
+}
+.pda-head strong { color: var(--text); }
+.pda-btns {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.pda-btn {
+  padding: 5px 11px;
+  font-size: .74rem;
+}

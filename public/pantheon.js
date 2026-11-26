@@ -45,11 +45,26 @@
   let builderDraft = null;
   let builderStats = null;
   let builderBestEngine = null;
+  let formationFormOpen = false;
+  let replayPlaying = false;
+  let replayProgress = 100; // 0..100
   const SIGILS = ['✦', '⚡', '◈', '⛨', '⌘', 'λ', 'Ω', 'Δ'];
 
   const esc = (s) => String(s ?? '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+  const fmtTokens = (n) => {
+    const v = Number(n || 0);
+    if (!v) return '';
+    return v >= 1000 ? `~${(v / 1000).toFixed(1)}k tok` : `~${v} tok`;
+  };
+  const fmtCost = (usd) => {
+    const v = Number(usd || 0);
+    if (!v) return 'Free';
+    if (v < 0.001) return '<$0.001';
+    return `$${v.toFixed(3)}`;
+  };
 
   const fmtMs = (ms) => {
     const n = Number(ms || 0);
@@ -127,9 +142,15 @@
         <div class="pantheon-stat"><span class="pantheon-stat-label">Done</span><strong id="pantheon-stat-done">0</strong></div>
         <div class="pantheon-stat"><span class="pantheon-stat-label">Calls</span><strong id="pantheon-stat-calls">0</strong></div>
         <div class="pantheon-stat"><span class="pantheon-stat-label">Overlaps</span><strong id="pantheon-stat-conflicts">0</strong></div>
+        <div class="pantheon-stat hidden" id="pantheon-stat-cost-wrap"><span class="pantheon-stat-label">Cost</span><strong id="pantheon-stat-cost">$0.000</strong></div>
         <div class="pantheon-telemetry-actions">
           <button type="button" class="button button-quiet pantheon-demo-toggle" id="pantheon-demo-btn" title="Preview an interactive multi-agent constellation">Preview Swarm</button>
         </div>
+      </div>
+      <div class="pantheon-replay-bar hidden" id="pantheon-replay-bar" aria-label="Pantheon Time-Travel Replay">
+        <button type="button" class="button button-quiet pantheon-replay-btn" id="pantheon-replay-toggle">▶ Replay 4×</button>
+        <input type="range" class="pantheon-replay-scrub" id="pantheon-replay-scrub" min="0" max="100" value="100" aria-label="Scrub replay timeline">
+        <span class="pantheon-replay-time" id="pantheon-replay-time">LIVE</span>
       </div>
       <div class="pantheon-approval-strip hidden" id="pantheon-approval-strip" role="alert">
         <div class="pantheon-approval-copy">
@@ -146,14 +167,15 @@
         <section class="pantheon-view pantheon-stage-view" id="pantheon-view-stage" role="tabpanel">
           <canvas id="pantheon-canvas" class="pantheon-canvas" aria-label="Interactive multi-agent constellation stage"></canvas>
           <div class="pantheon-standby-bar hidden" id="pantheon-standby-bar">
-            <p class="pantheon-standby-copy">Launch a parallel specialist squad, run a verified Coding Crew, or race two frontier models head-to-head.</p>
+            <p class="pantheon-standby-copy">Launch a parallel specialist squad, forge custom benchmarked agents, or race frontier models head-to-head.</p>
             <div class="pantheon-presets">
               <button type="button" class="button button-primary" data-pantheon-preset="research">✦ Parallel Research Squad</button>
               <button type="button" class="button button-secondary" data-pantheon-preset="roster">⛨ Agent Builder &amp; Roster</button>
-              <button type="button" class="button button-secondary" data-pantheon-preset="crew">⚙ Code &amp; Review Crew</button>
               <button type="button" class="button button-secondary" data-pantheon-preset="arena">⚡ Head-to-Head Arena</button>
             </div>
+            <div class="pantheon-standby-formations hidden" id="pantheon-standby-formations"></div>
           </div>
+          <div class="pantheon-diff-actions hidden" id="pantheon-diff-actions"></div>
           <div class="pantheon-legend" id="pantheon-legend">
             <span><i class="p-dot p-dot-violet"></i>Streaming</span>
             <span><i class="p-dot p-dot-amber"></i>Tool</span>
@@ -195,14 +217,23 @@
       if (e.target.closest('#pantheon-expand')) { toggleExpand(); return; }
       if (e.target.closest('#pi-close')) { selectWorker(null); return; }
       if (e.target.closest('#pantheon-demo-btn')) { toggleDemo(); return; }
+      if (e.target.closest('#pantheon-replay-toggle')) { toggleReplay(); return; }
       const preset = e.target.closest('[data-pantheon-preset]');
       if (preset) { triggerPreset(preset.dataset.pantheonPreset); return; }
+      const formLaunch = e.target.closest('[data-formation-launch]');
+      if (formLaunch) { deployFormation(formLaunch.dataset.formationLaunch); return; }
+      const formDel = e.target.closest('[data-formation-delete]');
+      if (formDel) { e.stopPropagation(); deleteFormation(formDel.dataset.formationDelete); return; }
+      const adoptBtn = e.target.closest('[data-diff-adopt]');
+      if (adoptBtn) { adoptDiffCandidate(adoptBtn.dataset.diffWt, adoptBtn.dataset.diffAdopt); return; }
       const cardBtn = e.target.closest('[data-pantheon-select]');
       if (cardBtn) { selectWorker(cardBtn.dataset.pantheonSelect); return; }
       const approveBtn = e.target.closest('[data-pantheon-approve]');
       if (approveBtn) { resolveApprovalFromPantheon(approveBtn.dataset.pantheonApprove); return; }
       if (e.target.closest('#roster-forge-new')) { openBuilder(null); return; }
       if (e.target.closest('#roster-deploy-squad')) { deploySelectedSquad(); return; }
+      if (e.target.closest('#roster-save-formation-toggle')) { formationFormOpen = !formationFormOpen; renderRosterView(); return; }
+      if (e.target.closest('#rf-cancel')) { formationFormOpen = false; renderRosterView(); return; }
       const harnessChip = e.target.closest('[data-roster-harness]');
       if (harnessChip) { openBuilderForHarness(harnessChip.dataset.rosterHarness); return; }
       const archBtn = e.target.closest('[data-pb-archetype]');
@@ -251,10 +282,23 @@
       if (e.target.id === 'pb-effort') { builderDraft.effort = e.target.value; return; }
     });
 
+    dock.addEventListener('input', (e) => {
+      if (e.target.id === 'pantheon-replay-scrub') {
+        replayPlaying = false;
+        replayProgress = Math.max(0, Math.min(100, Number(e.target.value) || 0));
+        updateReplayBar();
+        if (activeLens === 'stage') drawStage();
+        if (activeLens === 'timeline') drawTimeline();
+      }
+    });
+
     dock.addEventListener('submit', (e) => {
       if (e.target.id === 'pb-form') {
         e.preventDefault();
         saveBuilderAgent();
+      } else if (e.target.id === 'rf-form') {
+        e.preventDefault();
+        saveFormationFromForm();
       }
     });
 
@@ -432,7 +476,8 @@
           modelLabel: 'Gemini 4 Neon', status: w1Status,
           tool: w1Status === 'tool' ? 'repo.search' : '', target: 'src/runtime.mjs',
           files: ['src/runtime.mjs', 'src/providers.mjs'], tools: ['repo.glob', 'repo.search', 'repo.read'],
-          calls: 2, startedAt: new Date(base).toISOString(), endedAt: w1Status === 'completed' ? new Date(base + 6200).toISOString() : null,
+          calls: 2, approxTokens: 1420, estimatedCostUsd: 0.0021, isMvp: cycle >= 4,
+          startedAt: new Date(base).toISOString(), endedAt: w1Status === 'completed' ? new Date(base + 6200).toISOString() : null,
           durationMs: w1Status === 'completed' ? 6200 : 3200 + cycle * 900,
           streamTail: 'Mapped tool dispatch loop in src/runtime.mjs:1169 and Gemini wire serializer in src/providers.mjs:442.',
           summary: 'Mapped tool dispatch loop in src/runtime.mjs:1169 and Gemini wire serializer in src/providers.mjs:442. Found 2 parallelizable batch paths.',
@@ -442,7 +487,8 @@
           modelLabel: 'Claude Sonnet 5.5', status: w2Status,
           tool: w2Status === 'tool' ? 'git.diff' : '', target: 'src/runtime.mjs',
           files: ['src/runtime.mjs', 'src/server.mjs'], tools: ['git.diff', 'repo.read'],
-          calls: 2, startedAt: new Date(base + 400).toISOString(), endedAt: w2Status === 'completed' ? new Date(base + 9800).toISOString() : null,
+          calls: 2, approxTokens: 1680, estimatedCostUsd: 0.0054, isMvp: false,
+          startedAt: new Date(base + 400).toISOString(), endedAt: w2Status === 'completed' ? new Date(base + 9800).toISOString() : null,
           durationMs: w2Status === 'completed' ? 9400 : 2900 + cycle * 1100,
           streamTail: w2Status === 'recovering' ? 'GODMODƎ surge: switching fallback route after transient 429…' : 'Audited SSE cleanup on disconnect and verified zero inline style= CSP compliance.',
           summary: 'Audited SSE cleanup on disconnect and verified zero inline style= CSP compliance across public/pantheon.js and public/settings.js.',
@@ -452,7 +498,8 @@
           modelLabel: 'Hermes 4 405B', status: w3Status,
           tool: w3Status === 'tool' ? 'repo.read' : '', target: 'test/pantheon.test.mjs',
           files: ['test/pantheon.test.mjs'], tools: ['repo.read'],
-          calls: 1, startedAt: new Date(base + 900).toISOString(), endedAt: w3Status === 'completed' ? new Date(base + 11200).toISOString() : null,
+          calls: 1, approxTokens: 980, estimatedCostUsd: 0.0018, isMvp: false,
+          startedAt: new Date(base + 900).toISOString(), endedAt: w3Status === 'completed' ? new Date(base + 11200).toISOString() : null,
           durationMs: w3Status === 'completed' ? 10300 : 2200 + cycle * 1200,
           streamTail: 'Verifying parallel agent.spawn fan-out assertions and headless Chromium stage rendering…',
           summary: 'All parallel fan-out assertions, SSE worker telemetry streams, and Pantheon canvas hit-tests verified green.',
@@ -468,6 +515,8 @@
         completedWorkers: [w1Status, w2Status, w3Status].filter(s => s === 'completed').length,
         failedWorkers: 0,
         totalCalls: 5 + cycle,
+        totalTokens: 4080,
+        totalCostUsd: 0.0093,
       },
     };
   }
@@ -542,6 +591,7 @@
     if (activeLens === 'cards') renderCards();
     if (activeLens === 'timeline') drawTimeline();
     if (activeLens === 'roster') loadRoster();
+    updateReplayBar();
   }
 
   function selectWorker(workerId) {
@@ -551,6 +601,108 @@
     if (activeLens === 'cards') renderCards();
   }
 
+  function canReplay(src = data) {
+    if (!src) return false;
+    if (src.mode === 'arena' && src.arena?.status === 'completed') return true;
+    if ((src.workers || []).length > 0 && (src.stats?.activeWorkers || 0) === 0) return true;
+    return false;
+  }
+
+  function toggleReplay() {
+    if (!canReplay()) return;
+    if (replayPlaying) {
+      replayPlaying = false;
+    } else {
+      if (replayProgress >= 99) replayProgress = 0;
+      replayPlaying = true;
+    }
+    updateReplayBar();
+    if (activeLens === 'stage') drawStage();
+    if (activeLens === 'timeline') drawTimeline();
+  }
+
+  function updateReplayBar() {
+    const bar = document.getElementById('pantheon-replay-bar');
+    if (!bar) return;
+    const show = canReplay() && (activeLens === 'stage' || activeLens === 'timeline');
+    bar.classList.toggle('hidden', !show);
+    if (!show) return;
+    const btn = document.getElementById('pantheon-replay-toggle');
+    if (btn) {
+      btn.textContent = replayPlaying ? '❚❚ Pause' : (replayProgress < 100 ? '▶ Resume 4×' : '▶ Replay 4×');
+      btn.classList.toggle('is-active', replayPlaying);
+    }
+    const scrub = document.getElementById('pantheon-replay-scrub');
+    if (scrub) scrub.value = String(Math.round(replayProgress));
+    const timeEl = document.getElementById('pantheon-replay-time');
+    if (timeEl) {
+      if (replayProgress >= 100 && !replayPlaying) {
+        timeEl.textContent = 'DONE · 4×';
+      } else {
+        const span = computeReplaySpanMs(data);
+        timeEl.textContent = `${fmtMs((replayProgress / 100) * span)} / ${fmtMs(span)} · 4×`;
+      }
+    }
+  }
+
+  function computeReplaySpanMs(src) {
+    if (!src) return 4000;
+    if (src.mode === 'arena' && src.arena?.contenders?.length) {
+      return Math.max(1500, ...src.arena.contenders.map(c => c.durationMs || 2000));
+    }
+    const ws = src.workers || [];
+    if (!ws.length) return 4000;
+    const starts = ws.map(w => w.startedAt ? Date.parse(w.startedAt) : 0);
+    const ends = ws.map((w, i) => w.endedAt ? Date.parse(w.endedAt) : starts[i] + Math.max(800, w.durationMs || 2000));
+    return Math.max(1200, Math.max(...ends) - Math.min(...starts));
+  }
+
+  function getEffectiveData() {
+    if (!data || !canReplay(data) || (replayProgress >= 100 && !replayPlaying)) return data;
+    const frac = Math.max(0, Math.min(1, replayProgress / 100));
+    if (data.mode === 'arena' && data.arena) {
+      const contenders = (data.arena.contenders || []).map((c) => {
+        const maxD = Math.max(1000, ...(data.arena.contenders || []).map(x => x.durationMs || 2000));
+        const ratio = Math.min(1, (frac * maxD * 1.12) / Math.max(600, c.durationMs || 2000));
+        return {
+          ...c,
+          _replayProg: ratio,
+          status: ratio >= 1 ? c.status : 'streaming',
+          isWinner: frac >= 0.92 ? c.isWinner : false,
+        };
+      });
+      return {
+        ...data,
+        arena: {
+          ...data.arena,
+          contenders,
+          winnerId: frac >= 0.92 ? data.arena.winnerId : null,
+          judge: data.arena.judge ? { ...data.arena.judge, status: frac >= 0.92 ? 'completed' : frac >= 0.72 ? 'grading' : 'waiting' } : null,
+        },
+      };
+    }
+    const ws = data.workers || [];
+    if (!ws.length) return data;
+    const times = ws.map(wk => {
+      const s = wk.startedAt ? Date.parse(wk.startedAt) : 0;
+      const e = wk.endedAt ? Date.parse(wk.endedAt) : s + Math.max(800, wk.durationMs || 2000);
+      return { s, e };
+    });
+    const minT = Math.min(...times.map(t => t.s));
+    const maxT = Math.max(...times.map(t => t.e), minT + 1000);
+    const cursorT = minT + frac * (maxT - minT);
+    const projected = ws.map((wk, idx) => {
+      const { s, e } = times[idx];
+      if (cursorT < s) return { ...wk, status: 'queued', tool: '', isMvp: false, _replayFrac: 0 };
+      if (cursorT >= e || frac >= 0.995) return { ...wk, _replayFrac: 1 };
+      const localP = (cursorT - s) / Math.max(1, e - s);
+      const status = localP < 0.2 ? 'thinking' : (localP < 0.65 && wk.tools?.length) ? 'tool' : 'streaming';
+      const tool = status === 'tool' ? (wk.tools[Math.min(wk.tools.length - 1, Math.floor(localP * wk.tools.length))] || wk.tool || 'tool') : '';
+      return { ...wk, status, tool, isMvp: false, _replayFrac: localP };
+    });
+    return { ...data, workers: projected, _replayCursorFrac: frac };
+  }
+
   function startLoop() {
     if (rafId !== null) return;
     lastFrameMs = performance.now();
@@ -558,7 +710,15 @@
       if (!isOpenState) { rafId = null; return; }
       const dt = Math.min(0.05, (now - lastFrameMs) / 1000);
       lastFrameMs = now;
-      if (!motionReduced()) {
+      if (replayPlaying) {
+        const spanSec = Math.max(1.2, computeReplaySpanMs(data) / 1000);
+        const speedPctPerSec = Math.max(18, Math.min(55, (400 / spanSec)));
+        replayProgress = Math.min(100, replayProgress + dt * speedPctPerSec);
+        if (replayProgress >= 100) replayPlaying = false;
+        updateReplayBar();
+        if (activeLens === 'stage') drawStage();
+        if (activeLens === 'timeline') drawTimeline();
+      } else if (!motionReduced()) {
         animPhase = (animPhase + dt * 0.72) % 1000;
         if (activeLens === 'stage') drawStage();
       }
@@ -631,10 +791,52 @@
     }
   }
 
+  function renderStandbyFormations() {
+    const wrap = document.getElementById('pantheon-standby-formations');
+    if (!wrap) return;
+    const formations = rosterData?.formations || [];
+    wrap.classList.toggle('hidden', !formations.length);
+    if (!formations.length) return;
+    wrap.innerHTML = `<span class="pantheon-sf-label">Formations</span>${formations.slice(0, 4).map(f => `<button type="button" class="pantheon-formation-chip" data-formation-launch="${esc(f.id)}" title="${esc(`${f.name}: ${f.agents.join(', ')}`)}">${esc(f.sigil || '✦')} ${esc(f.name)} <small>${esc(f.agents.length)}</small></button>`).join('')}`;
+  }
+
+  function renderDiffActionsBar() {
+    const bar = document.getElementById('pantheon-diff-actions');
+    if (!bar) return;
+    const race = data?.worktreeRace;
+    const show = Boolean(race?.candidates?.length) && activeLens === 'stage';
+    bar.classList.toggle('hidden', !show);
+    if (!show) return;
+    const applied = race.appliedCandidateId;
+    bar.innerHTML = `<div class="pda-head"><strong>Code Diff Race</strong><span>${esc(race.repository)} · ${esc(race.branch)}</span>${race.lastCheck ? `<span class="pantheon-status-pill tone-${race.lastCheck.ok ? 'sage' : 'coral'}">${race.lastCheck.ok ? 'Checks ✓' : 'Checks ✗'}</span>` : ''}</div><div class="pda-btns">${race.candidates.map(c => {
+      const isApplied = applied === c.id;
+      const canAdopt = c.status === 'ready' && !applied;
+      return `<button type="button" class="button ${isApplied ? 'button-primary' : 'button-secondary'} pda-btn" data-diff-wt="${esc(race.worktreeId)}" data-diff-adopt="${esc(c.id)}" ${canAdopt ? '' : 'disabled'}>${isApplied ? '✓ Adopted' : c.status === 'failed' ? '✗ Failed' : `✓ Adopt ${esc(c.slot)} (+${c.additions}/-${c.deletions})`}</button>`;
+    }).join('')}</div>`;
+  }
+
+  async function adoptDiffCandidate(worktreeId, candidateId) {
+    if (!worktreeId || !candidateId) return;
+    try {
+      const res = await fetch(`/api/worktrees/${encodeURIComponent(worktreeId)}/apply`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-g0d-request': '1' },
+        body: JSON.stringify({ candidateId }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Could not apply patch.');
+      if (typeof window.toast === 'function') window.toast('✓ Winner patch adopted cleanly into worktree!');
+      if (currentTaskId) await loadSnapshot(currentTaskId);
+      if (typeof window.refresh === 'function') window.refresh();
+    } catch (err) {
+      if (typeof window.toast === 'function') window.toast(err.message || 'Patch apply failed.');
+    }
+  }
+
   function renderAll() {
     if (!dockEl()?.dataset.pantheonInit) return;
     const mode = data?.mode || 'standby';
-    const modeLabels = { arena: 'Arena Race', crew: 'Coding Crew', swarm: 'Constellation', standby: 'Standby' };
+    const modeLabels = { arena: 'Arena Race', crew: 'Coding Crew', swarm: 'Constellation', diff_race: 'Diff Race', standby: 'Standby' };
     const pill = document.getElementById('pantheon-mode-pill');
     if (pill) {
       pill.textContent = demoMode ? `${modeLabels[mode] || 'Preview'} · Demo` : (modeLabels[mode] || 'Standby');
@@ -652,6 +854,23 @@
     setT('pantheon-stat-calls', data?.stats?.totalCalls ?? 0);
     setT('pantheon-stat-conflicts', data?.fileConflicts?.length ?? 0);
 
+    // Token / Cost telemetry pill
+    const costWrap = document.getElementById('pantheon-stat-cost-wrap');
+    if (costWrap) {
+      const toks = data?.stats?.totalTokens || 0;
+      costWrap.classList.toggle('hidden', toks <= 0);
+      if (toks > 0) {
+        setT('pantheon-stat-cost', fmtCost(data?.stats?.totalCostUsd));
+        costWrap.title = `${fmtCost(data?.stats?.totalCostUsd)} estimated · ${fmtTokens(toks)}`;
+      }
+    }
+    const legendEl = document.getElementById('pantheon-legend');
+    if (legendEl) legendEl.classList.toggle('hidden', mode === 'diff_race');
+
+    // Polish trim: only show Preview Swarm in Standby or while Demo is active
+    const demoBtn = document.getElementById('pantheon-demo-btn');
+    if (demoBtn) demoBtn.classList.toggle('hidden', mode !== 'standby' && !demoMode);
+
     // Pending approval strip
     const apprStrip = document.getElementById('pantheon-approval-strip');
     if (apprStrip) {
@@ -666,8 +885,14 @@
     const standbyBar = document.getElementById('pantheon-standby-bar');
     if (standbyBar) {
       standbyBar.classList.toggle('hidden', mode !== 'standby');
+      if (mode === 'standby') {
+        if (!rosterData) loadRoster(false).then(renderStandbyFormations);
+        else renderStandbyFormations();
+      }
     }
 
+    updateReplayBar();
+    renderDiffActionsBar();
     updateHeaderBadge();
     if (activeLens === 'stage') drawStage();
     if (activeLens === 'cards') renderCards();
@@ -700,6 +925,28 @@
         </article>` : ''}</div>`;
       return;
     }
+    if (data?.mode === 'diff_race' && data?.worktreeRace?.candidates?.length) {
+      const race = data.worktreeRace;
+      const applied = race.appliedCandidateId;
+      el.innerHTML = `<div class="pantheon-cards-grid">${race.candidates.map(c => {
+        const isApplied = applied === c.id;
+        const canAdopt = c.status === 'ready' && !applied;
+        return `<article class="pantheon-card ${isApplied ? 'is-winner' : ''}">
+          <header class="pantheon-card-head">
+            <span class="pantheon-role-chip">Patch ${esc(c.slot)}</span>
+            <span class="pantheon-status-pill tone-${isApplied ? 'gold' : c.status === 'ready' ? 'sage' : c.status === 'failed' ? 'coral' : 'violet'}">${esc(isApplied ? '✓ Adopted' : c.status === 'ready' ? 'Patch Ready' : c.status)}</span>
+          </header>
+          <strong class="pantheon-card-model">${esc(c.label)}</strong>
+          <p class="pantheon-card-meta">+${c.additions} / -${c.deletions} lines · ${fmtMs(c.elapsedMs)}</p>
+          ${c.error ? `<p class="pantheon-card-tail">${esc(c.error)}</p>` : ''}
+          ${c.files?.length ? `<div class="pantheon-file-chips">${c.files.slice(0, 4).map(f => `<span class="pantheon-file-chip">${esc(f.split('/').pop())}</span>`).join('')}</div>` : ''}
+          <footer class="pantheon-card-foot">
+            <button type="button" class="button ${isApplied ? 'button-primary' : 'button-secondary'}" data-diff-wt="${esc(race.worktreeId)}" data-diff-adopt="${esc(c.id)}" ${canAdopt ? '' : 'disabled'}>${isApplied ? '✓ Winner Adopted' : '✓ Adopt Winner Patch'}</button>
+          </footer>
+        </article>`;
+      }).join('')}</div>`;
+      return;
+    }
     const workers = data?.workers || [];
     if (!workers.length) {
       el.innerHTML = '<div class="pantheon-empty-cards"><p>No active or completed workers yet. Switch to <strong>✦ Stage</strong> to launch a Parallel Research Squad or click <strong>Preview Swarm</strong>.</p></div>';
@@ -711,13 +958,17 @@
       const selected = w.workerId === selectedWorkerId;
       const files = (w.files || []).slice(0, 4);
       const snippet = w.streamTail || w.summary || w.prompt || 'Awaiting output…';
-      return `<article class="pantheon-card ${selected ? 'is-selected' : ''} tone-${st.tone}">
+      const costBits = w.approxTokens ? ` · ${fmtTokens(w.approxTokens)} · ${fmtCost(w.estimatedCostUsd)}` : '';
+      return `<article class="pantheon-card ${selected ? 'is-selected' : ''} ${w.isMvp ? 'is-winner' : ''} tone-${st.tone}">
         <header class="pantheon-card-head">
-          <span class="pantheon-role-chip">${esc(w.role)}</span>
+          <div class="pantheon-card-badges">
+            <span class="pantheon-role-chip">${esc(w.role)}</span>
+            ${w.isMvp ? '<span class="pantheon-mvp-badge">★ MVP</span>' : ''}
+          </div>
           <span class="pantheon-status-pill tone-${st.tone}">${esc(w.tool && st.active ? w.tool : st.label)}</span>
         </header>
         <strong class="pantheon-card-model">${esc(shortModel(w.modelLabel || w.providerId || 'Auto'))}</strong>
-        <p class="pantheon-card-meta">${esc(`${w.calls || 0} call${w.calls === 1 ? '' : 's'} · ${fmtMs(w.durationMs)}`)}</p>
+        <p class="pantheon-card-meta">${esc(`${w.calls || 0} call${w.calls === 1 ? '' : 's'} · ${fmtMs(w.durationMs)}${costBits}`)}</p>
         <p class="pantheon-card-tail">${esc(snippet.slice(0, 180))}</p>
         ${files.length ? `<div class="pantheon-file-chips">${files.map(f => `<span class="pantheon-file-chip ${conflictFiles.has(f) ? 'is-conflict' : ''}">${esc(f.split('/').pop())}</span>`).join('')}</div>` : ''}
         <footer class="pantheon-card-foot">
@@ -742,7 +993,7 @@
     setT('pi-model', worker.modelLabel || worker.providerId || 'Auto');
     const stEl = document.getElementById('pi-status');
     if (stEl) { stEl.textContent = worker.tool && st.active ? `${st.label} · ${worker.tool}` : st.label; stEl.className = `pantheon-status-pill tone-${st.tone}`; }
-    setT('pi-meta', `${worker.kind === 'crew' ? 'Coding Crew' : 'Specialist Subagent'} · ${worker.calls || 0} calls · ${fmtMs(worker.durationMs)}${worker.tools?.length ? ` · Tools: ${[...new Set(worker.tools)].join(', ')}` : ''}`);
+    setT('pi-meta', `${worker.kind === 'crew' ? 'Coding Crew' : worker.viaHarness ? 'External CLI Harness' : 'Specialist Subagent'} · ${worker.calls || 0} calls · ${fmtMs(worker.durationMs)}${worker.approxTokens ? ` · ${fmtTokens(worker.approxTokens)} (${fmtCost(worker.estimatedCostUsd)})` : ''}${worker.isMvp ? ' · ★ MVP' : ''}${worker.tools?.length ? ` · Tools: ${[...new Set(worker.tools)].join(', ')}` : ''}`);
     const filesEl = document.getElementById('pi-files');
     if (filesEl) {
       const files = worker.files || [];
@@ -798,13 +1049,18 @@
       }
     }
 
-    if (data?.mode === 'arena' && data?.arena) {
-      drawArenaRace(ctx, w, h, pal, data.arena);
+    const viewData = getEffectiveData();
+    if (viewData?.mode === 'arena' && viewData?.arena) {
+      drawArenaRace(ctx, w, h, pal, viewData.arena);
+      return;
+    }
+    if (viewData?.mode === 'diff_race' && viewData?.worktreeRace) {
+      drawDiffRace(ctx, w, h, pal, viewData.worktreeRace);
       return;
     }
 
     const cx = w * 0.5;
-    const cy = data?.mode === 'standby' ? h * 0.37 : h * 0.48;
+    const cy = viewData?.mode === 'standby' ? h * 0.36 : h * 0.48;
     const rx = Math.min(w * 0.34, 230);
     const ry = Math.min(h * 0.32, 148);
 
@@ -821,8 +1077,8 @@
     ctx.stroke();
     ctx.restore();
 
-    const workers = (data?.workers || []).length
-      ? data.workers
+    const workers = (viewData?.workers || []).length
+      ? viewData.workers
       : [
           { workerId: '_ghost_1', role: 'explore', modelLabel: 'Standby', status: 'queued', ghost: true },
           { workerId: '_ghost_2', role: 'reviewer', modelLabel: 'Standby', status: 'queued', ghost: true },
@@ -1003,12 +1259,77 @@
       ctx.fillStyle = pal.text;
       ctx.fillText(caption, pos.x, pillY + 10.5);
 
+      // Golden ★ MVP crown pill above winning worker
+      if (!wk.ghost && wk.isMvp) {
+        ctx.fillStyle = 'rgba(251, 191, 36, 0.18)';
+        ctx.strokeStyle = pal.gold;
+        ctx.lineWidth = 1.2;
+        drawRoundedRect(ctx, pos.x - 24, pos.y - r - 22, 48, 16, 8);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = pal.gold;
+        ctx.font = '700 8.5px ui-monospace, SFMono-Regular, monospace';
+        ctx.fillText('★ MVP', pos.x, pos.y - r - 13.5);
+      }
+
       // File territory chip if present
       if (!wk.ghost && wk.files?.length) {
         const fLabel = wk.files[0].split('/').pop() + (wk.files.length > 1 ? ` +${wk.files.length - 1}` : '');
         ctx.fillStyle = pal.muted;
         ctx.font = '500 9px ui-monospace, SFMono-Regular, monospace';
         ctx.fillText(fLabel.slice(0, 22), pos.x, pillY + 29);
+      }
+      ctx.restore();
+    });
+  }
+
+  function drawDiffRace(ctx, w, h, pal, race) {
+    const cands = race.candidates || [];
+    const leftX = 28;
+    const rightPad = 28;
+    const trackW = Math.max(140, w - leftX - rightPad);
+    ctx.save();
+    ctx.fillStyle = pal.muted;
+    ctx.font = '600 10px ui-monospace, SFMono-Regular, monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(`CODE DIFF RACE · ${String(race.repository || 'worktree').toUpperCase()} (${race.branch || 'branch'})`, leftX, 24);
+    ctx.restore();
+
+    const usableH = Math.max(120, h - 108);
+    const laneStep = usableH / Math.max(1, cands.length);
+    cands.slice(0, 4).forEach((c, idx) => {
+      const ly = 56 + idx * laneStep + laneStep * 0.35;
+      const done = c.status === 'ready' || c.status === 'applied';
+      const failed = c.status === 'failed';
+      const isApplied = c.status === 'applied';
+      const prog = done ? 1 : failed ? 0.38 : (0.25 + 0.55 * ((Math.sin(animPhase * 1.9 + idx * 1.3) + 1) / 2));
+      const color = isApplied ? pal.gold : done ? pal.sage : failed ? pal.coral : pal.violet;
+
+      ctx.save();
+      ctx.fillStyle = pal.text;
+      ctx.font = '600 12px -apple-system, BlinkMacSystemFont, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText(`${isApplied ? '♛ ' : ''}${c.slot} · ${shortModel(c.label)}`, leftX, ly - 14);
+
+      ctx.fillStyle = isApplied ? pal.gold : done ? pal.sage : pal.muted;
+      ctx.font = '600 11px ui-monospace, SFMono-Regular, monospace';
+      ctx.textAlign = 'right';
+      const statTxt = done ? `+${c.additions}/-${c.deletions} · ${fmtMs(c.elapsedMs)}` : failed ? 'FAILED' : 'BUILDING…';
+      ctx.fillText(statTxt, leftX + trackW, ly - 14);
+
+      ctx.fillStyle = pal.isLight ? 'rgba(24,25,27,0.08)' : 'rgba(255,255,255,0.08)';
+      drawRoundedRect(ctx, leftX, ly - 4, trackW, 12, 6);
+      ctx.fill();
+
+      ctx.fillStyle = color;
+      drawRoundedRect(ctx, leftX, ly - 4, Math.max(18, trackW * prog), 12, 6);
+      ctx.fill();
+
+      if (c.files?.length) {
+        ctx.fillStyle = pal.muted;
+        ctx.font = '500 9.5px ui-monospace, SFMono-Regular, monospace';
+        ctx.textAlign = 'left';
+        ctx.fillText(c.files.slice(0, 3).map(f => f.split('/').pop()).join(' · '), leftX, ly + 20);
       }
       ctx.restore();
     });
@@ -1033,7 +1354,9 @@
       const ly = lanes[idx] || h * 0.5;
       const done = c.status === 'completed';
       const failed = c.status === 'declined' || c.status === 'failed';
-      const prog = done ? 1 : failed ? 0.45 : (0.28 + 0.58 * ((Math.sin(animPhase * 1.8 + idx * 1.4) + 1) / 2));
+      const prog = typeof c._replayProg === 'number'
+        ? c._replayProg
+        : done ? 1 : failed ? 0.45 : (0.28 + 0.58 * ((Math.sin(animPhase * 1.8 + idx * 1.4) + 1) / 2));
       const color = c.isWinner ? pal.gold : done ? pal.sage : failed ? pal.coral : (idx === 0 ? pal.violet : pal.blue);
 
       ctx.save();
@@ -1111,7 +1434,8 @@
   function drawTimeline() {
     const canvas = document.getElementById('pantheon-timeline-canvas');
     const emptyEl = document.getElementById('pantheon-timeline-empty');
-    const workers = data?.workers || [];
+    const viewData = getEffectiveData();
+    const workers = viewData?.workers || [];
     if (emptyEl) emptyEl.classList.toggle('hidden', workers.length > 0);
     if (canvas) canvas.classList.toggle('hidden', workers.length === 0);
     if (!workers.length) return;
@@ -1131,7 +1455,7 @@
     const maxT = Math.max(...times.map(t => t.e), minT + 1000);
     const span = Math.max(1000, maxT - minT);
 
-    const labelW = 112;
+    const labelW = 116;
     const padR = 20;
     const barAreaW = Math.max(100, w - labelW - padR);
     const rowH = 42;
@@ -1152,8 +1476,10 @@
       if (y + rowH > h) return;
       const st = statusInfo(wk.status);
       const x1 = labelW + ((s - minT) / span) * barAreaW;
-      const bw = Math.max(24, ((e - s) / span) * barAreaW);
-      const color = st.tone === 'sage' ? pal.sage : st.tone === 'amber' ? pal.amber : st.tone === 'gold' ? pal.gold : st.tone === 'coral' ? pal.coral : roleColor(wk.role);
+      const fullBw = Math.max(24, ((e - s) / span) * barAreaW);
+      const replayScale = typeof wk._replayFrac === 'number' ? Math.max(0.06, wk._replayFrac) : 1;
+      const bw = Math.max(10, fullBw * replayScale);
+      const color = wk.isMvp ? pal.gold : st.tone === 'sage' ? pal.sage : st.tone === 'amber' ? pal.amber : st.tone === 'gold' ? pal.gold : st.tone === 'coral' ? pal.coral : roleColor(wk.role);
 
       timelineHitTargets.push({ workerId: wk.workerId, x: 8, y, w: w - 16, h: rowH - 6 });
 
@@ -1166,10 +1492,10 @@
       ctx.stroke();
 
       // Label
-      ctx.fillStyle = pal.text;
+      ctx.fillStyle = wk.isMvp ? pal.gold : pal.text;
       ctx.font = '600 11px -apple-system, BlinkMacSystemFont, sans-serif';
       ctx.textAlign = 'left';
-      ctx.fillText(String(wk.role || 'worker').toUpperCase(), 12, y + 14);
+      ctx.fillText(`${wk.isMvp ? '★ ' : ''}${String(wk.role || 'worker').toUpperCase()}`, 12, y + 14);
       ctx.fillStyle = pal.muted;
       ctx.font = '500 9.5px ui-monospace, SFMono-Regular, monospace';
       ctx.fillText(shortModel(wk.modelLabel || wk.providerId || 'Auto').slice(0, 14), 12, y + 28);
@@ -1194,6 +1520,20 @@
         ctx.fillText(barTxt, x1 + bw + 8, y + 21);
       }
     });
+
+    // Vertical playhead line during Time-Travel Replay
+    if (typeof viewData?._replayCursorFrac === 'number' && viewData._replayCursorFrac < 1) {
+      const px = labelW + viewData._replayCursorFrac * barAreaW;
+      ctx.save();
+      ctx.strokeStyle = pal.gold;
+      ctx.lineWidth = 1.8;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(px, topPad - 6);
+      ctx.lineTo(px, Math.min(h - 6, topPad + times.length * rowH));
+      ctx.stroke();
+      ctx.restore();
+    }
   }
 
   async function loadSnapshot(taskId) {
@@ -1567,6 +1907,69 @@
     deploySquadSlugs([slug]);
   }
 
+  async function saveFormationFromForm() {
+    const nameEl = document.getElementById('rf-name');
+    const goalEl = document.getElementById('rf-goal');
+    const name = (nameEl?.value || '').trim();
+    if (!name) {
+      if (typeof window.toast === 'function') window.toast('Name your formation first.');
+      nameEl?.focus();
+      return;
+    }
+    const slugs = selectedSquad.size ? [...selectedSquad] : (rosterData?.agents || []).slice(0, 3).map(a => a.slug);
+    try {
+      const res = await fetch('/api/pantheon/formations', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-g0d-request': '1' },
+        body: JSON.stringify({ name, sigil: '⚔', agents: slugs, goal: (goalEl?.value || '').trim() }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Could not save formation.');
+      if (rosterData) rosterData.formations = json.formations;
+      formationFormOpen = false;
+      renderRosterView();
+      renderStandbyFormations();
+      if (typeof window.toast === 'function') window.toast(`⚔ Saved formation "${json.formation.name}" (${slugs.length} agents).`);
+    } catch (err) {
+      if (typeof window.toast === 'function') window.toast(err.message || 'Save formation failed.');
+    }
+  }
+
+  async function deleteFormation(id) {
+    try {
+      const res = await fetch(`/api/pantheon/formations/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: { 'x-g0d-request': '1' },
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Could not delete formation.');
+      if (rosterData) rosterData.formations = json.formations;
+      renderRosterView();
+      renderStandbyFormations();
+      if (typeof window.toast === 'function') window.toast(`Removed formation "${id}".`);
+    } catch (err) {
+      if (typeof window.toast === 'function') window.toast(err.message || 'Delete failed.');
+    }
+  }
+
+  function deployFormation(id) {
+    const f = (rosterData?.formations || []).find(x => x.id === id);
+    if (!f) return;
+    const agents = (rosterData?.agents || []).filter(a => f.agents.includes(a.slug));
+    const lines = agents.length
+      ? agents.map(a => `- agent.spawn(role: "${a.slug}"${a.resolvedProviderId ? `, model: "${a.resolvedProviderId}"` : ''}) — ${a.name} [${a.engineLabel}, OVR ${a.stats?.overall || 85}]`)
+      : f.agents.map(slug => `- agent.spawn(role: "${slug}")`);
+    const prompt = `Deploy Pantheon Formation "${f.name}" (${lines.length} specialist${lines.length === 1 ? '' : 's'}) concurrently via agent.spawn:\n${lines.join('\n')}\n\nGoal: ${f.goal || ''}`;
+    const input = document.getElementById('composer-input');
+    if (input) {
+      input.value = prompt;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.focus();
+      input.setSelectionRange(prompt.length, prompt.length);
+    }
+    if (typeof window.toast === 'function') window.toast(`${f.sigil || '✦'} Loaded formation "${f.name}" into composer — press Enter to launch!`);
+  }
+
   const fmtCtx = (n) => {
     const v = Number(n) || 128000;
     return v >= 1000000 ? `${(v / 1000000).toFixed(v % 1000000 === 0 ? 0 : 1)}M ctx` : `${Math.round(v / 1000)}K ctx`;
@@ -1681,12 +2084,34 @@
         </form>
       </section>` : '';
 
+    const formations = rosterData.formations || [];
+    const formationFormHtml = formationFormOpen ? `
+      <form id="rf-form" class="rf-form" autocomplete="off">
+        <div class="rf-row">
+          <input type="text" id="rf-name" placeholder="Formation name (e.g. Security Swarm)" maxlength="48" required>
+          <input type="text" id="rf-goal" placeholder="Optional starter mission prompt…" maxlength="400">
+        </div>
+        <div class="rf-actions">
+          <span class="rf-hint">Saves ${selectedSquad.size ? `${selectedSquad.size} selected` : 'top 3'} roster agents as a 1-click preset</span>
+          <button type="submit" class="button button-primary" id="rf-save">Save Formation</button>
+          <button type="button" class="button button-quiet" id="rf-cancel">Cancel</button>
+        </div>
+      </form>` : '';
+
     el.innerHTML = `
       <div class="roster-toolbar">
         <button type="button" class="button button-primary" id="roster-forge-new">+ Forge Agent</button>
         <div class="roster-squad-tray">
           <span class="roster-squad-count">Squad · ${selectedSquad.size}/4</span>
+          <button type="button" class="button button-quiet" id="roster-save-formation-toggle" title="Save selected agents as a 1-click formation">+ Formation</button>
           <button type="button" class="button button-secondary" id="roster-deploy-squad">✦ Deploy Squad</button>
+        </div>
+      </div>
+      ${formationFormHtml}
+      <div class="roster-formations" aria-label="Saved 1-click formations">
+        <span class="roster-strip-label">Formations</span>
+        <div class="roster-harness-pills">
+          ${formations.map(f => `<span class="pantheon-formation-wrap"><button type="button" class="pantheon-formation-chip" data-formation-launch="${esc(f.id)}" title="${esc(`${f.name}: ${f.agents.join(', ')}`)}">${esc(f.sigil || '✦')} ${esc(f.name)} <small>${esc(f.agents.length)}</small></button>${f.custom && !f.builtin ? `<button type="button" class="pantheon-formation-del" data-formation-delete="${esc(f.id)}" aria-label="Delete formation ${esc(f.name)}">×</button>` : ''}</span>`).join('')}
         </div>
       </div>
       <div class="roster-harnesses" aria-label="External harnesses and bridges">
@@ -1700,6 +2125,7 @@
         ${agents.map(ag => {
           const inSquad = selectedSquad.has(ag.slug);
           const r = ag.stats?.radar || {};
+          const xp = ag.xp || { level: 1, xp: 0, runs: 0 };
           return `<article class="roster-card ${inSquad ? 'is-in-squad' : ''}">
             <header class="roster-card-head">
               <div class="roster-card-id">
@@ -1709,7 +2135,10 @@
                   <small>${esc(ag.engineLabel)}</small>
                 </div>
               </div>
-              <span class="roster-ovr-pill tier-${esc(String(ag.stats?.tier || 'A').replace('+', 'p'))}">OVR ${esc(ag.stats?.overall ?? 85)} · ${esc(ag.stats?.tier || 'A')}</span>
+              <div class="roster-badges-col">
+                <span class="roster-ovr-pill tier-${esc(String(ag.stats?.tier || 'A').replace('+', 'p'))}">OVR ${esc(ag.stats?.overall ?? 85)} · ${esc(ag.stats?.tier || 'A')}</span>
+                <span class="roster-xp-pill" title="${esc(`${xp.xp} XP · ${xp.runs} runs`)}">Lv.${esc(xp.level)}${xp.runs ? ` · ${xp.runs}r` : ''}</span>
+              </div>
             </header>
             <div class="roster-card-body">
               <canvas class="roster-mini-radar" data-mini-radar="${esc(ag.slug)}" width="92" height="84" aria-hidden="true"></canvas>

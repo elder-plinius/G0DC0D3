@@ -4,6 +4,7 @@ import path from 'node:path';
 import { checkProviderPrivacyAllowed, DEFAULT_PRIVACY_SETTINGS } from './privacy.mjs';
 import { evaluatePermission } from './permissions.mjs';
 import { scoreOverseerSuitability } from './overseer.mjs';
+import { runExternalHarnessSubagent } from './pantheon-roster.mjs';
 import { TOOLS, validateTool } from './tool-schema.mjs';
 
 const SUBAGENT_TOOLS = new Set(['repo.list', 'repo.read', 'repo.search', 'repo.glob', 'git.diff', 'git.log', 'memory.search']);
@@ -77,6 +78,10 @@ export async function discoverSubagents(task, runtime = null) {
           displayName: ag.name || ag.slug,
           description: ag.description || `Pantheon agent (${ag.name || ag.slug})`,
           model: ag.providerId || ag.harnessId || null,
+          engineType: ag.engineType || 'api',
+          harnessId: ag.harnessId || null,
+          harnessCommand: ag.harnessCommand || null,
+          autonomy: ag.autonomy || 'read_only',
           instructions: ag.instructions || `You are ${ag.name || ag.slug}, a Pantheon specialist.`,
           source: 'pantheon_roster'
         });
@@ -155,8 +160,78 @@ export async function runSpecialistSubagent({ runtime, parentTask, role = 'explo
   const spec = agents.get(roleKey) || BUILTIN_SUBAGENTS.explore;
   const outbound = runtime.outboundOptions();
   const privacy = outbound.privacy || DEFAULT_PRIVACY_SETTINGS;
-  const provider = selectSubagentProvider(runtime, parentTask, spec, modelHint, privacy);
   const wId = workerId || `${spec.name}-${started.toString(36)}`;
+
+  // True Cross-Harness Execution ("Meta-Harness of Harnesses"):
+  // If this Roster agent is configured as an external CLI harness (or custom CLI) without a direct API provider lock,
+  // run it directly in bounded read-only mode (shell: false, CLI_NO_TELEMETRY_ENV), falling back cleanly if unavailable!
+  const wantsExternalCli = (spec.engineType === 'custom_cli' || spec.engineType === 'harness')
+    && (spec.harnessCommand || spec.harnessId)
+    && (!spec.model || spec.autonomy === 'external_harness' || !runtime.providers.has(spec.model));
+  if (wantsExternalCli && !privacy.localOnly) {
+    const hLabel = spec.displayName ? `${spec.displayName} · CLI` : `${spec.harnessCommand || spec.harnessId} · CLI`;
+    if (typeof onProgress === 'function') {
+      try {
+        onProgress({
+          workerId: wId, role: spec.name, providerId: `harness:${spec.harnessId || spec.harnessCommand}`,
+          modelLabel: hLabel, status: 'streaming', tool: 'cli.harness', target: spec.harnessCommand || spec.harnessId || '',
+          files: [], tools: ['cli.harness'], streamTail: `Invoking external harness ${spec.harnessCommand || spec.harnessId}…`,
+          startedAt, durationMs: Date.now() - started, calls: 1
+        });
+      } catch {}
+    }
+    const hRes = await runExternalHarnessSubagent({
+      harnessId: spec.harnessId,
+      harnessCommand: spec.harnessCommand,
+      prompt,
+      instructions: spec.instructions,
+      workspace: parentTask.workspace || parentTask.sourcePath || null,
+      signal,
+      onProgress: ({ streamTail: tail, harnessLabel }) => {
+        if (typeof onProgress === 'function') {
+          try {
+            onProgress({
+              workerId: wId, role: spec.name, providerId: `harness:${spec.harnessId || spec.harnessCommand}`,
+              modelLabel: harnessLabel || hLabel, status: 'streaming', tool: 'cli.harness', target: spec.harnessCommand || spec.harnessId || '',
+              files: [], tools: ['cli.harness'], streamTail: tail, startedAt, durationMs: Date.now() - started, calls: 1
+            });
+          } catch {}
+        }
+      }
+    });
+    if (hRes.ok) {
+      const endedAt = new Date().toISOString();
+      const durationMs = Date.now() - started;
+      if (typeof onProgress === 'function') {
+        try {
+          onProgress({
+            workerId: wId, role: spec.name, providerId: `harness:${spec.harnessId || spec.harnessCommand}`,
+            modelLabel: hRes.harnessLabel || hLabel, status: 'completed', tool: '', target: '',
+            files: [], tools: ['cli.harness'], streamTail: hRes.output.slice(-360),
+            startedAt, endedAt, durationMs, calls: 1, viaHarness: true, summary: hRes.output.slice(0, 400)
+          });
+        } catch {}
+      }
+      return {
+        ok: true,
+        workerId: wId,
+        role: spec.name,
+        providerId: `harness:${spec.harnessId || spec.harnessCommand}`,
+        modelLabel: hRes.harnessLabel || hLabel,
+        viaHarness: true,
+        calls: 1,
+        startedAt,
+        endedAt,
+        durationMs,
+        files: [],
+        tools: ['cli.harness'],
+        summary: hRes.output
+      };
+    }
+    // Seamless graceful fallback to connected API stack if CLI binary is missing/unauthenticated
+  }
+
+  const provider = selectSubagentProvider(runtime, parentTask, spec, modelHint, privacy);
   if (!provider) {
     return { ok: false, workerId: wId, role: spec.name, startedAt, endedAt: new Date().toISOString(), durationMs: Date.now() - started, files: [], tools: [], error: { code: 'SUBAGENT_NO_PROVIDER', message: 'No privacy-eligible provider is available for this subagent.' } };
   }

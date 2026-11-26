@@ -31,6 +31,7 @@ import {
   DEFAULT_ROUTER_SETTINGS,
   normalizeRouterSettings,
   loadBenchmarkMatrix,
+  matchBenchmarkEntry,
   classifyPromptDomain,
   routeUltraPlinian,
   buildDomainLeaderboards
@@ -46,10 +47,14 @@ import {
   AGENT_ARCHETYPES,
   buildStarterRoster,
   computeAgentStats,
+  computeXpLevel,
   detectExternalHarnesses,
+  estimateWorkerTelemetry,
   EXTERNAL_HARNESSES,
+  normalizeFormation,
   normalizeRosterAgent,
-  slugifyAgent
+  slugifyAgent,
+  STARTER_FORMATIONS
 } from './pantheon-roster.mjs';
 import { validateExecution, validateChecks } from './runner.mjs';
 import { SourceChanges } from './source-changes.mjs';
@@ -767,6 +772,7 @@ export class Runtime {
         status: result?.ok ? 'succeeded' : 'failed', result, createdAt: nowIso, updatedAt: nowIso
       }, 'tool.completed', { operationId: opId, name: call.name, status: result?.ok ? 'succeeded' : 'failed', result });
       this.store.appendEvent(id, 'subagent.completed', { workerId, callId: call.id, ...result });
+      this.recordPantheonAgentRun(result?.role || role, { ok: Boolean(result?.ok), durationMs: result?.durationMs || 0 });
       this._emitStream(id, { type: 'subagent.completed', worker: { ...initialState, ...result, status: result?.ok ? 'completed' : 'failed' } });
       return result;
     } finally {
@@ -907,6 +913,26 @@ export class Runtime {
     }
 
     const workers = [...workersById.values()];
+    const matrix = loadBenchmarkMatrix(this.getRouterSettings().customBenchmarks || {});
+    let totalTokens = 0;
+    let totalCostUsd = 0;
+    for (const w of workers) {
+      const prov = w.providerId ? (this.providers.get(w.providerId) || this.catalog?.get?.(w.providerId) || { id: w.providerId, model: w.providerId }) : null;
+      const bench = prov ? matchBenchmarkEntry(prov, matrix) : null;
+      const tel = estimateWorkerTelemetry({
+        prompt: w.prompt || '',
+        summary: w.summary || w.streamTail || '',
+        calls: w.calls || 0,
+        providerId: w.providerId || '',
+        costIndex: bench?.costIndex ?? 70
+      });
+      w.approxTokens = tel.approxTokens;
+      w.estimatedCostUsd = tel.estimatedCostUsd;
+      w.isMvp = false;
+      totalTokens += tel.approxTokens;
+      totalCostUsd += tel.estimatedCostUsd;
+    }
+
     const fileOwners = new Map();
     for (const w of workers) {
       for (const f of (w.files || [])) {
@@ -918,24 +944,95 @@ export class Runtime {
       .filter(([, owners]) => owners.length > 1)
       .map(([file, owners]) => ({ file, owners }));
 
+    // Surface Worktree Code Diff Race on the Pantheon Stage if this task has a worktree build!
+    let worktreeRace = null;
+    try {
+      const wtApi = this.worktrees;
+      if (wtApi) {
+        const wtId = task.codeWorkspace?.id || wtApi.list?.().find(p => p.chatId === taskId)?.id || null;
+        if (wtId) {
+          const proj = wtApi.get?.(wtId);
+          if (proj?.candidates?.length) {
+            const building = Boolean(wtApi.jobs?.get?.(wtId)?.building);
+            const appliedId = proj.review?.applied || null;
+            const candidates = proj.candidates.map((c, idx) => {
+              let additions = 0;
+              let deletions = 0;
+              if (typeof c.patch === 'string' && c.patch) {
+                for (const line of c.patch.split('\n')) {
+                  if (line.startsWith('+') && !line.startsWith('+++')) additions += 1;
+                  else if (line.startsWith('-') && !line.startsWith('---')) deletions += 1;
+                }
+              }
+              const status = appliedId === c.id ? 'applied' : c.patch ? 'ready' : c.error ? 'failed' : building ? 'building' : 'queued';
+              return {
+                slot: ['A', 'B', 'C', 'D'][idx] || String(idx + 1),
+                id: c.id,
+                providerId: c.providerId,
+                label: c.provider || providerLabel(c.providerId) || c.providerId,
+                status,
+                elapsedMs: c.elapsedMs || 0,
+                files: Array.isArray(c.paths) ? c.paths : [],
+                additions,
+                deletions,
+                error: c.error || null
+              };
+            });
+            worktreeRace = {
+              worktreeId: proj.id,
+              repository: proj.repository ? proj.repository.split('/').pop() : 'workspace',
+              branch: proj.branch || '',
+              objective: proj.review?.objective || '',
+              building,
+              appliedCandidateId: appliedId,
+              lastCheck: proj.lastCheck ? {
+                command: proj.lastCheck.command,
+                exitCode: proj.lastCheck.exitCode,
+                ok: proj.lastCheck.exitCode === 0 && !proj.lastCheck.timedOut && !proj.lastCheck.cancelled
+              } : null,
+              candidates
+            };
+          }
+        }
+      }
+    } catch {}
+
     const mode = (arena && (arena.status === 'drafting' || arena.status === 'grading' || (workers.length === 0 && arena.status === 'completed')))
       ? 'arena'
       : crewSummary && ['preparing', 'running', 'verifying', 'ready', 'paused', 'applied'].includes(crewSummary.status)
         ? 'crew'
         : workers.length > 0
           ? 'swarm'
-          : 'standby';
+          : worktreeRace?.candidates?.length
+            ? 'diff_race'
+            : 'standby';
 
     const arenaContenders = arena?.contenders || [];
     const arenaActive = arenaContenders.filter(c => ['streaming', 'queued', 'drafting'].includes(c.status)).length + (arena?.judge?.status === 'grading' ? 1 : 0);
     const arenaDone = arenaContenders.filter(c => c.status === 'completed').length + (arena?.judge?.status === 'completed' ? 1 : 0);
+    const diffActive = (worktreeRace?.candidates || []).filter(c => c.status === 'building' || c.status === 'queued').length;
+    const diffDone = (worktreeRace?.candidates || []).filter(c => c.status === 'ready' || c.status === 'applied').length;
     const activeCount = mode === 'arena'
       ? arenaActive
-      : workers.filter(w => ['thinking', 'streaming', 'tool', 'recovering'].includes(w.status)).length;
+      : mode === 'diff_race'
+        ? diffActive
+        : workers.filter(w => ['thinking', 'streaming', 'tool', 'recovering'].includes(w.status)).length;
     const completedCount = mode === 'arena'
       ? arenaDone
-      : workers.filter(w => w.status === 'completed').length;
+      : mode === 'diff_race'
+        ? diffDone
+        : workers.filter(w => w.status === 'completed').length;
     const failedCount = workers.filter(w => w.status === 'failed').length;
+
+    // Crown ★ MVP on completed multi-worker swarms (highest signal + fastest delivery)
+    if (workers.length >= 2 && activeCount === 0) {
+      const doneWorkers = workers.filter(w => w.status === 'completed');
+      if (doneWorkers.length >= 2) {
+        const mvpScore = (w) => (w.files?.length || 0) * 16 + (w.tools?.length || 0) * 6 + Math.min(45, (w.summary || '').length / 24) - (w.durationMs || 0) / 1400;
+        const best = [...doneWorkers].sort((a, b) => mvpScore(b) - mvpScore(a))[0];
+        if (best) best.isMvp = true;
+      }
+    }
 
     return {
       taskId: task.id,
@@ -953,15 +1050,18 @@ export class Runtime {
       workers,
       crew: crewSummary,
       arena,
+      worktreeRace,
       failovers: failovers.slice(-8),
       fileConflicts,
       pendingApproval: task.pendingApproval || null,
       stats: {
-        totalWorkers: workers.length,
+        totalWorkers: mode === 'diff_race' ? (worktreeRace?.candidates?.length || 0) : workers.length,
         activeWorkers: activeCount,
         completedWorkers: completedCount,
         failedWorkers: failedCount,
-        totalCalls: task.calls || 0
+        totalCalls: task.calls || 0,
+        totalTokens,
+        totalCostUsd: Number(totalCostUsd.toFixed(5))
       }
     };
   }
@@ -2991,6 +3091,7 @@ export class Runtime {
 
     const savedRaw = this.store.getLocalState('pantheon_roster', []);
     const savedList = Array.isArray(savedRaw) ? savedRaw : [];
+    const xpMap = this.store.getLocalState('pantheon_agent_xp', {});
     const starters = buildStarterRoster(candidates, harnesses);
     const mergedMap = new Map();
     for (const s of starters) mergedMap.set(s.slug, s);
@@ -3011,9 +3112,10 @@ export class Runtime {
         matrix,
         learning
       });
+      const xp = computeXpLevel(xpMap?.[ag.slug] || null);
       const engineLabel = cand?.label || (h ? h.name : ag.harnessCommand ? `CLI · ${ag.harnessCommand}` : 'Auto-Route Best Fit');
       const ready = Boolean(cand) || Boolean(h && (h.status === 'connected' || h.status === 'installed')) || Boolean(!ag.providerId && !ag.harnessId && candidates.length > 0);
-      return { ...ag, resolvedProviderId: resolvedProvId, engineLabel, ready, stats };
+      return { ...ag, resolvedProviderId: resolvedProvId, engineLabel, ready, stats, xp };
     };
 
     const engines = candidates.slice(0, 60).map(c => ({
@@ -3027,11 +3129,61 @@ export class Runtime {
 
     return {
       agents: [...mergedMap.values()].map(enrichAgent),
+      formations: this.getPantheonFormations(),
       harnesses,
       engines,
       archetypes: AGENT_ARCHETYPES,
       domains: ROUTER_DOMAINS
     };
+  }
+  recordPantheonAgentRun(rawSlug, { ok = true, durationMs = 0, mvp = false } = {}) {
+    try {
+      const slug = slugifyAgent(rawSlug || 'explore');
+      const map = { ...(this.store.getLocalState('pantheon_agent_xp', {}) || {}) };
+      const cur = map[slug] || { runs: 0, wins: 0, mvps: 0, xp: 0, avgMs: 0, lastRunAt: null };
+      const runs = (Number(cur.runs) || 0) + 1;
+      const wins = (Number(cur.wins) || 0) + (ok ? 1 : 0);
+      const mvps = (Number(cur.mvps) || 0) + (mvp ? 1 : 0);
+      const xpGain = (ok ? 25 : 5) + (mvp ? 20 : 0);
+      const prevAvg = Number(cur.avgMs) || 0;
+      const dur = Math.max(0, Number(durationMs) || 0);
+      const avgMs = prevAvg > 0 && dur > 0 ? Math.round((prevAvg * (runs - 1) + dur) / runs) : (dur || prevAvg);
+      map[slug] = { runs, wins, mvps, xp: (Number(cur.xp) || 0) + xpGain, avgMs, lastRunAt: new Date().toISOString() };
+      this.store.setLocalState('pantheon_agent_xp', map);
+      return computeXpLevel(map[slug]);
+    } catch {
+      return computeXpLevel(null);
+    }
+  }
+  getPantheonFormations() {
+    const savedRaw = this.store.getLocalState('pantheon_formations', []);
+    const saved = Array.isArray(savedRaw) ? savedRaw : [];
+    const merged = new Map();
+    for (const f of STARTER_FORMATIONS) merged.set(f.id, { ...f });
+    for (const f of saved) {
+      if (!f?.id) continue;
+      merged.set(f.id, { ...merged.get(f.id), ...f, custom: true });
+    }
+    return [...merged.values()];
+  }
+  savePantheonFormation(payload = {}) {
+    const savedRaw = this.store.getLocalState('pantheon_formations', []);
+    const list = Array.isArray(savedRaw) ? [...savedRaw] : [];
+    const targetId = slugifyAgent(payload.id || payload.name);
+    const idx = list.findIndex(f => f?.id === targetId);
+    const normalized = normalizeFormation(payload, idx >= 0 ? list[idx] : null);
+    if (idx >= 0) list[idx] = normalized;
+    else list.push(normalized);
+    this.store.setLocalState('pantheon_formations', list.slice(0, 24));
+    return { ok: true, formation: normalized, formations: this.getPantheonFormations() };
+  }
+  deletePantheonFormation(rawId) {
+    const id = slugifyAgent(rawId);
+    const savedRaw = this.store.getLocalState('pantheon_formations', []);
+    const list = Array.isArray(savedRaw) ? savedRaw : [];
+    const next = list.filter(f => f?.id !== id);
+    this.store.setLocalState('pantheon_formations', next);
+    return { ok: true, deleted: next.length !== list.length, id, formations: this.getPantheonFormations() };
   }
   async savePantheonAgent(payload = {}) {
     const savedRaw = this.store.getLocalState('pantheon_roster', []);

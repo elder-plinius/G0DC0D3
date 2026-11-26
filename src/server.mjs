@@ -102,6 +102,7 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
   const setup = createSetup(runtime.store);
   const worktrees = new WorktreeProjects(runtime.store, { get: id => providers.get(id) ?? catalog.get(id) },
     { outboundOptions: () => runtime.outboundOptions() });
+  runtime.worktrees = worktrees;
   const previews = createPreviewRegistry(runtime);
   async function loadSelected(ids) {
     if (Array.isArray(ids) && ids.some(id => isCatalogModel(id) || providers.get(id)?.baseUrl === veniceEndpoint)) await catalog.list();
@@ -226,6 +227,10 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
       if(req.method==='POST' && url.pathname==='/api/pantheon/stats/preview')return send(res,200,await runtime.previewPantheonStats(await readBody(req)));
       const rosterDelMatch = req.method === 'DELETE' && url.pathname.match(/^\/api\/pantheon\/roster\/([^/]+)$/);
       if (rosterDelMatch) return send(res, 200, await runtime.deletePantheonAgent(decodeURIComponent(rosterDelMatch[1])));
+      if(req.method==='GET' && url.pathname==='/api/pantheon/formations')return send(res,200,{formations:runtime.getPantheonFormations()});
+      if(req.method==='POST' && url.pathname==='/api/pantheon/formations')return send(res,201,runtime.savePantheonFormation(await readBody(req)));
+      const formDelMatch = req.method === 'DELETE' && url.pathname.match(/^\/api\/pantheon\/formations\/([^/]+)$/);
+      if (formDelMatch) return send(res, 200, runtime.deletePantheonFormation(decodeURIComponent(formDelMatch[1])));
       if(req.method==='DELETE' && url.pathname==='/api/router/reset') {
         await readBody(req).catch(()=>({}));
         runtime.resetRouter();

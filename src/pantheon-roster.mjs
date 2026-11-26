@@ -1,6 +1,8 @@
+import { spawn } from 'node:child_process';
 import { constants as fsConstants, promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { CLI_NO_TELEMETRY_ENV } from './privacy.mjs';
 import { loadBenchmarkMatrix, matchBenchmarkEntry, ROUTER_DOMAINS } from './ultra-router.mjs';
 import { providerDomainStats } from './learning.mjs';
 
@@ -378,4 +380,225 @@ export function buildStarterRoster(candidates = [], harnesses = []) {
       builtin: true
     }
   ];
+}
+
+// ── Saved 1-Click Formations ──
+export const STARTER_FORMATIONS = Object.freeze([
+  {
+    id: 'pr-gauntlet',
+    name: 'PR Gauntlet',
+    sigil: '⚔',
+    agents: ['explore', 'reviewer', 'uncensored'],
+    goal: 'Audit the current codebase & diffs for bugs, security risks, and missing edge cases before merge.',
+    builtin: true
+  },
+  {
+    id: 'deep-audit',
+    name: 'Deep Architecture Audit',
+    sigil: '✦',
+    agents: ['explore', 'reviewer'],
+    goal: 'Map repository architecture, trace critical call paths, and report structural risks with file:line citations.',
+    builtin: true
+  }
+]);
+
+export function normalizeFormation(input = {}, existing = null) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw Object.assign(new Error('Formation payload must be an object.'), { code: 'INVALID_FORMATION', status: 400 });
+  }
+  const name = String(input.name ?? existing?.name ?? '').trim().slice(0, 48);
+  if (!name) throw Object.assign(new Error('Formation name is required.'), { code: 'INVALID_FORMATION', status: 400 });
+  const id = slugifyAgent(input.id || existing?.id || name);
+  const sigil = VALID_SIGILS.includes(input.sigil) || input.sigil === '⚔' ? input.sigil : (existing?.sigil || '✦');
+  const rawAgents = Array.isArray(input.agents) ? input.agents : (existing?.agents || []);
+  const agents = [...new Set(rawAgents.map(s => slugifyAgent(s)).filter(Boolean))].slice(0, 4);
+  if (!agents.length) throw Object.assign(new Error('Select at least one agent for a formation.'), { code: 'INVALID_FORMATION', status: 400 });
+  const goal = String(input.goal ?? existing?.goal ?? '').trim().slice(0, 600);
+  const now = new Date().toISOString();
+  return {
+    id,
+    name,
+    sigil,
+    agents,
+    goal,
+    builtin: Boolean(existing?.builtin && input.builtin !== false),
+    createdAt: existing?.createdAt || now,
+    updatedAt: now
+  };
+}
+
+// ── Agent XP / Leveling & Worker Token/Cost Telemetry ──
+export function computeXpLevel(record = null) {
+  const runs = Math.max(0, Number(record?.runs) || 0);
+  const wins = Math.max(0, Number(record?.wins) || 0);
+  const mvps = Math.max(0, Number(record?.mvps) || 0);
+  const xp = Math.max(0, Number(record?.xp) || 0);
+  const avgMs = Math.max(0, Math.round(Number(record?.avgMs) || 0));
+  const level = 1 + Math.floor(xp / 100);
+  const nextLevelXp = level * 100;
+  const progressPct = xp % 100;
+  return { level, xp, nextLevelXp, progressPct, runs, wins, mvps, avgMs, lastRunAt: record?.lastRunAt || null };
+}
+
+export function estimateWorkerTelemetry({ prompt = '', summary = '', calls = 1, providerId = '', costIndex = 70 } = {}) {
+  const textChars = String(prompt || '').length + String(summary || '').length;
+  const approxTokens = Math.max(calls > 0 ? 120 : 0, Math.round(textChars / 3.8 + Math.max(0, Number(calls) || 0) * 180));
+  const isLocal = /^local:|ollama/i.test(String(providerId || ''));
+  // Higher costIndex = cheaper/more efficient model (95 -> ~$0.50/1M, 55 -> ~$12/1M)
+  const efficiency = Math.max(10, Math.min(100, Number(costIndex) || 70));
+  const blendedPerMillion = isLocal ? 0 : Math.max(0.25, ((108 - efficiency) / 10) * 1.4);
+  const estimatedCostUsd = isLocal ? 0 : Number(((approxTokens / 1_000_000) * blendedPerMillion).toFixed(5));
+  return { approxTokens, estimatedCostUsd };
+}
+
+// ── Bounded Non-Shell External CLI Harness Runner ──
+export async function resolveHarnessBinary(cmd, env = process.env) {
+  return checkCommandOnPath(cmd, env);
+}
+
+export function buildHarnessInvocation(harnessId, harnessCommand, fullPrompt) {
+  const known = harnessId ? EXTERNAL_HARNESSES.find(h => h.id === harnessId) : null;
+  const cmdName = String(harnessCommand || known?.command || '').trim();
+  if (!cmdName || !/^[a-z0-9._-]+$/i.test(cmdName)) {
+    return null;
+  }
+  if (harnessId === 'claude-code' || cmdName === 'claude') {
+    return { binName: cmdName, args: ['-p', fullPrompt, '--output-format', 'text'], stdinText: '' };
+  }
+  if (harnessId === 'codex-cli' || cmdName === 'codex') {
+    return { binName: cmdName, args: ['exec', '--sandbox', 'read-only', fullPrompt], stdinText: '' };
+  }
+  if (harnessId === 'gemini-cli' || cmdName === 'gemini') {
+    return { binName: cmdName, args: ['-p', fullPrompt], stdinText: '' };
+  }
+  if (harnessId === 'antigravity' || cmdName === 'agy') {
+    return { binName: cmdName, args: ['-p', fullPrompt], stdinText: '' };
+  }
+  return { binName: cmdName, args: ['-p', fullPrompt], stdinText: fullPrompt };
+}
+
+export async function runExternalHarnessSubagent({
+  harnessId = null,
+  harnessCommand = null,
+  prompt = '',
+  instructions = '',
+  workspace = null,
+  timeoutMs = 45000,
+  maxOutputBytes = 64 * 1024,
+  signal = null,
+  env = process.env,
+  onProgress = null,
+  _overrideSpawnSpec = null
+} = {}) {
+  const started = Date.now();
+  const fullPrompt = [
+    instructions ? `Role instructions: ${String(instructions).slice(0, 1500)}` : '',
+    'Operating mode: STRICTLY READ-ONLY advisory specialist. Do not edit files or run destructive commands. Return a concise technical brief.',
+    `Task: ${String(prompt || '').slice(0, 4000)}`
+  ].filter(Boolean).join('\n\n');
+
+  let binPath = null;
+  let args = [];
+  let stdinText = '';
+  let harnessLabel = '';
+
+  if (_overrideSpawnSpec && typeof _overrideSpawnSpec.binPath === 'string' && Array.isArray(_overrideSpawnSpec.args)) {
+    binPath = _overrideSpawnSpec.binPath;
+    args = _overrideSpawnSpec.args;
+    stdinText = _overrideSpawnSpec.stdinText || '';
+    harnessLabel = _overrideSpawnSpec.label || 'CLI Harness';
+  } else {
+    const inv = buildHarnessInvocation(harnessId, harnessCommand, fullPrompt);
+    if (!inv) {
+      return { ok: false, code: 'HARNESS_INVALID_CMD', error: 'Invalid external harness command name (alphanumeric basename only).', durationMs: Date.now() - started };
+    }
+    binPath = await checkCommandOnPath(inv.binName, env);
+    if (!binPath) {
+      return { ok: false, code: 'HARNESS_NOT_FOUND', error: `External harness CLI "${inv.binName}" is not installed on PATH.`, durationMs: Date.now() - started };
+    }
+    args = inv.args;
+    stdinText = inv.stdinText;
+    const known = harnessId ? EXTERNAL_HARNESSES.find(h => h.id === harnessId) : null;
+    harnessLabel = known ? `${known.shortName} · CLI` : `${inv.binName} · CLI`;
+  }
+
+  return new Promise((resolve) => {
+    let stdout = '';
+    let stderr = '';
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let settled = false;
+    let timedOut = false;
+
+    const child = spawn(binPath, args, {
+      cwd: workspace || process.cwd(),
+      env: { ...env, ...CLI_NO_TELEMETRY_ENV },
+      shell: false,
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+
+    const finish = (res) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', onAbort);
+      resolve(res);
+    };
+
+    const onAbort = () => {
+      try { child.kill('SIGTERM'); } catch {}
+      finish({ ok: false, code: 'HARNESS_CANCELLED', error: 'External harness subagent cancelled.', harnessLabel, durationMs: Date.now() - started });
+    };
+    if (signal) {
+      if (signal.aborted) { onAbort(); return; }
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try { child.kill('SIGTERM'); } catch {}
+      setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 1500).unref?.();
+    }, Math.max(1000, Math.min(120000, Number(timeoutMs) || 45000)));
+    timer.unref?.();
+
+    child.stdout.on('data', (chunk) => {
+      if (stdoutBytes >= maxOutputBytes) return;
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+      const slice = buf.subarray(0, maxOutputBytes - stdoutBytes);
+      stdoutBytes += slice.length;
+      stdout += slice.toString('utf8');
+      if (typeof onProgress === 'function') {
+        try { onProgress({ streamTail: stdout.slice(-400), harnessLabel }); } catch {}
+      }
+    });
+    child.stderr.on('data', (chunk) => {
+      if (stderrBytes >= 16384) return;
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+      const slice = buf.subarray(0, 16384 - stderrBytes);
+      stderrBytes += slice.length;
+      stderr += slice.toString('utf8');
+    });
+
+    child.on('error', (err) => {
+      finish({ ok: false, code: 'HARNESS_SPAWN_ERROR', error: err.message || 'Failed to spawn harness CLI.', harnessLabel, durationMs: Date.now() - started });
+    });
+
+    child.on('close', (code) => {
+      const durationMs = Date.now() - started;
+      if (timedOut) {
+        finish({ ok: false, code: 'HARNESS_TIMEOUT', error: `${harnessLabel} timed out after ${Math.round(timeoutMs / 1000)}s.`, harnessLabel, durationMs });
+        return;
+      }
+      const trimmed = stdout.trim();
+      if (code === 0 && trimmed) {
+        finish({ ok: true, output: trimmed.slice(0, 12000), harnessLabel, binName: path.basename(binPath), durationMs });
+      } else {
+        finish({ ok: false, code: 'HARNESS_EXIT_NONZERO', error: (stderr.trim() || trimmed || `${harnessLabel} exited with code ${code}`).slice(0, 400), harnessLabel, durationMs });
+      }
+    });
+
+    child.stdin.on('error', () => {});
+    if (stdinText) child.stdin.end(stdinText);
+    else child.stdin.end();
+  });
 }
