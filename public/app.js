@@ -346,7 +346,7 @@ function newConversationProviders() {
   const godmodeOn = pol.mode !== 'ask' && (pol.maxAttempts || 0) > 0;
   const allGroup = Array.isArray(state.modelGroups) ? state.modelGroups.find(g => g.id === 'all-smartest') : null;
   const godmodeDefault = godmodeOn
-    ? (RecoveryUI.findVeniceUncensored(live, state.veniceConnectionId, veniceCatalog.models) || RecoveryUI.findOpenRouterGodmode(live))
+    ? (RecoveryUI.findVeniceUncensored?.(live, state.veniceConnectionId, veniceCatalog.models) || RecoveryUI.findOpenRouterGodmode?.(live))
     : null;
   const gemini4Neon = !godmodeOn ? RecoveryUI.findGemini4Neon(live, state.veniceConnectionId, veniceCatalog.models) : null;
   const defaultChoice = preferredProvider || godmodeDefault || gemini4Neon || (allGroup?.providerIds?.length ? allGroup.providerIds[0] : null);
@@ -7016,10 +7016,14 @@ $('#copy-id').addEventListener('click', async () => {
 
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
 window.addEventListener('online', refresh);
-syncPanels();
-applyAppMode(appMode, { persist: false, notify: false });
-syncComposerShortcutHints();
-renderComposer();
+try {
+  syncPanels();
+  applyAppMode(appMode, { persist: false, notify: false });
+  syncComposerShortcutHints();
+  renderComposer();
+} catch (error) {
+  console.error('Initial UI setup error:', error);
+}
 async function initializeSession() {
   const token = new URLSearchParams(location.hash.slice(1)).get('session');
   if (token) {

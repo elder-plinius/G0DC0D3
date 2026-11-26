@@ -264,7 +264,7 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
                 self.connect()
             case .legacy, .incompatible: self.showError("Port \(self.port) is occupied", "The service on this port needs a different runtime. If the previous desktop app is open, quit it and retry, or choose another G0D_PORT.")
             case .absent:
-                do { try self.launchRuntime(); self.waitForRuntime(epoch: epoch, remaining: 200) }
+                do { try self.launchRuntime(); self.waitForRuntime(epoch: epoch, remaining: 450) }
                 catch { self.showError("The runtime could not start", error.localizedDescription) }
             }
         }
@@ -388,12 +388,19 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
         do {
             // A changed session fragment alone is same-document navigation in
             // WebKit: it does not re-run bootstrap or call didFinish. Give each
-            // connection its own document URL so Retry actually reconnects.
+            // connection its own document URL and clear only WebKit's HTTP disk/memory
+            // asset cache (preserving cookies & localStorage) so updated scripts load cleanly.
             let target = try resolvedURL ?? launchURL()
             var components = URLComponents(url: target, resolvingAgainstBaseURL: false)!
             components.queryItems = [URLQueryItem(name: "desktopConnection", value: UUID().uuidString)]
+            guard let finalURL = components.url else { return }
+            let epoch = connectionEpoch
             progress.stopAnimation(nil)
-            webView.load(URLRequest(url: components.url!, cachePolicy: .reloadIgnoringLocalCacheData))
+            let cacheTypes: Set<String> = [WKWebsiteDataTypeDiskCache, WKWebsiteDataTypeMemoryCache]
+            webView.configuration.websiteDataStore.removeData(ofTypes: cacheTypes, modifiedSince: .distantPast) { [weak self] in
+                guard let self = self, self.connectionEpoch == epoch, !self.quitting else { return }
+                self.webView.load(URLRequest(url: finalURL, cachePolicy: .reloadIgnoringLocalCacheData))
+            }
         } catch { showError("The local session could not be opened", error.localizedDescription) }
     }
 
