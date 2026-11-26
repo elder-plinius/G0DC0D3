@@ -38,7 +38,7 @@ export function nativeKeychain(executable, dataDir) {
   function request(operation, provider, value) {
     return new Promise((resolve, reject) => {
       const child = execFile(executable, ['--provider-keychain', operation, scope + '.' + provider], {
-        env: {}, timeout: 30000, maxBuffer: 16384, encoding: 'utf8',
+        env: {}, timeout: 120000, maxBuffer: 16384, encoding: 'utf8',
       }, (error, output) => {
         if (error) reject(new Error('macOS Keychain could not ' + operation + ' this provider key.'));
         else resolve(output);
@@ -259,6 +259,25 @@ export async function createProviderSettings(providers, keychain) {
           }
           const added = cleaned.map(m => provider + ':' + m.replaceAll('/', '-'));
           return { provider, added, registered: models.map(m => provider + ':' + m.replaceAll('/', '-')), storage: 'env' };
+        }
+        const cloneSource = [...providers.values()].find(
+          item => item.baseUrl === profile.endpoint
+            && item.protocol === (profile.protocol || 'openai-chat')
+            && item.available !== false
+            && !item.closed
+            && typeof item.cloneWithModel === 'function'
+        );
+        if (cloneSource) {
+          const added = [];
+          for (const model of cleaned) {
+            const id = provider + ':' + model.replaceAll('/', '-');
+            if (!providers.has(id)) {
+              providers.set(id, cloneSource.cloneWithModel({ id, label: `${model} · ${profile.label}`, model }));
+            }
+            added.push(id);
+          }
+          const allModels = profileModelsFromProviders(provider);
+          return { provider, added, registered: allModels.map(m => provider + ':' + m.replaceAll('/', '-')), storage: 'reference' };
         }
         throw Object.assign(new Error(`Connect a ${profile.label} API key first before adding models.`), { status: 400 });
       });

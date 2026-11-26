@@ -393,6 +393,22 @@ export class HttpProvider {
     Object.defineProperty(this.capabilities,'outputTokens',{value:Object.freeze({initial:maxOutputTokens,max:maxOutputTokensCeiling}),enumerable:true});
   }
   close() { this.closed=true;this.available=false;httpCredentials.delete(this); }
+  cloneWithModel({ id, label, model }) {
+    if (this.closed) throw Object.assign(new Error('Provider connection is closed.'), { status: 400 });
+    const cred = httpCredentials.get(this);
+    return new HttpProvider({
+      id,
+      label: label || `${model} · ${this.label}`,
+      protocol: this.protocol,
+      baseUrl: this.baseUrl,
+      model,
+      ...(cred !== undefined ? { credential: cred } : { apiKeyEnv: this.apiKeyEnv }),
+      headers: { ...this.headers },
+      timeoutMs: this.timeoutMs,
+      maxOutputTokens: this.maxOutputTokens,
+      maxOutputTokensCeiling: this.maxOutputTokensCeiling,
+    });
+  }
   catalogChoice({ id, label, model, limit, supportsReasoning = false, supportsFunctionCalling = false, modelMetadata }) {
     const reasoningFloor = supportsReasoning ? Math.max(this.maxOutputTokens, 16384) : this.maxOutputTokens;
     const initialTokens = Math.min(limit, reasoningFloor);

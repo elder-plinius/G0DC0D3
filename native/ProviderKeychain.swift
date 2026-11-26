@@ -28,6 +28,8 @@ func providerKeychain(_ arguments: [String]) -> Int32 {
         guard !data.isEmpty, data.count <= 16384 else { return 2 }
         let value: [String: Any] = [
             kSecValueData as String: data,
+            kSecAttrLabel as String: "G0DM0D3 Saved API Keys",
+            kSecAttrDescription as String: "Local API key stored on this device by G0DM0D3",
             kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         ]
         var status = SecItemUpdate(item as CFDictionary, value as CFDictionary)

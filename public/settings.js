@@ -984,8 +984,8 @@ async function toggleUltra(task) {
       if (state.veniceConnectionId && !veniceCatalog.models.length) {
         try { await loadVeniceCatalog(); } catch {}
       }
-      const godmodeDefault = RecoveryUI.findVeniceUncensored(liveProviders(), state.veniceConnectionId, veniceCatalog.models)
-        || RecoveryUI.findOpenRouterGodmode(liveProviders());
+      const godmodeDefault = RecoveryUI.findVeniceUncensored?.(liveProviders(), state.veniceConnectionId, veniceCatalog.models)
+        || RecoveryUI.findOpenRouterGodmode?.(liveProviders());
       const gemini4Neon = RecoveryUI.findGemini4Neon(liveProviders(), state.veniceConnectionId, veniceCatalog.models);
       if (enabling) {
         if ((!preferredProvider || preferredProvider === gemini4Neon) && godmodeDefault) {
