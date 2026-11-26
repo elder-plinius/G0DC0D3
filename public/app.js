@@ -5281,6 +5281,16 @@ async function refresh() {
       openrouterCatalogConnection = null;
       openrouterCatalog = { connected: false, models: [], registered: [], warning: '' };
     }
+    // Clear a stale saved preferredProvider on initial connect so the user isn't blocked from chatting if a prior provider is disconnected.
+    if (!hasConnected && preferredProvider) {
+      const liveNow = liveProviders();
+      const staleVenice = catalogId(preferredProvider) && !state.veniceConnectionId;
+      const staleDirect = !catalogId(preferredProvider) && liveNow.length > 0 && !liveNow.some(p => p.id === preferredProvider);
+      if (staleVenice || staleDirect) {
+        preferredProvider = null;
+        try { localStorage.removeItem('g0dc0d3.preferredProvider'); } catch {}
+      }
+    }
     if (selectedId && !state.tasks.some(task => task.id === selectedId)) {
       newConversation();
     }
@@ -6742,7 +6752,10 @@ async function submitApiKey(inputOrKey, feedbackEl, provider = '') {
     const providerName = humanize(result.provider || provider || 'provider');
     const storageNote = result.storage === 'keychain' ? ' Key saved in device keychain.' : '';
     setText(feedbackEl, `Connected ${result.registered.length} ${providerName} model${result.registered.length === 1 ? '' : 's'}.${storageNote}`);
-    if (result.registered.length && !preferredProvider) { preferredProvider = result.registered[0]; try { localStorage.setItem('g0dc0d3.preferredProvider', preferredProvider); } catch {} }
+    if (result.registered.length && (!preferredProvider || !state.providers.some(p => p.id === preferredProvider && p.available !== false))) {
+      preferredProvider = result.registered[0];
+      try { localStorage.setItem('g0dc0d3.preferredProvider', preferredProvider); } catch {}
+    }
     await refresh();
     renderComposer();
     if ($('#settings-dialog').open) { await Promise.all([loadVeniceCatalog(), loadOpenRouterCatalog(), loadServices(), loadModelGroups(selectedModelSort)]); renderModelSettings(); }
@@ -7394,7 +7407,7 @@ async function openModelPicker(scope = selectedId, anchor = document.activeEleme
   $('#model-picker-search').focus();
   await Promise.all([
     loadVeniceCatalog(),
-    state.openrouterConnectionId && !openrouterCatalog.models.length ? loadOpenRouterCatalog() : Promise.resolve(),
+    state.openrouterConnectionId && (openrouterCatalog.stale || openrouterCatalog.models.length <= 1) ? loadOpenRouterCatalog() : Promise.resolve(),
     Array.isArray(state.modelGroups) && state.modelGroups.length ? Promise.resolve() : loadModelGroups()
   ]);
   pickerLoading = false;

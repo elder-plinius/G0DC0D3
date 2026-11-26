@@ -360,7 +360,7 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
         runtimeStdinPipe = stdinPipe
         runtimeProcess = process
         loadingTitle.stringValue = "Starting the portable runtime"
-        loadingDetail.stringValue = "Local state: \(data.path)\nClosing the window keeps this process running. Quit stops the process started by this app."
+        loadingDetail.stringValue = "Local state: \(data.path)\nIf macOS asks for Keychain access, it is only unlocking your own saved API keys on this device — click Always Allow so you won't be asked again."
     }
 
     private func waitForRuntime(epoch: Int, remaining: Int) {

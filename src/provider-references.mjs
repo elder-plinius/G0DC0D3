@@ -59,6 +59,10 @@ function referenceProvider(profile, definition, key) {
         throw error;
       }
     };
+    provider.cloneWithModel = ({ id, label, model }) => {
+      if (provider.closed || !key) throw Object.assign(new Error('Referenced provider is closed.'), { status: 400 });
+      return referenceProvider({ id, provider: profile.provider, model }, definition, key);
+    };
     provider.close = () => { close(); key = null; };
     return provider;
   } catch { throw invalid(); }
