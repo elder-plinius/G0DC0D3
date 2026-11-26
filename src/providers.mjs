@@ -238,6 +238,10 @@ export function catalogMessages(context, { enableTools = false, aliases = null }
       systemContent += `\n\n[Compacted Session Memory — folded prior turns through seq ${ws.compactedBeforeSeq || 0}; continue seamlessly without repeating finished work]\n${handoff.join('\n')}`;
     }
   }
+  const metaBrief = context.task?.routing?.metacognition?.compiledBrief;
+  if (typeof metaBrief === 'string' && metaBrief.trim() && !context.task?.fixtureId) {
+    systemContent += `\n\n${metaBrief.trim().slice(0, 2400)}`;
+  }
   const messages = [{ role: 'system', content: systemContent }, { role: 'user', content: context.task.objective }];
   // Persisted follow-ups survive compaction. Ledger order resolves turns
   // sharing a millisecond, including an edited message after a rewind.

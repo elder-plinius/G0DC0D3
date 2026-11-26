@@ -1682,6 +1682,35 @@ async function executeSlashCommand(raw) {
     openCreate();
     return { handled: true };
   }
+  if (cmd === '/forge') {
+    const promptText = arg.trim();
+    if (!promptText) {
+      toast('Usage: /forge <your prompt> — synthesizes a task-specific Megaprompt into the composer.');
+      return { handled: true };
+    }
+    toast('✦ Forging task-specific Megaprompt…');
+    try {
+      const forged = await api('/api/metacognition/forge', {
+        method: 'POST',
+        body: JSON.stringify({
+          objective: promptText,
+          providerId: task?.providerId || newConversationProviders()[0] || null,
+          effort: task?.effort || draftEffort || 'medium',
+          workspaceKind: task?.workspaceKind || (appMode === 'godcode' ? 'project' : 'conversation'),
+        }),
+      });
+      const input = $('#composer-input');
+      if (input && forged?.compiledBrief) {
+        input.value = `${promptText}\n\n${forged.compiledBrief}`;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.focus();
+      }
+      toast(`✦ Forged ${forged?.domainLabel || 'task'} Megaprompt (${forged?.tier === 'forged' ? `${forged.durationMs}ms` : '0ms smart'}) — review & press Enter.`);
+    } catch (error) {
+      toast(error.message || 'Could not forge Megaprompt.');
+    }
+    return { handled: true };
+  }
   if (cmd === '/pantheon' || cmd === '/swarm') {
     clearInput();
     if (arg && /^(demo|preview)$/i.test(arg.trim())) window.G0DPantheon?.open({ demo: true });
@@ -2639,6 +2668,12 @@ function renderUltraRouterSection() {
       }).join('')}</ol>`
     : '<p class="field-help">Connect a provider or Venice catalog to populate live domain leaderboards.</p>';
   const customJson = JSON.stringify(settings.customBenchmarks || {}, null, 2);
+  const metacogMode = settings.metacognition || 'smart';
+  const metacogModes = [
+    ['off', 'Off', 'Send your raw prompt without metacognitive scaffolding.'],
+    ['smart', 'Smart Framing (0ms)', 'Instant domain × model-family framing, 100% cache-safe (Recommended).'],
+    ['auto_forge', 'Auto-Forge (LLM)', 'Smart framing + live LLM Megaprompt & Arena Judge rubric on complex Turn-1 tasks.']
+  ];
   container.innerHTML = `
     <div class="ultra-router-head">
       <div>
@@ -2649,6 +2684,15 @@ function renderUltraRouterSection() {
     </div>
     <div class="ultra-router-modes" role="radiogroup" aria-label="Ultra-Plinian router mode">
       ${modeCards.map(([id, title, desc]) => `<button type="button" class="ultra-mode-btn ${settings.mode === id ? 'active' : ''}" data-router-mode="${id}" ${ultraRouterBusy ? 'disabled' : ''}><strong>${title}</strong><span>${desc}</span></button>`).join('')}
+    </div>
+    <div class="ultra-metacog-block">
+      <div class="ultra-metacog-head">
+        <strong>✦ Task Metacognition &amp; Megaprompting</strong>
+        <span class="field-help">Calibrates task protocols &amp; Arena judge rubrics to the routed model family (or run <code>/forge &lt;prompt&gt;</code> anytime).</span>
+      </div>
+      <div class="ultra-metacog-modes" role="radiogroup" aria-label="Task metacognition mode">
+        ${metacogModes.map(([id, title, desc]) => `<button type="button" class="ultra-metacog-btn ${metacogMode === id ? 'active' : ''}" data-router-metacog="${id}" ${ultraRouterBusy ? 'disabled' : ''}><strong>${title}</strong><span>${desc}</span></button>`).join('')}
+      </div>
     </div>
     <div class="ultra-router-weights">
       <label class="ultra-weight-field"><span>Capability weight · <strong>${Math.round(w.quality * 100)}%</strong></span><input type="range" min="10" max="90" step="5" value="${Math.round(w.quality * 100)}" data-router-weight="quality"></label>
@@ -3389,7 +3433,9 @@ function renderTimeline(events, total, task) {
       const rKey = `router-${event.id ?? event.seq}`;
       const riskPct = Math.round((rd.refusalRisk || 0) * 100);
       const runners = Array.isArray(rd.runnerUps) ? rd.runnerUps : [];
-      messages.push(`<details class="router-receipt" data-disclosure="${escapeHTML(rKey)}" ${openDetails.has(rKey) ? 'open' : ''}><summary><span class="router-receipt-badge">✦ Ultra-Plinian · ${escapeHTML(rd.domainLabel || rd.domain || 'auto')}</span><span class="router-receipt-summary">${escapeHTML(sel.label || rd.selectedId)}</span><span>Bench ${escapeHTML(sel.benchmarkPrior)} · Elo ${escapeHTML(sel.userElo)} · Comp ${escapeHTML(sel.compliance)}%${riskPct >= 40 ? ` · Risk ${riskPct}%` : ''}</span></summary><div class="router-receipt-body">${[sel, ...runners].map((r, idx) => `<div class="router-receipt-row"><strong>#${idx + 1} ${escapeHTML(r.label || r.id)}</strong><span>Score ${escapeHTML(r.totalScore)} · Bench ${escapeHTML(r.benchmarkPrior)} · Elo ${escapeHTML(r.userElo)} · Comp ${escapeHTML(r.compliance)}%</span></div>`).join('')}</div></details>`);
+      const mc = rd.metacognition;
+      const mcHtml = mc ? `<div class="router-receipt-metacog"><div class="router-receipt-metacog-head"><strong>${escapeHTML(mc.title || '✦ Metacognition Brief')}</strong><span>${escapeHTML(`${mc.tier === 'forged' ? 'LLM Forged' : '0ms Smart'} · ${mc.modelFamily || 'auto'}`)}</span></div>${mc.intentLock ? `<p class="router-receipt-metacog-intent">${escapeHTML(mc.intentLock)}</p>` : ''}${Array.isArray(mc.rubric) && mc.rubric.length ? `<ul class="router-receipt-metacog-rubric">${mc.rubric.slice(0, 4).map(r => `<li>${escapeHTML(r)}</li>`).join('')}</ul>` : ''}</div>` : '';
+      messages.push(`<details class="router-receipt" data-disclosure="${escapeHTML(rKey)}" ${openDetails.has(rKey) ? 'open' : ''}><summary><span class="router-receipt-badge">✦ Ultra-Plinian · ${escapeHTML(rd.domainLabel || rd.domain || 'auto')}${mc ? ` · ${mc.tier === 'forged' ? 'Forged' : 'Framed'}` : ''}</span><span class="router-receipt-summary">${escapeHTML(sel.label || rd.selectedId)}</span><span>Bench ${escapeHTML(sel.benchmarkPrior)} · Elo ${escapeHTML(sel.userElo)} · Comp ${escapeHTML(sel.compliance)}%${riskPct >= 40 ? ` · Risk ${riskPct}%` : ''}</span></summary><div class="router-receipt-body">${[sel, ...runners].map((r, idx) => `<div class="router-receipt-row"><strong>#${idx + 1} ${escapeHTML(r.label || r.id)}</strong><span>Score ${escapeHTML(r.totalScore)} · Bench ${escapeHTML(r.benchmarkPrior)} · Elo ${escapeHTML(r.userElo)} · Comp ${escapeHTML(r.compliance)}%</span></div>`).join('')}${mcHtml}</div></details>`);
     } else if (event.type === 'subagent.completed' && event.data?.ok && event.data?.summary) {
       flush();
       const sa = event.data;
@@ -5124,6 +5170,7 @@ function renderCommands() {
     ] : [
       { kind: 'action', title: 'Toggle Plan Mode', detail: draftPlanMode ? 'Start next chat in Build Mode' : 'Start next chat in read-only Plan Mode', keywords: 'plan build /plan /build', run: () => togglePlanMode(null) },
     ]),
+    { kind: 'action', title: 'Forge Task Megaprompt (/forge)', detail: 'Synthesize a model-calibrated Megaprompt & acceptance rubric in the composer', keywords: 'forge megaprompt metaprompt metacognition ultra /forge', run: () => { const c = $('#composer-input'); if (c) { c.value = c.value.trim() ? `/forge ${c.value.trim()}` : '/forge '; c.focus(); } } },
     { kind: 'action', title: 'Open The Pantheon (Multi-Agent Stage)', detail: 'Visualize parallel subagents, Coding Crews, and Arena races (/pantheon)', keywords: 'pantheon swarm multi agent subagent crew arena constellation stage /pantheon /swarm', run: () => window.G0DPantheon?.open() },
     { kind: 'action', title: 'Open Models & Subscriptions', detail: 'CLI logins, API keys, and local models', keywords: 'claude codex gemini copilot ollama key provider /model', run: () => openSettings('models') },
     ...(window.G0DThemes ? window.G0DThemes.list().map(t => ({
@@ -7071,6 +7118,12 @@ $('#ultra-router-section')?.addEventListener('click', event => {
     });
     return;
   }
+  const metaBtn = event.target.closest('[data-router-metacog]');
+  if (metaBtn) {
+    const metacognition = metaBtn.dataset.routerMetacog;
+    updateUltraRouter({ metacognition }, `Task metacognition set to ${metacognition.replace(/_/g, ' ')}.`);
+    return;
+  }
   const domBtn = event.target.closest('[data-router-domain]');
   if (domBtn) {
     selectedRouterDomain = domBtn.dataset.routerDomain;
@@ -7488,6 +7541,7 @@ window.toast = toast;
     { cmd: '/fixtures', hint: 'Browse test fixtures' },
     { cmd: '/theme', hint: 'Switch UI theme (/theme ancient | celestial | dragons | psychedelic | hacker | minimal | synthwave | volcano)' },
     { cmd: '/settings', hint: 'Open settings' },
+    { cmd: '/forge', hint: 'Forge a task-specific Megaprompt & rubric into the composer (/forge <prompt>)' },
     { cmd: '/pantheon', hint: 'Open The Pantheon live multi-agent constellation & arena stage' },
     { cmd: '/swarm', hint: 'Open The Pantheon multi-agent swarm visualizer' },
     { cmd: '/benchmark', hint: 'Run offline harness diagnostics' },

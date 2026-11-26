@@ -220,6 +220,7 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
         return send(res,200,await runtime.getRouterState());
       }
       if(req.method==='POST' && url.pathname==='/api/router/preview')return send(res,200,await runtime.previewUltraRoute(await readBody(req)));
+      if(req.method==='POST' && url.pathname==='/api/metacognition/forge')return send(res,200,await runtime.forgeMetapromptPreview(await readBody(req)));
       if(req.method==='DELETE' && url.pathname==='/api/router/reset') {
         await readBody(req).catch(()=>({}));
         runtime.resetRouter();
@@ -512,9 +513,18 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
         const task=await createConversationTask(runtime,dataDir,body);
         if (workflowName) runtime.store.updateTask(task.id, current => { current.workflow = workflowName; return current; }, 'workflow.applied', { workflow: workflowName });
         if (routingReceipt) {
+          const metacognition = await runtime.resolveTaskMetacognition({
+            objective: body.objective,
+            decision: routingReceipt,
+            providerId: routingReceipt.selectedId,
+            effort: body.effort || 'medium',
+            workspaceKind: 'conversation',
+            attachments: body.attachments || []
+          }).catch(() => null);
           runtime.store.updateTask(task.id, current => {
             current.routing ||= {};
             current.routing.domain = routingReceipt.domain;
+            if (metacognition) current.routing.metacognition = metacognition;
             current.routing.ultraDecision = {
               mode: routingReceipt.mode,
               domain: routingReceipt.domain,
@@ -522,7 +532,8 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
               refusalRisk: routingReceipt.refusalRisk,
               selected: routingReceipt.selected,
               runnerUps: routingReceipt.ranked.slice(1, 4),
-              summary: routingReceipt.summary
+              summary: routingReceipt.summary,
+              ...(metacognition ? { metacognition } : {})
             };
             return current;
           }, 'router.selected', {
@@ -533,7 +544,8 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
             selectedId: routingReceipt.selectedId,
             selected: routingReceipt.selected,
             runnerUps: routingReceipt.ranked.slice(1, 4),
-            summary: routingReceipt.summary
+            summary: routingReceipt.summary,
+            ...(metacognition ? { metacognition } : {})
           });
         }
         return send(res,201,{task:publicTask(runtime.getTask(task.id),runtime)});

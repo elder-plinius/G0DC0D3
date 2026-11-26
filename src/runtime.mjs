@@ -35,6 +35,13 @@ import {
   routeUltraPlinian,
   buildDomainLeaderboards
 } from './ultra-router.mjs';
+import {
+  buildDomainMetacognition,
+  detectModelFamily,
+  forgeTaskMegaprompt,
+  normalizeMetacognitionMode,
+  shouldAutoForge
+} from './metacognition.mjs';
 import { validateExecution, validateChecks } from './runner.mjs';
 import { SourceChanges } from './source-changes.mjs';
 import { CrewController } from './crew.mjs';
@@ -2907,6 +2914,61 @@ export class Runtime {
       candidates,
       learning: this.getLearning(),
       settings: activeSettings
+    });
+  }
+  async resolveTaskMetacognition({ objective = '', decision = null, providerId = null, effort = 'medium', workspaceKind = 'conversation', files = [], attachments = [], modeOverride = null, signal = null } = {}) {
+    const routerSettings = this.getRouterSettings();
+    const mode = normalizeMetacognitionMode(modeOverride ?? routerSettings.metacognition ?? 'smart');
+    if (mode === 'off') return null;
+    const text = String(objective || '').trim();
+    if (!text) return null;
+    const cls = decision?.domain
+      ? { primaryDomain: decision.domain, secondaryDomain: decision.secondaryDomain || null, refusalRisk: decision.refusalRisk || 0 }
+      : classifyPromptDomain(text, { files, attachments });
+    const targetProvider = providerId ? (this.providers.get(providerId) || this.catalog?.get?.(providerId) || null) : null;
+    const modelFamily = detectModelFamily(targetProvider || providerId || '');
+    if (shouldAutoForge({ objective: text, domain: cls.primaryDomain, effort, isFirstTurn: true, mode })) {
+      const overseer = this._resolveOverseer?.();
+      const architect = overseer?.provider || targetProvider || [...this.providers.values()].find(p => p && p.available !== false && !p.closed && (typeof p.draft === 'function' || typeof p.turn === 'function')) || null;
+      return forgeTaskMegaprompt({
+        objective: text,
+        domain: cls.primaryDomain,
+        modelFamily,
+        targetProvider,
+        architectProvider: architect,
+        effort,
+        workspaceKind,
+        files,
+        attachments,
+        signal,
+        outbound: this.outboundOptions()
+      });
+    }
+    return buildDomainMetacognition({
+      domain: cls.primaryDomain,
+      secondaryDomain: cls.secondaryDomain,
+      refusalRisk: cls.refusalRisk,
+      modelFamily,
+      effort,
+      workspaceKind,
+      providerLabel: targetProvider?.label || providerId || null
+    });
+  }
+  async forgeMetapromptPreview({ objective = '', domain = null, providerId = null, effort = 'medium', workspaceKind = 'conversation' } = {}) {
+    const text = String(objective || '').trim();
+    if (!text) throw fault('INVALID_MESSAGE', 'Provide a prompt to forge.');
+    const targetProvider = providerId ? (this.providers.get(providerId) || this.catalog?.get?.(providerId) || null) : null;
+    const overseer = this._resolveOverseer?.();
+    const architect = overseer?.provider || targetProvider || [...this.providers.values()].find(p => p && p.available !== false && !p.closed && (typeof p.draft === 'function' || typeof p.turn === 'function')) || null;
+    return forgeTaskMegaprompt({
+      objective: text,
+      domain: domain || null,
+      modelFamily: detectModelFamily(targetProvider || architect || ''),
+      targetProvider,
+      architectProvider: architect,
+      effort,
+      workspaceKind,
+      outbound: this.outboundOptions()
     });
   }
   async getRouterState() {

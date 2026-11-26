@@ -20,9 +20,11 @@ export const ROUTER_DOMAINS = Object.freeze([
 
 const DOMAIN_IDS = new Set(ROUTER_DOMAINS.map(d => d.id));
 const VALID_MODES = new Set(['off', 'auto_route', 'auto_arena', 'manual_arena']);
+const VALID_METACOG_MODES = new Set(['off', 'smart', 'auto_forge']);
 
 export const DEFAULT_ROUTER_SETTINGS = Object.freeze({
   mode: 'off', // 'off' | 'auto_route' | 'auto_arena' | 'manual_arena'
+  metacognition: 'smart', // 'off' | 'smart' | 'auto_forge'
   weights: Object.freeze({ quality: 0.72, compliance: 0.20, speed: 0.05, cost: 0.03 }),
   exploration: true,
   domainPins: Object.freeze({}),
@@ -58,6 +60,11 @@ export function normalizeRouterSettings(input = {}, base = DEFAULT_ROUTER_SETTIN
   };
 
   const exploration = input.exploration !== undefined ? Boolean(input.exploration) : (base.exploration !== false);
+  const rawMeta = input.metacognition !== undefined ? String(input.metacognition).trim().toLowerCase() : (base.metacognition || 'smart');
+  if (!VALID_METACOG_MODES.has(rawMeta)) {
+    throw Object.assign(new Error(`Metacognition mode must be one of: ${[...VALID_METACOG_MODES].join(', ')}.`), { code: 'INVALID_ROUTER_SETTINGS', status: 400 });
+  }
+  const metacognition = rawMeta;
 
   const domainPins = { ...(base.domainPins || {}) };
   if (input.domainPins && typeof input.domainPins === 'object' && !Array.isArray(input.domainPins)) {
@@ -97,7 +104,7 @@ export function normalizeRouterSettings(input = {}, base = DEFAULT_ROUTER_SETTIN
     }
   }
 
-  return { mode, weights, exploration, domainPins, customBenchmarks };
+  return { mode, metacognition, weights, exploration, domainPins, customBenchmarks };
 }
 
 export function loadBenchmarkMatrix(customBenchmarks = {}) {
@@ -162,7 +169,7 @@ export function classifyPromptDomain(objective = '', { files = [], attachments =
   }
 
   // SWE & Systems coding
-  const sweHits = (lower.match(/\b(?:refactor|debug|fix (?:the |this )?bug|unit test|integration test|api|endpoint|server|database|sql|sqlite|postgres\w*|redis|docker|kubernetes|git|pr|diff|commit|typescript|javascript|python|rust|golang|swift|node\.?js|cli|sdk|module|function|class|race condition|memory leak|benchmark|compiler|parser|architecture|backend)\b|\bc\+\+(?=\s|$|[,.;:!?)/])/g) || []).length;
+  const sweHits = (lower.match(/\b(?:refactor|debug|fix (?:the |this )?bug|unit test|integration test|api|endpoint|server|database|sql|sqlite|postgres\w*|redis|docker|kubernetes|git|pr|diff|commit|typescript|javascript|python|rust|golang|swift|node\.?js|cli|sdk|module|function|class|race condition|memory leak|benchmark|compiler|parser|architecture|backend|distributed|idempoten\w*|event[- ]?sourc\w*|microservice\w*|middleware|schema|webhook|concurrency|lock[- ]?free)\b|\bc\+\+(?=\s|$|[,.;:!?)/])/g) || []).length;
   if (sweHits > 0) {
     scores.swe_coding += 28 + Math.min(60, sweHits * 14);
     signals.push(`swe_terms:${sweHits}`);

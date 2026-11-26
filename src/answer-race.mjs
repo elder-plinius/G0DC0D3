@@ -5,6 +5,7 @@ import { detectRefusal } from './routing.mjs';
 import { reframe as reframeObjective } from './reframe.mjs';
 import { isCatalogModel } from './venice-catalog.mjs';
 import { classifyPromptDomain } from './ultra-router.mjs';
+import { formatJudgeRubricBlock } from './metacognition.mjs';
 
 function resolveRaceModel(id, catalog, providers) {
   if (typeof id !== 'string' || !id) return null;
@@ -262,13 +263,14 @@ export async function runAnswerRace(runtime, task, epoch, signal) {
   if (latest.calls>=latest.policy.maxCalls) return budget();
   if (randomInt(2)) drafts.reverse();
   const document={conversation:history.slice(1),drafts:drafts.map((draft,index)=>({id:['A','B'][index],text:draft.response.text}))};
+  const judgeSystem = judging + formatJudgeRubricBlock(task.routing?.metacognition);
   reserve([judge.id],'grade');
-  let graded=await call(judge,[{role:'system',content:judging},{role:'user',content:JSON.stringify(document)}],judgeTokenBound(judge),'grade');
+  let graded=await call(judge,[{role:'system',content:judgeSystem},{role:'user',content:JSON.stringify(document)}],judgeTokenBound(judge),'grade');
   if (!current() || superseded()) return;
   if (graded.response?.code === 'VENICE_OUTPUT_LIMIT' && godmodeOn && runtime.getTask(id).calls < runtime.getTask(id).policy.maxCalls && (judge.maxOutputTokensCeiling || 0) > judgeTokenBound(judge)) {
     const boostedJudge = Math.min(judge.maxOutputTokensCeiling, 16384);
     reserve([judge.id], 'grade');
-    graded = await call(judge, [{ role: 'system', content: judging }, { role: 'user', content: JSON.stringify(document) }], boostedJudge, 'grade');
+    graded = await call(judge, [{ role: 'system', content: judgeSystem }, { role: 'user', content: JSON.stringify(document) }], boostedJudge, 'grade');
     if (!current() || superseded()) return;
   }
   const judgeFailure=incomplete([graded]);

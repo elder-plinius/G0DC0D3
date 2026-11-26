@@ -337,6 +337,7 @@ export function taskContextData(context) {
     strategyGuidance: Object.hasOwn(RECOVERY_STRATEGIES, strategy || 'continue') ? RECOVERY_STRATEGIES[strategy || 'continue'] : 'This strategy label has no built-in procedure. Continue from the current evidence while preserving the owner contract.',
     recovery: task.recoverySummary || null,
     ...(task.overseerGuidance ? { overseerGuidance: String(task.overseerGuidance).slice(0, 600) } : {}),
+    ...(task.routing?.metacognition?.compiledBrief && !task.fixtureId ? { metacognitionBrief: String(task.routing.metacognition.compiledBrief).slice(0, 2400) } : {}),
     task: { id: task.id, calls: task.calls, recoveries: task.recoveries, remainingCalls: context.remainingCalls,
       contractVersion: task.contractVersion, snapshotHash: context.snapshotHash, workspaceKind: task.workspaceKind || 'project',
       planMode: Boolean(task.planMode),
