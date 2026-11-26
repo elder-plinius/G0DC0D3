@@ -1,0 +1,486 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#171817">
+  <title>GODMODƎ</title>
+  <link id="brand-icon" rel="icon" type="image/svg+xml" href="/lysios-mark-canonical-ink.svg">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/workspace.css">
+  <link rel="stylesheet" href="/themes.css">
+  <link rel="stylesheet" href="/vendor/hljs-theme.css">
+  <script src="/vendor/highlight.min.js"></script>
+  <script src="/vendor/hljs-javascript.min.js"></script>
+  <script src="/vendor/hljs-typescript.min.js"></script>
+  <script src="/vendor/hljs-python.min.js"></script>
+  <script src="/vendor/hljs-bash.min.js"></script>
+  <script src="/vendor/hljs-json.min.js"></script>
+  <script src="/vendor/hljs-css.min.js"></script>
+  <script src="/vendor/hljs-xml.min.js"></script>
+  <script src="/vendor/hljs-yaml.min.js"></script>
+  <script src="/vendor/hljs-sql.min.js"></script>
+  <script src="/vendor/hljs-go.min.js"></script>
+  <script src="/vendor/hljs-rust.min.js"></script>
+  <script src="/vendor/hljs-dockerfile.min.js"></script>
+  <script src="/vendor/hljs-markdown.min.js"></script>
+  <script src="/vendor/hljs-extra.js"></script>
+  <script src="/message-format.js" defer></script>
+  <script src="/mermaid-lite.js" defer></script>
+  <script src="/file-preview.js" defer></script>
+  <script src="/recovery.js" defer></script>
+  <script src="/app.js" defer></script>
+  <script src="/conversation-controls.js" defer></script>
+  <script src="/settings.js" defer></script>
+  <script src="/themes.js" defer></script>
+  <script src="/setup.js" defer></script>
+  <link rel="stylesheet" href="/desktop.css">
+  <script src="/prompt-commands.js" defer></script>
+  <script src="/desktop.js" defer></script>
+  <script src="/dictation.js" defer></script>
+</head>
+<body>
+  <canvas id="theme-canvas" aria-hidden="true"></canvas>
+  <div id="theme-overlay" aria-hidden="true"></div>
+  <a class="skip-link" href="#main-content">Skip to workspace</a>
+  <div id="theme-popover" class="theme-popover hidden" role="dialog" aria-label="Choose theme">
+    <div class="theme-popover-head">
+      <div><strong>Themes</strong> <small>10 presets · instant preview</small></div>
+      <button type="button" class="icon-button" data-close-theme-popover aria-label="Close theme picker">×</button>
+    </div>
+    <div id="theme-popover-grid" class="theme-popover-grid"></div>
+  </div>
+  <div id="ultra-popover" class="ultra-popover hidden" role="dialog" aria-label="Ultra-Plinian mode"></div>
+  <div id="effort-popover" class="ultra-popover effort-popover hidden" role="dialog" aria-label="Thinking effort"></div>
+  <button type="button" id="sidebar-backdrop" class="sidebar-backdrop hidden" aria-label="Close sidebar" tabindex="-1"></button>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar" aria-label="Projects and conversations">
+      <a class="brand" href="/" id="sidebar-brand" aria-label="GODMODƎ home">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-name wordmark" id="sidebar-brand-wordmark" role="img" aria-label="GodMode">GODMODƎ</span>
+      </a>
+      <div class="mode-switcher" id="app-mode-switcher" role="tablist" aria-label="Switch between GODMODƎ chat and GODCODƎ workspace">
+        <button type="button" class="mode-switch-tab active" data-app-mode="godmode" role="tab" aria-selected="true" title="GODMODƎ — Sovereign local chat, browser &amp; live canvas (⌘⇧G)"><span class="wordmark" role="img" aria-label="GodMode">GODMODƎ</span></button>
+        <button type="button" class="mode-switch-tab" data-app-mode="godcode" role="tab" aria-selected="false" title="GODCODƎ — Autonomous coding workspace, repos &amp; git worktrees (⌘⇧G)"><span class="wordmark" role="img" aria-label="GodCode">GODCODƎ</span></button>
+      </div>
+      <button type="button" id="new-thread" class="new-thread-button" aria-label="New conversation"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg><span id="new-thread-label">New</span></button>
+      <button type="button" id="open-worktrees" class="sidebar-link godcode-only"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="6" cy="5" r="2"/><circle cx="14" cy="5" r="2"/><circle cx="10" cy="15" r="2"/><path d="M6 7v2a3 3 0 0 0 3 3h2a3 3 0 0 0 3-3V7M10 12v1"/></svg><span>Git Worktrees</span></button>
+      <button type="button" class="sidebar-link command-trigger" id="command-open" aria-haspopup="dialog" aria-keyshortcuts="Meta+K Control+K"><svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg><span>Search</span><kbd>⌘ K</kbd></button>
+      <input id="task-search" type="search" class="hidden" placeholder="Search tasks" aria-label="Find a task" tabindex="-1">
+      <div class="sidebar-section-title"><span id="sidebar-list-label">Chats</span><span id="task-count" class="number-badge">0</span></div>
+      <div class="task-list" id="task-list"><p class="sidebar-empty">Opening your workspace…</p></div>
+      <div class="sidebar-bottom">
+        <button class="sidebar-link" type="button" id="theme-toggle" aria-label="Choose theme"><svg viewBox="0 0 20 20" aria-hidden="true" id="theme-icon-dark"><circle cx="10" cy="10" r="5"/><path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.93 4.93l1.41 1.41M13.66 13.66l1.41 1.41M4.93 15.07l1.41-1.41M13.66 6.34l1.41-1.41"/></svg><svg viewBox="0 0 20 20" aria-hidden="true" id="theme-icon-light" class="hidden"><path d="M13.4 3.6a6 6 0 1 0 3 3A7 7 0 0 1 13.4 3.6z"/></svg><span id="theme-label">Light mode</span></button>
+        <button class="sidebar-link" type="button" id="settings-open"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h14"/><circle cx="7" cy="5" r="2"/><circle cx="13" cy="10" r="2"/><circle cx="8" cy="15" r="2"/></svg><span>Settings</span></button>
+        <button class="sidebar-link" type="button" id="about-open"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="M10 9v5M10 6v.5"/></svg><span>About</span><span class="version-label" id="version-label">v0.2.0</span></button>
+      </div>
+    </aside>
+    <div id="sidebar-splitter" class="panel-splitter sidebar-splitter" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" title="Drag to resize sidebar · Double-click to reset" tabindex="0"></div>
+
+    <header class="app-header">
+      <button type="button" class="icon-button header-icon" id="sidebar-toggle" aria-label="Toggle sidebar" aria-controls="sidebar" aria-expanded="true" title="Toggle sidebar"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3" width="15" height="14" rx="2"/><path d="M7.5 3v14"/></svg></button>
+      <div class="header-context"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 5h5l2 2h8v9h-15z"/></svg><span id="workspace-context">Local workspace</span><span class="header-slash">/</span><span id="workspace-subcontext">New conversation</span></div>
+      <div class="header-actions"><button type="button" class="button button-quiet header-services-btn" id="header-services-btn" title="Connected coding & AI services"><span class="svc-dot svc-dot-muted" id="header-services-dot" aria-hidden="true"></span><span id="header-services-label">Services</span></button><span class="connection" id="connection" role="status"><span class="connection-dot"></span><span>Connecting</span></span><button type="button" class="button button-quiet header-palette-btn" id="header-command-open" aria-haspopup="dialog" aria-keyshortcuts="Meta+K Control+K" title="Command palette (⌘K)"><kbd>⌘K</kbd></button><button type="button" class="button button-quiet details-button" id="inspector-toggle" aria-label="Toggle task details" aria-controls="inspector" aria-expanded="false"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h14"/><circle cx="7" cy="5" r="2"/><circle cx="13" cy="10" r="2"/><circle cx="8" cy="15" r="2"/></svg><span>Details</span></button></div>
+    </header>
+
+    <main id="main-content" class="workspace" tabindex="-1">
+      <div class="inline-error hidden" id="global-error" role="alert"></div>
+      <div class="workspace-notice hidden" id="workspace-expired" role="status">This workspace has expired. The conversation is read-only.</div>
+      <div class="workspace-loading" id="initial-loading"><span class="spinner"></span><p>Opening the workspace</p></div>
+      <section class="welcome hidden" id="welcome">
+        <div class="welcome-banner">
+          <div class="welcome-mark" aria-hidden="true">
+            <span class="welcome-logo"></span>
+            <svg class="ultra-volcano" viewBox="0 0 360 190" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Ultra-Plinian volcanic eruption">
+              <defs>
+                <radialGradient id="volc-glow" cx="50%" cy="62%" r="48%">
+                  <stop offset="0%" stop-color="#ffe49e" stop-opacity="0.58"/>
+                  <stop offset="32%" stop-color="#ff6e42" stop-opacity="0.32"/>
+                  <stop offset="68%" stop-color="#e11d74" stop-opacity="0.12"/>
+                  <stop offset="100%" stop-color="#e11d74" stop-opacity="0"/>
+                </radialGradient>
+                <linearGradient id="volc-plume-outer" x1="180" y1="8" x2="180" y2="112" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stop-color="#3c223c" stop-opacity="0.52"/>
+                  <stop offset="55%" stop-color="#7c2848" stop-opacity="0.62"/>
+                  <stop offset="100%" stop-color="#ff7846" stop-opacity="0.48"/>
+                </linearGradient>
+                <linearGradient id="volc-plume-inner" x1="180" y1="22" x2="180" y2="108" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stop-color="#ff9357" stop-opacity="0.22"/>
+                  <stop offset="52%" stop-color="#ff5d78" stop-opacity="0.58"/>
+                  <stop offset="100%" stop-color="#fff0b5" stop-opacity="0.92"/>
+                </linearGradient>
+                <linearGradient id="volc-jet" x1="180" y1="28" x2="180" y2="110" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stop-color="#ff6a88" stop-opacity="0"/>
+                  <stop offset="38%" stop-color="#ff994f" stop-opacity="0.88"/>
+                  <stop offset="82%" stop-color="#ffe28a" stop-opacity="1"/>
+                  <stop offset="100%" stop-color="#ffffff" stop-opacity="1"/>
+                </linearGradient>
+                <linearGradient id="volc-left-lit" x1="138" y1="92" x2="54" y2="182" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stop-color="#ff6a7b"/>
+                  <stop offset="34%" stop-color="#b43757"/>
+                  <stop offset="72%" stop-color="#48203a"/>
+                  <stop offset="100%" stop-color="#221424"/>
+                </linearGradient>
+                <linearGradient id="volc-left-shadow" x1="164" y1="98" x2="108" y2="184" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stop-color="#5d233f"/>
+                  <stop offset="55%" stop-color="#281628"/>
+                  <stop offset="100%" stop-color="#16111a"/>
+                </linearGradient>
+                <linearGradient id="volc-right-lit" x1="212" y1="94" x2="308" y2="182" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stop-color="#f25777"/>
+                  <stop offset="38%" stop-color="#7e284b"/>
+                  <stop offset="78%" stop-color="#2e182d"/>
+                  <stop offset="100%" stop-color="#19121e"/>
+                </linearGradient>
+                <linearGradient id="volc-center-face" x1="180" y1="96" x2="180" y2="184" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stop-color="#3c1a2e"/>
+                  <stop offset="45%" stop-color="#1f1422"/>
+                  <stop offset="100%" stop-color="#121017"/>
+                </linearGradient>
+                <linearGradient id="volc-lava" x1="180" y1="96" x2="180" y2="178" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stop-color="#fff4c2"/>
+                  <stop offset="28%" stop-color="#ffbb4d"/>
+                  <stop offset="68%" stop-color="#ff5668"/>
+                  <stop offset="100%" stop-color="#b81d5c" stop-opacity="0.1"/>
+                </linearGradient>
+                <linearGradient id="volc-caldera" x1="154" y1="100" x2="206" y2="100" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stop-color="#ff5a78"/>
+                  <stop offset="30%" stop-color="#ffbe55"/>
+                  <stop offset="50%" stop-color="#fff7d6"/>
+                  <stop offset="70%" stop-color="#ffbe55"/>
+                  <stop offset="100%" stop-color="#ff5a78"/>
+                </linearGradient>
+                <linearGradient id="volc-horizon" x1="20" y1="184" x2="340" y2="184" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stop-color="#ff5a78" stop-opacity="0"/>
+                  <stop offset="24%" stop-color="#ff5a78" stop-opacity="0.65"/>
+                  <stop offset="50%" stop-color="#ffda83" stop-opacity="0.95"/>
+                  <stop offset="76%" stop-color="#ff5a78" stop-opacity="0.65"/>
+                  <stop offset="100%" stop-color="#ff5a78" stop-opacity="0"/>
+                </linearGradient>
+              </defs>
+              <!-- Atmospheric volcanic halo -->
+              <ellipse class="v-halo" cx="180" cy="108" rx="145" ry="72" fill="url(#volc-glow)"/>
+              <!-- Plinian pine-tree eruption ash crown & rising column -->
+              <g class="v-plume">
+                <path d="M158 104 C150 82 132 70 104 62 C78 55 72 34 96 24 C114 16 134 22 146 14 C162 4 198 4 214 14 C226 22 246 16 264 24 C288 34 282 55 256 62 C228 70 210 82 202 104 Z" fill="url(#volc-plume-outer)"/>
+                <path d="M164 104 C158 84 144 68 124 56 C108 46 112 30 134 26 C148 24 162 16 180 16 C198 16 212 24 226 26 C248 30 252 46 236 56 C216 68 202 84 196 104 Z" fill="url(#volc-plume-inner)"/>
+                <!-- Backlit plume rim arcs -->
+                <path d="M104 58 C126 52 144 46 158 34" stroke="#ff9a5a" stroke-opacity="0.42" stroke-width="1.4" stroke-linecap="round"/>
+                <path d="M256 58 C234 52 216 46 202 34" stroke="#ff729a" stroke-opacity="0.42" stroke-width="1.4" stroke-linecap="round"/>
+                <!-- Central incandescent eruption jet -->
+                <path class="v-jet" d="M167 104 C170 76 173 48 180 26 C187 48 190 76 193 104 Z" fill="url(#volc-jet)"/>
+                <!-- Volcanic lightning inside the Plinian plume -->
+                <path class="v-bolt v-bolt-1" d="M152 38 L143 52 L150 54 L139 70" stroke="#fff4cc" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                <path class="v-bolt v-bolt-2" d="M210 34 L218 48 L211 51 L222 66" stroke="#ffd48a" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"/>
+              </g>
+              <!-- Distant shoulder peaks for monumental scale -->
+              <polygon points="18,184 90,136 136,184" fill="#1e1522" opacity="0.88"/>
+              <polygon points="342,184 270,136 224,184" fill="#18121d" opacity="0.9"/>
+              <!-- Main faceted obsidian Mount Vesuvius monolith -->
+              <polygon points="44,184 148,100 160,104 128,184" fill="url(#volc-left-lit)"/>
+              <polygon points="148,100 162,104 144,184 96,184" fill="url(#volc-left-shadow)"/>
+              <polygon points="316,184 212,100 200,104 232,184" fill="url(#volc-right-lit)"/>
+              <polygon points="160,104 180,108 200,104 242,184 118,184" fill="url(#volc-center-face)"/>
+              <!-- Crisp ridge rim-lighting -->
+              <path d="M46 183 L148 100 L160 104" stroke="#ff8fa3" stroke-opacity="0.72" stroke-width="1.2" stroke-linejoin="round"/>
+              <path d="M314 183 L212 100 L200 104" stroke="#ff6d8d" stroke-opacity="0.52" stroke-width="1.1" stroke-linejoin="round"/>
+              <path d="M162 106 L142 183 M198 106 L220 183" stroke="#ffffff" stroke-opacity="0.09" stroke-width="1"/>
+              <!-- Blazing molten caldera lip -->
+              <path class="v-caldera" d="M150 100 Q180 112 210 100 Q180 93 150 100 Z" fill="url(#volc-caldera)"/>
+              <!-- Pulsing molten lava rivers down the obsidian fissures -->
+              <path class="v-lava v-lava-1" d="M178 104 C174 120 166 128 168 142 C170 156 156 168 150 182" stroke="url(#volc-lava)" stroke-width="2.6" stroke-linecap="round"/>
+              <path class="v-lava v-lava-2" d="M184 105 C190 120 198 130 194 146 C191 158 203 169 211 182" stroke="url(#volc-lava)" stroke-width="2.2" stroke-linecap="round"/>
+              <path class="v-lava v-lava-3" d="M161 103 C148 118 134 130 122 146 C113 158 104 166 94 178" stroke="url(#volc-lava)" stroke-width="1.5" stroke-linecap="round" stroke-opacity="0.82"/>
+              <path class="v-lava v-lava-4" d="M199 103 C214 118 228 132 242 152" stroke="url(#volc-lava)" stroke-width="1.35" stroke-linecap="round" stroke-opacity="0.72"/>
+              <!-- Animated rising molten embers & sparks -->
+              <g class="v-embers">
+                <circle class="v-ember v-e1" cx="174" cy="90" r="2.2" fill="#fff2b8"/>
+                <circle class="v-ember v-e2" cx="187" cy="86" r="1.9" fill="#ffbe5c"/>
+                <circle class="v-ember v-e3" cx="160" cy="82" r="1.6" fill="#ff738f"/>
+                <circle class="v-ember v-e4" cx="201" cy="80" r="1.7" fill="#ffd479"/>
+                <circle class="v-ember v-e5" cx="145" cy="70" r="1.4" fill="#ff9a5a"/>
+                <circle class="v-ember v-e6" cx="218" cy="68" r="1.5" fill="#ff6e8a"/>
+                <circle class="v-ember v-e7" cx="181" cy="74" r="2.1" fill="#ffffff"/>
+                <circle class="v-ember v-e8" cx="126" cy="54" r="1.3" fill="#ffcf77"/>
+                <circle class="v-ember v-e9" cx="236" cy="50" r="1.3" fill="#ff8468"/>
+              </g>
+              <!-- Fiery molten horizon line -->
+              <rect x="20" y="183" width="320" height="2" rx="1" fill="url(#volc-horizon)"/>
+            </svg>
+          </div>
+          <h1 id="welcome-headline">What can we do<span class="welcome-punctuation">?</span></h1>
+          <p class="welcome-mode-sub hidden" id="welcome-godcode-sub">Autonomous engineering workspace — attach a Git repo, run isolated worktree branches, edit files, and run tests.</p>
+          <div class="godcode-launcher godcode-only" id="godcode-launcher">
+            <button type="button" class="godcode-launch-btn" id="godcode-open-repo"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 5h5l2 2h8v9h-15z"/></svg><span>Open Repository</span></button>
+            <button type="button" class="godcode-launch-btn" id="godcode-open-worktrees"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="6" cy="5" r="2"/><circle cx="14" cy="5" r="2"/><circle cx="10" cy="15" r="2"/><path d="M6 7v2a3 3 0 0 0 3 3h2a3 3 0 0 0 3-3V7M10 12v1"/></svg><span>Worktrees &amp; Diff Race</span></button>
+          </div>
+        </div>
+        <div class="welcome-setup hidden" id="welcome-setup">
+          <form id="welcome-key-form" autocomplete="off">
+            <label for="welcome-key-input">Provider API key</label>
+            <p id="welcome-key-help">Paste an API key (Anthropic, OpenAI, Gemini, OpenRouter, Nous, Venice) or connect a CLI subscription in Settings → Models.</p>
+            <div class="api-key-row"><input id="welcome-key-input" type="password" aria-describedby="welcome-key-help" placeholder="sk-ant-…, sk-…, AIza…, sk-or-v1-…" autocomplete="off" spellcheck="false" maxlength="512"><button type="submit" class="button button-primary">Connect</button></div>
+            <p class="form-feedback" id="welcome-key-feedback" role="status"></p>
+          </form>
+        </div>
+      </section>
+
+      <section class="task-workspace hidden" id="task-workspace" aria-label="Selected task">
+        <div class="task-heading">
+          <div class="task-title-line"><h1 id="selected-title" title="Double-click to rename"></h1><button type="button" class="icon-button title-rename-btn" id="rename-task-btn" aria-label="Rename conversation" title="Rename conversation (or double-click title)"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M13.5 3.5a2.1 2.1 0 0 1 3 3L7 16l-4 1 1-4 9.5-9.5Z"/></svg></button><span id="selected-status"></span></div>
+          <div class="task-meta-strip hidden" id="task-meta-strip" aria-label="Task status summary"></div>
+        </div>
+        <div class="task-toolbar"><div class="task-controls" id="task-controls"></div></div>
+        <section class="crew-panel hidden" id="crew-panel" aria-label="Coding crew"></section>
+        <nav class="workspace-tabs" role="tablist" aria-label="Task views">
+          <button class="workspace-tab active" type="button" role="tab" data-tab="timeline" aria-controls="panel-timeline" aria-selected="true">Conversation</button>
+          <button class="workspace-tab" type="button" role="tab" data-tab="changes" aria-controls="panel-changes" aria-selected="false" tabindex="-1">Changes <span id="diff-count">0</span></button>
+          <button class="workspace-tab" type="button" role="tab" data-tab="files" aria-controls="panel-files" aria-selected="false" tabindex="-1">Files <span id="file-count">0</span></button>
+          <button class="workspace-tab" type="button" role="tab" data-tab="commands" aria-controls="panel-commands" aria-selected="false" tabindex="-1">Commands <span id="command-count">0</span></button>
+          <button class="workspace-tab" type="button" role="tab" data-tab="activity" aria-controls="panel-activity" aria-selected="false" tabindex="-1">Activity <span id="event-count">0</span></button><span class="feed-label" id="feed-label"></span>
+        </nav>
+        <div class="task-progress hidden" id="task-progress" role="progressbar" aria-label="Task progress"><div class="task-progress-bar"></div></div>
+        <div class="task-content" id="task-content" tabindex="0" role="region" aria-label="Conversation content">
+          <div class="tab-panel conversation-panel" role="tabpanel" aria-label="Conversation" id="panel-timeline"></div>
+          <div class="tab-panel hidden" role="tabpanel" aria-label="Changes" id="panel-changes"></div>
+          <div class="tab-panel hidden" role="tabpanel" aria-label="Files" id="panel-files"></div>
+          <div class="tab-panel hidden" role="tabpanel" aria-label="Commands" id="panel-commands"></div>
+          <div class="tab-panel hidden" role="tabpanel" aria-label="Activity" id="panel-activity"></div>
+        </div>
+        <button type="button" class="jump-latest hidden" id="jump-latest" aria-controls="task-content">↓ Jump to latest</button>
+      </section>
+
+      <section class="composer-shell" id="composer-shell" aria-label="Message G0DM0D3">
+        <div class="plan-ready-banner hidden" id="plan-ready-banner" role="region" aria-label="Plan review">
+          <div class="plan-ready-copy">
+            <span class="plan-ready-badge">Plan Ready</span>
+            <p id="plan-ready-text">Plan ready — refine with a follow-up, or approve to switch to Build Mode and execute.</p>
+          </div>
+          <div class="plan-ready-actions">
+            <button type="button" class="button button-quiet" id="plan-keep-refining">Keep Refining</button>
+            <button type="button" class="button button-primary" id="plan-approve-build">Approve &amp; Build →</button>
+          </div>
+        </div>
+        <div class="approval-banner hidden" id="approval-banner" role="alertdialog" aria-labelledby="approval-title" aria-describedby="approval-reason">
+          <div class="approval-banner-main">
+            <div class="approval-banner-top">
+              <span class="approval-badge" id="approval-title">Approval required</span>
+              <code class="approval-tool" id="approval-tool"></code>
+              <span class="approval-risk hidden" id="approval-risk"></span>
+            </div>
+            <code class="approval-target hidden" id="approval-target"></code>
+            <p class="approval-reason" id="approval-reason"></p>
+          </div>
+          <div class="approval-banner-actions">
+            <button type="button" class="button button-primary" id="approval-once" data-approval-decision="once">Allow once</button>
+            <button type="button" class="button button-secondary hidden" id="approval-always-pattern" data-approval-decision="always_pattern" title="Allow matching commands/paths in this chat">Allow pattern</button>
+            <button type="button" class="button button-secondary" id="approval-always" data-approval-decision="always" title="Allow this exact tool call and arguments in this chat">Always allow this call</button>
+            <button type="button" class="button button-danger" id="approval-deny" data-approval-decision="deny">Deny</button>
+          </div>
+        </div>
+        <details class="todo-strip hidden" id="todo-strip" open aria-label="Agent todo checklist">
+          <summary class="todo-strip-summary">
+            <span class="todo-strip-title" id="todo-strip-title">Plan progress: 0/0 done</span>
+            <span class="todo-strip-active" id="todo-strip-active"></span>
+            <span class="details-caret" aria-hidden="true">⌄</span>
+          </summary>
+          <ul class="todo-strip-list" id="todo-strip-list"></ul>
+        </details>
+        <div class="autocomplete-popup hidden" id="autocomplete-popup" role="listbox" aria-label="Suggestions"></div>
+        <form id="composer-form" class="composer-form">
+          <div id="composer-splitter" class="panel-splitter-h composer-splitter" role="separator" aria-orientation="horizontal" aria-label="Resize message input" title="Drag up or down to resize input · Double-click to auto-size" tabindex="0"></div>
+          <div class="conversation-controls"><label id="composer-delivery-label" hidden>While working <select id="composer-delivery" aria-label="Delivery of follow-up messages"><option value="queue">Queue next turn</option><option value="steer">Steer current turn</option></select></label><button type="button" class="button button-quiet" id="composer-parameters" aria-haspopup="dialog">Model controls</button><span id="composer-delivery-help"></span></div>
+          <div class="composer-mentions hidden" id="composer-mentions" role="list" aria-label="Referenced files"></div>
+          <div class="composer-attachments hidden" id="composer-attachments" role="list" aria-label="Attached files and images"></div>
+          <input type="file" id="composer-image-input" accept="image/png,image/jpeg,image/webp,image/gif,.txt,.md,.json,.csv,.tsv,.xml,.yaml,.yml,.toml,.ini,.log,.html,.htm,.css,.js,.mjs,.ts,.tsx,.jsx,.py,.rs,.go,.java,.c,.cpp,.h,.swift,.sh,.sql,.pdf" multiple hidden>
+          <div class="composer-entry">
+            <label class="visually-hidden" for="composer-input">Message</label>
+            <textarea role="combobox" aria-autocomplete="list" aria-controls="autocomplete-popup" aria-expanded="false" id="composer-input" rows="2" maxlength="30000" placeholder="Ask anything…" aria-describedby="composer-hint composer-count composer-keys" title="Press / to focus. Enter to send. Shift + Enter for a new line."></textarea>
+            <kbd class="composer-shortcut" aria-hidden="true">/</kbd>
+          </div>
+          <span id="composer-count" class="composer-count hidden"></span>
+          <div class="composer-toolbar"><div class="composer-options" id="composer-options"><button type="button" class="composer-option godcode-only composer-secondary" id="composer-project"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 5h5l2 2h8v9h-15z"/></svg><span><span id="composer-code-prefix" class="hidden"><span class="wordmark" role="img" aria-label="GodCode">GODCODƎ</span> · </span><span id="composer-project-label">Choose project</span></span><span aria-hidden="true">⌄</span></button><button type="button" class="composer-option" id="composer-model" aria-haspopup="dialog" aria-expanded="false" aria-controls="model-picker"><span class="model-spark" aria-hidden="true">✧</span><span id="composer-model-label">Choose model</span><span aria-hidden="true">⌄</span></button><button type="button" id="composer-plan-mode" class="composer-option plan-mode-switch godcode-only composer-secondary" role="switch" aria-checked="false" aria-label="Toggle Plan and Build mode" title="Toggle read-only Plan Mode (/plan) and Build Mode (/build)"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3.5" y="3" width="13" height="14" rx="2"/><path d="M6.5 7.5h7M6.5 10.5h7M6.5 13.5h4.5"/></svg><span id="composer-plan-label">Build</span></button><button type="button" id="composer-effort" class="composer-option effort-switch" aria-haspopup="dialog" aria-expanded="false" aria-controls="effort-popover" title="Thinking &amp; planning effort (/effort)" aria-label="Thinking effort"><span id="composer-effort-icon" aria-hidden="true">◔</span><span id="composer-effort-label">Medium</span><span aria-hidden="true">⌄</span></button><button type="button" id="composer-ultra" class="composer-option ultra-switch composer-secondary" role="switch" aria-checked="true" aria-label="GODMODƎ recovery"><span id="composer-ultra-label" class="wordmark">GODMODƎ</span><span id="composer-ultra-state">ENABLED</span></button><button type="button" class="composer-option composer-secondary" id="composer-race" aria-haspopup="dialog" aria-expanded="false" aria-controls="ultra-popover" title="Ultra-Plinian mode" aria-label="Ultra-Plinian">ULTRA-PLINIAN</button><button type="button" class="composer-option composer-permissions godcode-only composer-secondary hidden" id="composer-permissions" title="Command and network permissions"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m10 2 6 3v5c0 4-6 8-6 8s-6-4-6-8V5z"/></svg><span id="composer-permissions-label">Permissions</span></button></div><button type="button" class="icon-button composer-options-toggle" id="composer-options-toggle" aria-expanded="false" aria-controls="composer-options" aria-label="Show composer options" title="Show more composer options"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 6h14M3 10h14M3 14h14"/><circle cx="7" cy="6" r="1.75"/><circle cx="13" cy="10" r="1.75"/><circle cx="8" cy="14" r="1.75"/></svg><span class="composer-options-dot" aria-hidden="true"></span></button><button type="button" class="icon-button composer-attach-btn" id="composer-attach-image" title="Attach files, PDFs, or images (or paste / drop)" aria-label="Attach files or images"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M13.5 6.5 7.8 12.2a2 2 0 0 0 2.8 2.8l6.1-6.1a3.5 3.5 0 0 0-5-5L5.2 10.4a5 5 0 0 0 7.1 7.1l5.2-5.2"/></svg></button><button type="button" class="icon-button dictation" data-dictate="composer-input" title="Dictate message" aria-label="Dictate message">♩</button><button class="composer-send" id="composer-send" type="submit" aria-label="Send message" title="Send message"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 15V4M5 9l5-5 5 5"/></svg></button></div>
+        </form>
+        <div class="recovery-strip"><button type="button" id="composer-recovery-settings" class="recovery-detail" aria-label="Recovery and routing settings"><span id="composer-recovery-status">Adaptive recovery and model routing</span><span aria-hidden="true">↗</span></button></div><div class="composer-caption"><span id="composer-hint"></span><span class="composer-key-hint visually-hidden" id="composer-keys">Enter to send. Shift + Enter for a new line.</span></div><div class="inline-error hidden" id="composer-error" role="alert"></div><button type="button" class="button button-secondary hidden" id="composer-connect">Connect a model</button>
+      </section>
+      <div class="composer-suggestions" id="composer-suggestions"></div>
+      <div class="welcome-links godcode-only" id="welcome-links"><button class="text-button" type="button" id="welcome-example">Example diff <span aria-hidden="true">↗</span></button><span class="welcome-links-sep" aria-hidden="true">·</span><button class="text-button" type="button" data-open-tour>Quick tour</button></div>
+    </main>
+
+    <div id="artifact-splitter" class="artifact-splitter hidden" role="separator" aria-orientation="vertical" aria-label="Resize live preview panel" title="Drag to resize · Double-click to reset" tabindex="0"></div>
+    <aside id="artifact-dock" class="artifact-dock hidden" aria-label="Live artifact preview"></aside>
+    <aside id="code-dock" aria-label="GodCode workspace" hidden></aside>
+    <div id="inspector-splitter" class="panel-splitter inspector-splitter" role="separator" aria-orientation="vertical" aria-label="Resize task details panel" title="Drag to resize details · Double-click to reset" tabindex="0"></div>
+    <aside class="inspector" id="inspector" aria-label="Task details" aria-hidden="true" inert>
+      <div class="inspector-title"><span>Task details</span><button type="button" class="icon-button" id="inspector-close" aria-label="Close task details">×</button></div>
+      <section class="inspector-section evidence-section"><div class="section-title"><h2>Checks</h2></div><div id="evidence"><div class="inspector-empty"><span aria-hidden="true">◎</span><p>Select a task.</p></div></div></section>
+      <section class="inspector-section instructions-section"><details class="task-contract"><summary>Task instructions <span aria-hidden="true">⌄</span></summary><p class="task-objective" id="selected-objective" tabindex="0" role="region" aria-label="Task objective. Scroll to read the full text."></p><div class="task-meta" id="task-meta"></div><div class="task-breadcrumb"><span>Task</span><code id="selected-id"></code><button class="icon-button copy-button" type="button" id="copy-id" aria-label="Copy task ID" title="Copy task ID"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="6" y="6" width="10" height="11" rx="2"/><path d="M12 6V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/></svg></button></div></details></section>
+      <section class="inspector-section usage-section"><h2>Usage</h2><div class="task-counters" id="task-counters"></div></section>
+      <section class="inspector-section checkpoints-section"><div class="section-title"><h2>Checkpoints</h2></div><div id="checkpoints-list"><p class="small-copy muted">Select a task.</p></div></section>
+      <section class="inspector-section recovery-section"><h2>Recovery</h2><p id="inspector-recovery-state" class="small-copy"></p><button type="button" class="button button-secondary" id="inspector-recovery-settings">Recovery settings</button></section>
+      <section class="inspector-section workspace-location"><h2>Working copy</h2><code id="workspace-path"></code></section>
+    </aside>
+  </div>
+
+  <dialog id="finished-change" class="modal build-dialog" aria-labelledby="example-title">
+    <header class="modal-header"><div><span class="eyebrow">Offline example · GodCode</span><h2 id="example-title">A clearer HTML preview</h2></div><button type="button" class="icon-button" data-close="finished-change" aria-label="Close example" autofocus>×</button></header>
+    <p class="modal-intro">In chat, we agreed that a screen reader should announce “Preview of” followed by the filename. Two Venice models tried the same edit in a GodCode worktree.</p>
+    <h3>Patch review</h3>
+    <p>GLM’s one-line change was applied. Qwen timed out on this round.</p>
+    <div class="example-file"><code>public/file-preview.js</code><span>+1 / −1</span></div>
+    <pre id="example-patch" tabindex="0" aria-label="Reviewed patch">diff --git a/public/file-preview.js b/public/file-preview.js
+--- a/public/file-preview.js
++++ b/public/file-preview.js
+@@ -48,7 +48,7 @@ function renderDocumentPreview(pane, name, source) {
+   } else if (extension === &#x27;html&#x27; || extension === &#x27;htm&#x27;) {
+     const frame = document.createElement(&#x27;iframe&#x27;);
+     frame.sandbox = &#x27;&#x27;;
+-    frame.title = name;
++    frame.title = &#x27;Preview of &#x27; + name;
+     frame.srcdoc =
+       &#x27;&lt;meta http-equiv=&quot;Content-Security-Policy&quot; content=&quot;default-src &amp;apos;none&amp;apos;; style-src &amp;apos;unsafe-inline&amp;apos;; img-src data:&quot;&gt;&#x27; +
+       text;</pre>
+    <h3>Recorded check</h3><p class="example-check">✓ 3 desktop tests passed · Exit 0</p><code class="example-command">node --test test/desktop.test.mjs &amp;&amp; node --check public/file-preview.js</code>
+  </dialog>
+
+  <dialog id="tree-request-dialog" class="modal build-dialog" aria-labelledby="request-title">
+    <header class="modal-header"><h2 id="request-title">Review model requests</h2><button type="button" class="icon-button" data-close="tree-request-dialog" aria-label="Close request preview">×</button></header>
+    <div id="tree-request-content"></div>
+    <footer class="modal-footer"><button type="button" class="button button-secondary" data-close="tree-request-dialog">Back</button><button type="button" class="button button-primary" id="tree-send">Generate patches</button></footer>
+  </dialog>
+
+  <dialog id="tree-dialog" aria-labelledby="tree-title">
+    <header class="tree-header"><h2 id="tree-title"><span class="brand-mark" aria-hidden="true"></span><span class="wordmark" role="img" aria-label="GodCode">GODCODƎ</span></h2><select id="tree-list" aria-label="Switch worktree"></select><button type="button" id="tree-new" class="button button-secondary">New worktree</button><button type="button" class="button button-quiet" id="tree-remove" hidden>Remove…</button><button type="button" class="icon-button" id="tree-close" aria-label="Close GodCode">×</button></header>
+    <form id="tree-open-form"><label for="tree-folder">Repository folder</label><div class="tree-row"><input id="tree-folder" required placeholder="/path/to/project"><button type="button" id="tree-browse" class="button button-secondary" hidden>Browse…</button><button id="tree-attach" class="button button-primary">Create worktree</button></div><p class="field-help">Start a branch from the current commit. Uncommitted edits stay in the original checkout.</p></form>
+    <div id="tree-workspace" hidden>
+      <aside class="tree-rail"><label for="tree-filter">Project files</label><input type="search" id="tree-filter" placeholder="Find a file…"><details id="tree-new-paths"><summary>New file paths</summary><label for="tree-new-names">One path per line</label><textarea id="tree-new-names" rows="2" placeholder="src/label.js&#10;test/label.test.js" spellcheck="false"></textarea></details><small id="tree-selection"></small><div id="tree-files"></div></aside>
+      <section class="tree-main"><div class="tree-row tree-location"><code id="tree-root"></code><button type="button" class="button button-quiet" id="tree-copy">Copy path</button></div>
+        <div class="tree-tabs"><button type="button" id="tree-file-tab" aria-pressed="true">File</button><button type="button" id="tree-review-tab" aria-pressed="false" disabled>Changes</button><strong id="tree-file-title">File preview</strong><button type="button" id="tree-quicklook" hidden>Quick Look</button></div><div id="tree-preview" tabindex="0"></div>
+        <section id="tree-review" hidden><label for="tree-candidates">Compare model patches</label><select id="tree-candidates"></select><pre id="tree-patch"></pre><div class="tree-review-actions"><button type="button" class="button button-quiet" id="tree-stop-waiting" title="Keep ready patches and stop waiting for unfinished model requests" hidden>Stop waiting</button><button type="button" class="button button-secondary" id="tree-apply">Apply to branch</button></div></section>
+        <form id="tree-check-form" class="tree-row"><input id="tree-check" aria-label="Check command" placeholder="Check command, e.g. node --check src/server.mjs" required><label title="Allow this check to reach local services and the internet"><input id="tree-net" type="checkbox">Network</label><button class="button button-secondary">Run check</button></form><pre id="tree-output" hidden></pre>
+        <form id="tree-build-form"><label for="tree-objective">Build request</label><textarea id="tree-objective" required rows="2" placeholder="What should change in the selected files?"></textarea>
+          <details><summary>Models and parameters</summary><label for="tree-model-filter">Find a model</label><input type="search" id="tree-model-filter" placeholder="Model name or ID"><p class="field-help" id="tree-model-count" role="status"></p><div id="tree-models"></div><div class="tree-params">
+            <label>Temperature<input name="temperature" type="number" min="0" max="2" step="any" placeholder="Default"></label><label>Top p<input name="top_p" type="number" min="0" max="1" step="any" placeholder="Default"></label><label>Max output tokens<input name="max_tokens" type="number" min="1" max="200000" placeholder="Default"></label>
+<label>Seed<input name="seed" type="number" min="0" max="2147483647" step="1" placeholder="Default"></label><label>Frequency penalty<input name="frequency_penalty" type="number" min="-2" max="2" step="any" placeholder="Default"></label><label>Presence penalty<input name="presence_penalty" type="number" min="-2" max="2" step="any" placeholder="Default"></label><label>Top k · Venice<input name="top_k" type="number" min="0" max="1000" step="1" placeholder="Default"></label><label>Min p · Venice<input name="min_p" type="number" min="0" max="1" step="any" placeholder="Default"></label>          </div><small>Optional overrides for compatible Chat Completions models.</small></details><small id="tree-share">Selected models receive your request and checked files.</small><div class="tree-build-actions"><button type="button" class="icon-button dictation" data-dictate="tree-objective" aria-label="Dictate build request"></button><button id="tree-build" class="button button-primary">Preview requests</button></div>
+        </form>
+      </section>
+    </div><p id="tree-status" role="status"></p>
+  </dialog>
+  <dialog id="create-dialog" class="modal create-modal" aria-labelledby="create-title"><form id="create-form">
+    <div class="modal-header"><div><h2 id="create-title">New task</h2></div><button class="icon-button dialog-close" type="button" data-close="create-dialog" aria-label="Close new task dialog">×</button></div>
+    <p class="modal-intro" id="create-intro">Uses an example copy.</p>
+    <div class="workflow-selector" role="group" aria-label="Effort level"><label class="field-label" for="create-workflow">Workflow</label><select id="create-workflow"><option value="">Custom</option></select><p class="field-help" id="create-workflow-help">Presets adjust recovery depth, execution grants, and call budgets.</p></div>
+    <div class="create-source-switch" role="group" aria-label="Workspace source"><button type="button" class="source-option active" data-create-source="fixture" aria-pressed="true">Example project</button><button type="button" class="source-option" data-create-source="project" aria-pressed="false">Your project</button></div>
+    <div id="create-fixture-fields"><label class="field-label" for="create-fixture">Example</label><select id="create-fixture" required></select><p class="field-help" id="create-fixture-help"></p></div>
+    <div id="create-project-fields" class="hidden"><label class="field-label" for="create-source-path">Project folder</label><div class="path-preview-row"><input id="create-source-path" type="text" placeholder="/path/to/my-app" autocomplete="off"><button type="button" class="button button-secondary" id="preview-import">Preview copy</button></div><p class="field-help">Hidden, generated, credential and linked files are excluded.</p><button type="button" class="button button-quiet" id="create-worktree">Use a Git worktree…</button><div id="import-preview"></div></div>
+    <label class="field-label" for="create-task-title">Task name <span class="optional">optional</span></label><input id="create-task-title" type="text" maxlength="200" placeholder="Use the fixture name">
+    <details class="advanced-create" id="create-instructions"><summary>Instructions <span aria-hidden="true">⌄</span></summary><label class="field-label" for="create-objective">Objective <span class="optional" id="create-objective-kind">fixture-defined</span></label><textarea id="create-objective" rows="3" readonly></textarea><p class="field-help" id="create-objective-help">Checks verify completion.</p></details>
+    <details class="advanced-create"><summary>Agent preferences <span aria-hidden="true">⌄</span></summary><div class="two-fields"><div><label class="field-label" for="create-persona">Personality</label><select id="create-persona"><option value="plinian">Plinian</option><option value="focused">Focused</option></select></div><div><label class="field-label" for="create-return">After recovery</label><select id="create-return"><option value="yes">Preferred model</option><option value="no">Working fallback</option></select></div></div></details>
+    <div id="create-execution-fields" class="hidden"><label class="check-setting"><input id="create-execution" type="checkbox"> Allow commands</label><p class="field-help">Commands run in the working copy. Foreground commands only.</p><label class="check-setting"><input id="create-network" type="checkbox"> Allow network access</label><p class="field-help">Allows commands to reach local services and the internet. Off by default.</p><label class="field-label" for="create-checks">Checks <span class="optional">one per line</span></label><textarea id="create-checks" rows="2" placeholder="npm test&#10;npm run build"></textarea><p class="field-help">Checks verify the result.</p></div>
+    <fieldset class="provider-fieldset"><legend class="field-label">Models</legend><label class="field-label" for="create-preferred">Preferred model</label><select id="create-preferred"></select><details class="model-fallbacks"><summary>Fallback models</summary><p class="field-help">Adaptive recovery chooses from this list. Scripted models are test doubles.</p><div id="create-providers"></div></details></fieldset>
+    <details class="advanced-create"><summary>Recovery and scenario <span aria-hidden="true">+</span></summary><div class="two-fields"><div><label class="field-label" for="create-mode">Recovery mode</label><select id="create-mode"><option value="adaptive">G0DM0D3 Enabled</option><option value="hybrid">Hybrid</option><option value="switch_model">Switch models</option><option value="prompt_strategies">Prompt strategies</option><option value="ask">Ask me</option></select></div><div><label class="field-label" for="create-scenario">Scripted scenario</label><select id="create-scenario"><option value="">Normal</option></select></div></div><p class="field-help">Scenarios use scripted models.</p></details>
+    <div class="inline-error hidden" id="create-error" role="alert"></div><div class="modal-footer"><span class="small-copy muted" id="create-footer-note"></span><button class="button button-primary" id="create-submit" type="submit">Create task <span aria-hidden="true">↗</span></button></div>
+  </form></dialog>
+
+  <dialog id="benchmark-dialog" class="modal benchmark-modal" aria-labelledby="benchmark-title"><div class="modal-header"><div><h2 id="benchmark-title">Harness Diagnostics</h2></div><button class="icon-button dialog-close" type="button" data-close="benchmark-dialog" aria-label="Close harness diagnostics">×</button></div><p class="modal-intro">Offline scripted self-tests for controller recovery, budgets, and fixture checks. Live model performance is not measured.</p><div id="benchmark-content"></div><div class="inline-error hidden" id="benchmark-error" role="alert"></div><div class="modal-footer"><button class="button button-primary" type="button" id="benchmark-run">Run diagnostics <span aria-hidden="true">↗</span></button></div></dialog>
+
+  <dialog id="about-dialog" class="modal" aria-labelledby="about-title"><div class="modal-header"><div><span class="eyebrow">BUILD NOTES</span><h2 id="about-title"><span class="wordmark" role="img" aria-label="GodMode">GODMODƎ</span></h2></div><button class="icon-button dialog-close" type="button" data-close="about-dialog" aria-label="Close build notes">×</button></div><div id="about-content"></div></dialog>
+  <dialog id="confirm-dialog" class="modal confirm-modal" aria-labelledby="confirm-title"><div class="modal-header"><h2 id="confirm-title">Confirm</h2><button class="icon-button dialog-close" type="button" data-close="confirm-dialog" aria-label="Cancel">×</button></div><p class="modal-intro" id="confirm-message"></p><div class="modal-footer"><button type="button" class="button button-secondary" id="confirm-cancel">Cancel</button><button type="button" class="button button-primary" id="confirm-accept">Confirm</button></div></dialog>
+  <dialog id="source-review-dialog" class="modal source-review-modal" aria-labelledby="source-review-title"><div class="modal-header"><div><span class="eyebrow">ORIGINAL PROJECT</span><h2 id="source-review-title">Review source changes</h2></div><button class="icon-button dialog-close" type="button" data-close="source-review-dialog" aria-label="Close source review">×</button></div><p class="source-destination" id="source-review-destination"></p><p class="modal-intro" id="source-review-note" role="status"></p><div id="source-selection" class="source-selection hidden" role="group" aria-label="Choose files to apply"><p id="source-selection-summary" role="status" aria-live="polite"></p><div class="source-selection-actions"><button type="button" class="button button-secondary" id="source-select-all">Select conflict-free</button><button type="button" class="button button-quiet" id="source-select-none">Clear selection</button></div></div><div id="source-review-files"></div><div class="inline-error hidden" id="source-review-error" role="alert"></div><div class="modal-footer"><button type="button" class="button button-secondary" data-close="source-review-dialog">Close review</button><button type="button" class="button button-primary" id="source-review-confirm" disabled>Apply reviewed files</button></div></dialog>
+  <dialog id="crew-review-dialog" class="modal source-review-modal" aria-labelledby="crew-review-title"><div class="modal-header"><div><h2 id="crew-review-title">Review candidate</h2></div><button class="icon-button dialog-close" type="button" data-close="crew-review-dialog" aria-label="Close candidate review">×</button></div><p class="modal-intro" id="crew-review-note" role="status"></p><div id="crew-review-checks"></div><div id="crew-review-files"></div><div class="inline-error hidden" id="crew-review-error" role="alert"></div><div class="modal-footer"><button type="button" class="button button-secondary" data-close="crew-review-dialog">Close</button><button type="button" class="button button-primary" id="crew-review-confirm" disabled>Use candidate</button></div></dialog>
+  <div id="model-controls" class="models-stack" hidden>
+    <div class="settings-card">
+      <div class="settings-card-head">
+        <h4>Active Model</h4>
+        <p>The primary model used for new turns. Click to browse or search every connected model.</p>
+      </div>
+      <button type="button" class="settings-model-button" id="settings-pick-model" aria-haspopup="dialog"><span><small>Active model (click to search all)</small><strong id="settings-pick-model-label">Choose model</strong></span><span aria-hidden="true">⌄</span></button>
+      <p class="field-help" id="model-current"></p>
+      <p class="form-feedback" id="model-feedback" role="status"></p>
+    </div>
+    <section id="api-key-setup" class="settings-card api-key-setup">
+      <div class="settings-card-head">
+        <h4>Connect a Provider or Local Server</h4>
+        <p>Paste a cloud API key (auto-detected by prefix, stored in your device-only Keychain / Keyring) or register a local OpenAI-compatible server.</p>
+      </div>
+      <div class="api-key-subblock">
+        <h5>Cloud API key</h5>
+        <p class="field-help">Supports Anthropic, OpenAI, Google Gemini, OpenRouter, Nous Portal, and Venice.</p>
+        <form id="api-key-form" autocomplete="off"><div class="api-key-row"><select id="api-key-provider" class="api-key-provider" aria-label="API key provider"><option value="">Auto-detect</option><option value="anthropic">Anthropic</option><option value="openai">OpenAI</option><option value="gemini">Google Gemini</option><option value="openrouter">OpenRouter</option><option value="nous">Nous Portal</option><option value="venice">Venice</option></select><input id="api-key-input" aria-label="Provider API key" type="password" placeholder="sk-ant-…, sk-…, AIza…, sk-or-v1-…" autocomplete="off" spellcheck="false" maxlength="512"><button type="submit" class="button button-primary" id="api-key-submit">Connect</button></div><p class="form-feedback" id="api-key-feedback" role="status"></p></form>
+      </div>
+      <div class="local-model-setup">
+        <h5>Local model (Ollama / LM Studio / vLLM / MLX)</h5>
+        <p class="field-help">No API key required — runs 100% locally on this device for private or Tier-0 routing.</p>
+        <form id="local-model-form" autocomplete="off"><div class="local-model-grid"><input id="local-model-url" type="url" value="http://127.0.0.1:11434/v1" placeholder="http://127.0.0.1:11434/v1" aria-label="Local model base URL" spellcheck="false" maxlength="512" required><input id="local-model-name" type="text" placeholder="qwen2.5-coder:14b" aria-label="Local model identifier" spellcheck="false" maxlength="200" required><input id="local-model-label" type="text" placeholder="Label (optional)" aria-label="Optional display label" maxlength="120"><button type="submit" class="button button-secondary" id="local-model-submit">Add local model</button></div><p class="form-feedback" id="local-model-feedback" role="status"></p></form>
+      </div>
+    </section>
+    <section id="connected-services-hub" class="settings-card services-hub" aria-label="Connected coding and AI services"></section>
+    <section id="ultra-router-section" class="settings-card ultra-router-section" aria-label="Ultra-Plinian Intelligent Router"></section>
+    <section id="model-groups-section" class="settings-card model-groups-section" aria-label="G0DM0D3 fallback models"></section>
+    <section id="overseer-section" class="settings-card overseer-section" aria-label="Overseer and self-optimization"></section>
+    <section id="race-options" class="settings-card" hidden><div class="race-heading"><h3>Ultra-Plinian · Manual Arena</h3><label><input id="race-enabled" type="checkbox"> Compare written answers</label></div>
+      <p class="field-help">Two Venice models draft in parallel. A judge scores the anonymous drafts for fidelity, completeness, and clarity. Each comparison uses up to three calls.</p>
+      <div class="race-selectors"><label>First writer<select id="race-first"></select></label><label>Second writer<select id="race-second"></select></label><label>Judge<select id="race-judge"></select></label></div>
+      <button type="button" class="button button-secondary" id="race-save">Apply comparison</button><p id="race-feedback" class="form-feedback" role="status"></p>
+    </section>
+    <section id="venice-browser" class="settings-card" hidden>
+      <h3>Venice backup</h3>
+      <p class="field-help" id="venice-count" role="status"></p>
+      <label for="venice-backup">Outage backup (optional)</label><select id="venice-backup"><option value="">None</option></select>
+      <p class="field-help">With GODMODƎ recovery on, the backup gets one turn if Venice returns a gateway outage.</p>
+    </section>
+    <div class="settings-card settings-connections-card">
+      <div class="settings-card-head">
+        <h4>Connected Accounts &amp; Manual Routing</h4>
+        <p>Inspect every detected provider or fine-tune manual fallback order.</p>
+      </div>
+      <details id="new-model-group" class="model-group"><summary>Connected models</summary><div id="new-model-options"></div></details>
+      <details id="route-editor" class="settings-disclosure"><summary>Manual fallback checkboxes (advanced)</summary><p class="field-help" id="route-help"></p><form id="route-form"><input id="route-preferred" type="hidden"><details class="model-group"><summary>Preferred connection</summary><div id="route-primary-options" class="model-choice-list" role="radiogroup" aria-label="Preferred connection"></div></details><details class="model-group" id="route-fallback-group"><summary>Fallback connections</summary><div id="route-options"></div></details><button type="submit" id="save-route" hidden>Save route</button><p class="form-feedback" id="route-feedback" role="status"></p></form></details>
+      <div class="model-connections" id="model-connections"></div>
+      <div class="settings-card-foot"><button type="button" class="button button-quiet" id="model-refresh">Refresh connections</button></div>
+    </div>
+  </div>
+  <dialog id="model-picker" class="model-picker" aria-label="Choose model">
+    <div class="model-picker-heading"><strong>Models</strong><span id="model-picker-scope"></span><button type="button" class="icon-button" data-close="model-picker" aria-label="Close model picker">×</button></div>
+    <div class="model-picker-search"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg><input id="model-picker-search" type="search" role="combobox" aria-label="Search models" aria-controls="model-picker-results" aria-expanded="true" aria-autocomplete="list" placeholder="Search models…" autocomplete="off" spellcheck="false"></div>
+    <p id="model-picker-note" class="model-picker-note"></p>
+    <div id="model-picker-results" role="listbox" aria-label="Available models"></div>
+    <p id="model-picker-error" class="model-picker-error" role="alert"></p>
+    <div class="model-picker-footer"><button type="button" id="model-picker-manage">Manage models</button><span id="model-picker-count" role="status"></span><kbd>esc</kbd></div>
+  </dialog>
+  <dialog id="project-dialog" class="modal project-modal" aria-labelledby="project-dialog-title"><div class="modal-header"><h2 id="project-dialog-title">Project</h2><button type="button" class="icon-button" data-close="project-dialog" aria-label="Close project">×</button></div><div id="project-location"></div><div class="modal-footer"><button type="button" class="button button-secondary" id="project-new-task">New task in a project</button></div></dialog>
+  <dialog id="command-palette-dialog" class="modal command-modal palette-modal" data-legacy-id="command-dialog" aria-label="Command palette">
+    <div class="command-search"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg><input id="palette-input" type="search" placeholder="Search actions, skills, or conversations…" aria-label="Search actions, skills, or conversations" role="combobox" aria-expanded="true" aria-controls="command-results" aria-autocomplete="list" autocomplete="off"><button type="button" class="icon-button" data-close="command-palette-dialog" aria-label="Close command palette">×</button></div>
+    <div id="command-results" role="listbox" aria-label="Command palette results"></div><div class="command-footer"><span>↑ ↓ navigate</span><span>↵ open / run</span><span>esc close</span></div>
+  </dialog>
+  <dialog id="shortcuts-dialog" class="modal shortcuts-modal" aria-labelledby="shortcuts-title">
+    <div class="modal-header"><h2 id="shortcuts-title">Keyboard shortcuts</h2><button class="icon-button dialog-close" type="button" data-close="shortcuts-dialog" aria-label="Close shortcuts">×</button></div>
+    <div class="shortcuts-grid">
+      <section><h3>Navigation</h3>
+        <dl><dt><kbd>[</kbd> <kbd>]</kbd></dt><dd>Previous / next tab</dd>
+        <dt><kbd>j</kbd> <kbd>k</kbd></dt><dd>Navigate changed files</dd>
+        <dt><kbd>/</kbd></dt><dd>Focus composer</dd>
+        <dt><kbd>⌘K</kbd></dt><dd>Command palette</dd>
+        <dt><kbd>Esc</kbd></dt><dd>Close panel or dialog</dd></dl>
+      </section>
+      <section><h3>Composer &amp; Slash Commands</h3>
+        <dl><dt><kbd>Enter</kbd></dt><dd>Send message</dd>
+        <dt><kbd>Shift+Enter</kbd></dt><dd>New line</dd>
+        <dt><kbd>Tab</kbd></dt><dd>Accept slash or @file autocomplete</dd>
+        <dt><kbd>Shift+Tab</kbd></dt><dd>Cycle Permission Gate mode</dd>
+        <dt><kbd>⌘V</kbd></dt><dd>Paste screenshot into composer</dd>
+        <dt><kbd>⌘⇧P</kbd></dt><dd>Toggle Plan / Build mode</dd>
+        <dt><kbd>⌘⇧G</kbd></dt><dd>Switch GODMODƎ / GODCODƎ</dd>
+        <dt><kbd>/</kbd></dt><dd>/godmode, /godcode, /effort, /fast, /plan, /build, /compact, /diff, /undo, /fork, /export, /remember, /memory, /skill, /model, /review, /test, /help</dd>
+        <dt><kbd>@</kbd></dt><dd>Reference a workspace file</dd></dl>
+      </section>
+      <section><h3>Workspace</h3>
+        <dl><dt><kbd>?</kbd></dt><dd>Show this help</dd>
+        <dt><kbd>1</kbd>–<kbd>5</kbd></dt><dd>Switch to tab 1–5</dd></dl>
+      </section>
+    </div>
+  </dialog>
+  <div class="toast hidden" id="toast" role="status"></div>
+</body>
+</html>

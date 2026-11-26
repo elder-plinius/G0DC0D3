@@ -1,0 +1,27 @@
+{
+  "name": "g0dc0d3",
+  "version": "0.2.0",
+  "license": "AGPL-3.0-only",
+  "private": true,
+  "type": "module",
+  "description": "Local durable coding harness and prompt-transparency research studio",
+  "homepage": "https://github.com/elder-plinius/G0DC0D3#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/elder-plinius/G0DC0D3.git"
+  },
+  "bugs": {
+    "url": "https://github.com/elder-plinius/G0DC0D3/issues"
+  },
+  "engines": { "node": ">=22.13.0" },
+  "scripts": {
+    "desktop:build": "sh scripts/build-macos.sh",
+    "start": "node src/server.mjs",
+    "pretest": "node --check test/smoke.test.mjs",
+    "test": "node --test test/*.test.mjs",
+    "bench": "node bench/run.mjs",
+    "bench:self-opt": "node bench/self-opt-eval.mjs",
+    "smoke": "node bench/smoke-e2e.mjs",
+    "cli": "node src/cli.mjs"
+  }
+}
