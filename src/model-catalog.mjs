@@ -91,8 +91,18 @@ export const MODEL_CATALOG = Object.freeze([
     tags: ['flagship', 'coding', 'reasoning']
   },
   {
+    id: 'claude-sonnet-5-5',
+    match: /claude[-_.]?(?:sonnet[-_.]?5(?:[-_.]?5)?|5(?:[-_.]?5)?[-_.]?sonnet)/i,
+    family: 'Claude 5 Sonnet',
+    coding: 98, reasoning: 96, size: 'frontier', speed: 'fast', tokPerSec: 95,
+    contextWindow: 256000, maxOutput: 64000,
+    pricing: { inputPer1M: 3, outputPer1M: 15, cachedInputPer1M: 0.3 },
+    capabilities: { tools: true, reasoning: true, vision: true, openWeight: false },
+    tags: ['flagship', 'coding', 'fast']
+  },
+  {
     id: 'gpt-5.4',
-    match: /\bgpt[-_.]?5(?:\.4|\.3)?(?:-pro)?\b(?!.*(?:mini|nano|codex))/i,
+    match: /\bgpt[-_.]?5(?:\.[3456])?(?:[-_.]?(?:pro|sol|terra|luna))?\b(?!.*(?:mini|nano|codex))/i,
     family: 'GPT-5',
     coding: 98, reasoning: 98, size: 'frontier', speed: 'balanced', tokPerSec: 75,
     contextWindow: 400000, maxOutput: 128000,
@@ -152,13 +162,23 @@ export const MODEL_CATALOG = Object.freeze([
   },
   {
     id: 'grok-4',
-    match: /grok[-_.]?4/i,
+    match: /grok[-_.]?(?:4|code)/i,
     family: 'Grok 4',
-    coding: 94, reasoning: 95, size: 'frontier', speed: 'balanced', tokPerSec: 75,
+    coding: 95, reasoning: 96, size: 'frontier', speed: 'balanced', tokPerSec: 85,
     contextWindow: 256000, maxOutput: 64000,
     pricing: { inputPer1M: 3, outputPer1M: 15, cachedInputPer1M: 0.75 },
     capabilities: { tools: true, reasoning: true, vision: true, openWeight: false },
     tags: ['flagship', 'coding', 'reasoning']
+  },
+  {
+    id: 'muse-spark',
+    match: /muse[-_.]?spark/i,
+    family: 'Meta Muse Spark',
+    coding: 95, reasoning: 95, size: 'frontier', speed: 'fast', tokPerSec: 95,
+    contextWindow: 256000, maxOutput: 64000,
+    pricing: { inputPer1M: 0.8, outputPer1M: 3.2, cachedInputPer1M: 0.2 },
+    capabilities: { tools: true, reasoning: true, vision: true, openWeight: false },
+    tags: ['flagship', 'coding', 'reasoning', 'fast']
   },
   {
     id: 'deepseek-r1',

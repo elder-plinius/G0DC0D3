@@ -196,7 +196,7 @@
     {
       "id": "grok-4-7",
       "family": "Grok 4.6 / 4.7 / 4.20",
-      "match": "grok[-_.]?4(?:[-_.]?(?:20|7|6|5|3))?",
+      "match": "grok[-_.]?(?:4(?:[-_.]?(?:20|7|6|5|3))?|code)",
       "compliance": 84,
       "speed": 82,
       "costIndex": 64,
@@ -211,6 +211,26 @@
         "long_context": 92,
         "vision_multimodal": 92,
         "fast_general": 93
+      }
+    },
+    {
+      "id": "muse-spark",
+      "family": "Meta Muse Spark",
+      "match": "muse[-_.]?spark",
+      "compliance": 76,
+      "speed": 90,
+      "costIndex": 78,
+      "contextWindow": 256000,
+      "vision": true,
+      "domains": {
+        "swe_coding": 95,
+        "frontend_ui": 94,
+        "math_reasoning": 95,
+        "security_research": 90,
+        "creative_writing": 94,
+        "long_context": 93,
+        "vision_multimodal": 95,
+        "fast_general": 95
       }
     },
     {

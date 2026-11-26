@@ -19,9 +19,11 @@ import { classifyProviderZdr, checkProviderPrivacyAllowed, DEFAULT_PRIVACY_SETTI
  */
 
 const API_SERVICES = Object.freeze([
-  { id: 'anthropic', name: 'Anthropic API', host: 'api.anthropic.com', baseUrl: 'https://api.anthropic.com/v1', billing: 'API Key', description: 'Direct Claude Opus / Sonnet / Haiku API' },
-  { id: 'openai', name: 'OpenAI API', host: 'api.openai.com', baseUrl: 'https://api.openai.com/v1', billing: 'API Key', description: 'Direct GPT-5 / Codex / o3 Responses API (store=false)' },
-  { id: 'gemini', name: 'Gemini API', host: 'generativelanguage.googleapis.com', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', billing: 'API Key', description: 'Google Gemini 2.5 / 3 Pro & Flash API' },
+  { id: 'anthropic', name: 'Anthropic API', host: 'api.anthropic.com', baseUrl: 'https://api.anthropic.com/v1', billing: 'API Key', description: 'Direct Claude 5.5 / 4.6 Opus, Sonnet & Haiku API' },
+  { id: 'openai', name: 'OpenAI API', host: 'api.openai.com', baseUrl: 'https://api.openai.com/v1', billing: 'API Key', description: 'Direct GPT-6.2 Astra / Sol / GPT-5.6 / o3 Responses API (store=false)' },
+  { id: 'xai', name: 'xAI (Grok)', host: 'api.x.ai', baseUrl: 'https://api.x.ai/v1', billing: 'API Key', description: 'Direct Grok 4.7 / Grok Code Fast API' },
+  { id: 'gemini', name: 'Gemini API', host: 'generativelanguage.googleapis.com', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', billing: 'API Key', description: 'Google Gemini 4 Neon / 3 Pro / 2.5 Pro & Flash API' },
+  { id: 'meta', name: 'Meta AI (Muse / Llama)', host: 'api.llama.com', baseUrl: 'https://api.llama.com/compat/v1', billing: 'API Key', description: 'Direct Meta Muse Spark & Llama 4 Maverick / Scout API' },
   { id: 'openrouter', name: 'OpenRouter', host: 'openrouter.ai', baseUrl: 'https://openrouter.ai/api/v1', billing: 'API Key', description: 'Multi-model router with ZDR & data_collection=deny' },
   { id: 'nous', name: 'Nous Portal', host: 'inference-api.nousresearch.com', baseUrl: 'https://inference-api.nousresearch.com/v1', billing: 'API Key', description: 'Hermes 4 405B / 70B inference portal' },
   { id: 'venice', name: 'Venice AI', host: 'api.venice.ai', baseUrl: 'https://api.venice.ai/api/v1', billing: 'API Key', description: 'Vendor-documented Zero Data Retention inference' }
@@ -221,6 +223,10 @@ export function createServiceStatus({
           ready: conn.ready,
           blocked,
           model: conn.model,
+          models: conn.models || [],
+          availableModels: conn.availableModels || [],
+          modelCount: Array.isArray(conn.models) ? conn.models.length : (conn.enabled ? 1 : 0),
+          settings: conn.settings || {},
           status,
           statusLabel,
           zdr: classifyProviderZdr({ kind: conn.id === 'claude-code' ? 'claude' : conn.id === 'codex-cli' ? 'codex' : conn.id }),

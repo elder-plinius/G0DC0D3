@@ -70,6 +70,8 @@ test('Zero-Telemetry Structural Audit: zero analytics SDKs, zero phone-home URLs
   const ALLOWED_HOSTS = new Set([
     'api.openai.com',
     'api.anthropic.com',
+    'api.x.ai',
+    'api.llama.com',
     'openrouter.ai',
     'api.venice.ai',
     'generativelanguage.googleapis.com',

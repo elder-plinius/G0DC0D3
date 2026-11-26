@@ -1,17 +1,26 @@
 const fault = (code, message) => Object.assign(new Error(message), { code });
 export const parameterBounds = { temperature: [0, 2], top_p: [0, 1], max_tokens: [1, 200000], frequency_penalty: [-2, 2], presence_penalty: [-2, 2], seed: [0, 2147483647], top_k: [0, 1000], min_p: [0, 1] };
 
+const PROTOCOL_SUPPORTED_PARAMS = {
+  'openai-chat': new Set(['temperature', 'top_p', 'max_tokens', 'frequency_penalty', 'presence_penalty', 'seed', 'top_k', 'min_p']),
+  'openai-responses': new Set(['temperature', 'top_p', 'max_tokens']),
+  anthropic: new Set(['temperature', 'top_p', 'max_tokens']),
+};
+
 export function parameterLimits(provider) {
   const metadata = provider?.modelMetadata;
+  const protocol = provider?.protocol || '';
+  const protoAllowed = PROTOCOL_SUPPORTED_PARAMS[protocol] || null;
   const fields = {};
   for (const [key, [minimum, maximum]] of Object.entries(parameterBounds)) {
     const appRange = ['max_tokens','seed','top_k'].includes(key);
-    const field = { min:minimum, max:maximum, minSource:appRange ? 'app' : 'api', maxSource:appRange ? 'app' : 'api', supported:provider?.protocol === 'openai-chat' };
+    const effectiveMax = key === 'temperature' && protocol === 'anthropic' ? Math.min(maximum, 1) : maximum;
+    const field = { min:minimum, max:effectiveMax, minSource:appRange ? 'app' : 'api', maxSource:appRange ? 'app' : 'api', supported:Boolean(protoAllowed?.has(key)) };
     if (['top_k','min_p'].includes(key) && provider?.baseUrl !== 'https://api.venice.ai/api/v1') field.supported = false;
     const constraint = metadata?.constraints?.[key];
     if (constraint && (!Number.isFinite(constraint.min) || !Number.isFinite(constraint.max) || constraint.min <= constraint.max)) {
-      if (Number.isFinite(constraint.min) && constraint.min >= minimum && constraint.min <= maximum) { field.min = constraint.min; field.minSource = 'model'; }
-      if (Number.isFinite(constraint.max) && constraint.max <= maximum && constraint.max >= field.min) { field.max = constraint.max; field.maxSource = 'model'; }
+      if (Number.isFinite(constraint.min) && constraint.min >= minimum && constraint.min <= effectiveMax) { field.min = constraint.min; field.minSource = 'model'; }
+      if (Number.isFinite(constraint.max) && constraint.max <= effectiveMax && constraint.max >= field.min) { field.max = constraint.max; field.maxSource = 'model'; }
       if (Number.isFinite(constraint.default) && constraint.default >= field.min && constraint.default <= field.max) { field.default = constraint.default; field.defaultSource = 'model'; }
     }
     // Live Venice checks (2026-11-24): GLM rejects seed 0 with HTTP 400,
@@ -61,13 +70,24 @@ export function modelParameters(input = {}) {
 export function parametersFor(provider, input) {
   const parameters = modelParameters(input);
   if (!Object.keys(parameters).length) return parameters;
-  if (provider?.protocol !== 'openai-chat') throw fault('UNSUPPORTED_PARAMETERS', 'These controls require a Chat Completions model. Clear the overrides to use this provider.');
-  if (parameters.max_tokens > provider.maxOutputTokensCeiling) throw fault('INVALID_PARAMETERS', `This model allows at most ${provider.maxOutputTokensCeiling} output tokens.`);
+  const protocol = provider?.protocol || '';
+  if (!Object.hasOwn(PROTOCOL_SUPPORTED_PARAMS, protocol)) {
+    throw fault('UNSUPPORTED_PARAMETERS', 'These sampling controls require an API model (OpenAI, Anthropic, OpenRouter, Venice, Gemini, or local). CLI subscriptions use the Effort control and subscription settings instead.');
+  }
   if (('top_k' in parameters || 'min_p' in parameters) && provider.baseUrl !== 'https://api.venice.ai/api/v1')
     throw fault('UNSUPPORTED_PARAMETERS', 'Top k and min p require a Venice connection.');
   const limits = parameterLimits(provider).fields;
-  for (const [key,value] of Object.entries(parameters)) if (value < limits[key].min || value > limits[key].max)
-    throw fault('INVALID_PARAMETERS', `${key} must be between ${limits[key].min} and ${limits[key].max} for ${provider.label || provider.id}.`);
+  for (const [key, value] of Object.entries(parameters)) {
+    if (!limits[key]?.supported) {
+      throw fault('UNSUPPORTED_PARAMETERS', `${key} is not supported by ${provider.label || protocol}. Clear that override to use this model.`);
+    }
+    if (key === 'max_tokens' && Number.isInteger(provider.maxOutputTokensCeiling) && value > provider.maxOutputTokensCeiling) {
+      throw fault('INVALID_PARAMETERS', `This model allows at most ${provider.maxOutputTokensCeiling} output tokens.`);
+    }
+    if (value < limits[key].min || value > limits[key].max) {
+      throw fault('INVALID_PARAMETERS', `${key} must be between ${limits[key].min} and ${limits[key].max} for ${provider.label || provider.id}.`);
+    }
+  }
   return parameters;
 }
 

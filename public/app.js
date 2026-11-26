@@ -199,7 +199,7 @@ function applyAppMode(mode, { persist = true, notify = false, switchView = false
   const headline = $('#welcome-headline');
   if (headline) {
     headline.innerHTML = isCode
-      ? 'Build with <span class="wordmark" role="img" aria-label="GodCode">GODCODƎ</span>'
+      ? 'What are we building<span class="welcome-punctuation">?</span>'
       : 'What can we do<span class="welcome-punctuation">?</span>';
   }
   setVisible('#welcome-godcode-sub', isCode);
@@ -360,11 +360,23 @@ let openrouterCatalogConnection = null;
 let openrouterFilter = '';
 let openrouterBusyModel = null;
 let openrouterRefreshBusy = false;
+const DIRECT_CATALOG_KEYS = ['openai', 'anthropic', 'xai', 'gemini', 'meta'];
+const directCatalogs = {
+  openai: { connected: false, models: [], registered: [], warning: '' },
+  anthropic: { connected: false, models: [], registered: [], warning: '' },
+  xai: { connected: false, models: [], registered: [], warning: '' },
+  gemini: { connected: false, models: [], registered: [], warning: '' },
+  meta: { connected: false, models: [], registered: [], warning: '' },
+};
+const directCatalogFilters = { openai: '', anthropic: '', xai: '', gemini: '', meta: '' };
+const directCatalogRefreshBusy = { openai: false, anthropic: false, xai: false, gemini: false, meta: false };
+let directCatalogBusyModel = null;
 const catalogId = id => typeof id === 'string' && id.startsWith('venice-catalog:');
 function providerById(id) {
   return state.providers.find(provider => provider.id === id)
     || (catalogId(id) && (veniceCatalog.models.find(model => model.id === id) || {id, label:id.slice('venice-catalog:'.length)}))
-    || openrouterCatalog.models.find(model => model.id === id);
+    || openrouterCatalog.models.find(model => model.id === id)
+    || DIRECT_CATALOG_KEYS.map(k => directCatalogs[k].models.find(model => model.id === id)).find(Boolean);
 }
 function liveProviders() { return state.providers.filter(provider => provider.kind !== 'scripted' && provider.available !== false); }
 function newConversationProviders() {
@@ -2107,13 +2119,100 @@ function renderOpenRouterCatalog() {
   const tail = filtered.length > limit ? `<p class="field-help openrouter-list-more">Showing ${limit} of ${filtered.length} matching models — type to narrow the list.</p>` : '';
   listEl.innerHTML = rows + tail;
 }
+
+async function loadDirectProviderCatalog(provider, force = false) {
+  if (!Object.hasOwn(directCatalogs, provider)) return;
+  if (force) {
+    directCatalogRefreshBusy[provider] = true;
+    renderDirectProviderCatalog(provider);
+  }
+  try {
+    directCatalogs[provider] = await api(`/api/providers/catalog?provider=${encodeURIComponent(provider)}${force ? '&refresh=1' : ''}`);
+  } catch (error) {
+    directCatalogs[provider] = { ...directCatalogs[provider], warning: error.message };
+  } finally {
+    if (force) directCatalogRefreshBusy[provider] = false;
+  }
+  renderDirectProviderCatalog(provider);
+  if ($('#model-picker')?.open) renderModelPicker();
+  if ($('#settings-dialog')?.open) renderModelSettings();
+}
+
+function renderDirectProviderCatalog(provider) {
+  const cat = directCatalogs[provider];
+  const section = $(`#${provider}-browser`);
+  if (!section || !cat) return;
+  section.hidden = !cat.connected;
+  if (!cat.connected) return;
+  const refreshBtn = $(`#${provider}-refresh`);
+  if (refreshBtn) {
+    refreshBtn.disabled = Boolean(directCatalogRefreshBusy[provider]);
+    refreshBtn.textContent = directCatalogRefreshBusy[provider] ? 'Refreshing…' : 'Refresh catalog';
+  }
+  const registeredSet = new Set(
+    state.providers
+      .filter(p => p.id?.startsWith(`${provider}:`) && p.available !== false)
+      .map(p => p.model)
+      .filter(Boolean)
+  );
+  const models = Array.isArray(cat.models) ? cat.models : [];
+  const addedCount = registeredSet.size || (cat.registered?.length || 0);
+  const label = cat.label || humanize(provider);
+  setText(`#${provider}-count`, [
+    `${models.length} models on ${label}`,
+    `${addedCount} pinned`,
+    cat.warning
+  ].filter(Boolean).join(' · '));
+  const query = (directCatalogFilters[provider] || '').trim().toLowerCase();
+  const filtered = query
+    ? models.filter(m => `${m.name || ''} ${m.model || ''} ${m.id || ''}`.toLowerCase().includes(query))
+    : models;
+  const limit = 60;
+  const visible = filtered.slice(0, limit);
+  const listEl = $(`#${provider}-list`);
+  if (!listEl) return;
+  if (!visible.length) {
+    listEl.innerHTML = `<p class="field-help">${query ? `No matching ${escapeHTML(label)} models. You can still paste any slug in “Add any model ID”.` : `No ${escapeHTML(label)} models loaded yet. Click Refresh catalog.`}</p>`;
+    return;
+  }
+  const rows = visible.map(m => {
+    const isAdded = registeredSet.has(m.model);
+    const busy = directCatalogBusyModel === `${provider}:${m.model}` || openrouterBusyModel === m.model;
+    const ctx = formatOpenRouterContext(m.meta?.contextWindow);
+    const metaParts = [m.model, m.meta?.tier ? `Est. ${m.meta.tier}·${m.meta.intelligence}` : '', ctx ? `${ctx} ctx` : '', m.curated ? 'Recommended' : ''].filter(Boolean).join(' · ');
+    const actions = isAdded
+      ? `<button type="button" class="button button-secondary openrouter-row-btn" data-direct-use="${escapeHTML(m.id)}" ${busy || routeBusy ? 'disabled' : ''}>Use</button>${addedCount > 1 ? `<button type="button" class="button button-quiet openrouter-row-btn" data-direct-remove="${escapeHTML(m.model)}" data-direct-provider="${escapeHTML(provider)}" ${busy ? 'disabled' : ''}>Remove</button>` : ''}`
+      : `<button type="button" class="button button-secondary openrouter-row-btn" data-direct-add="${escapeHTML(m.model)}" data-direct-provider="${escapeHTML(provider)}" ${busy ? 'disabled' : ''}>${busy ? 'Adding…' : '+ Add'}</button>`;
+    return `<div class="openrouter-row ${isAdded ? 'is-added' : ''}"><div class="openrouter-row-info"><strong>${escapeHTML(m.name || m.model)}</strong><small>${escapeHTML(metaParts)}</small></div><div class="openrouter-row-actions">${actions}</div></div>`;
+  }).join('');
+  const tail = filtered.length > limit ? `<p class="field-help openrouter-list-more">Showing ${limit} of ${filtered.length} matching models — type to narrow the list.</p>` : '';
+  listEl.innerHTML = rows + tail;
+}
+
+function renderDirectProviderCatalogs() {
+  for (const key of DIRECT_CATALOG_KEYS) renderDirectProviderCatalog(key);
+}
+
 let apiToggleBusy = null;
 
 function renderApiToggles() {
   const section = $('#api-toggles-section');
   if (!section) return;
   const profiles = Array.isArray(state.connectedApiProviders) ? state.connectedApiProviders : [];
-  const liveCli = liveProviders().filter(p => ['codex', 'claude', 'gemini-cli', 'copilot-cli'].includes(p.kind));
+  const liveCliAll = liveProviders().filter(p => ['codex', 'claude', 'gemini-cli', 'copilot-cli'].includes(p.kind));
+  const cliGrouped = new Map();
+  for (const p of liveCliAll) {
+    const baseId = String(p.id || '').split(':')[0];
+    if (!cliGrouped.has(baseId)) cliGrouped.set(baseId, { id: baseId, kind: p.kind, count: 0, primaryLabel: '' });
+    const entry = cliGrouped.get(baseId);
+    if (p.id.includes(':')) entry.count += 1;
+    else entry.primaryLabel = p.label || baseId;
+  }
+  const liveCli = [...cliGrouped.values()].map(entry => ({
+    ...entry,
+    count: Math.max(1, entry.count),
+    name: entry.kind === 'codex' ? 'OpenAI Codex' : entry.kind === 'claude' ? 'Claude Code' : entry.kind === 'gemini-cli' ? 'Gemini CLI' : entry.kind === 'copilot-cli' ? 'GitHub Copilot' : (entry.primaryLabel || entry.id),
+  }));
   const liveLocal = liveProviders().filter(p => p.tier === 'local' || String(p.id || '').startsWith('local:'));
   section.hidden = profiles.length === 0 && liveCli.length === 0 && liveLocal.length === 0;
   if (section.hidden) return;
@@ -2124,11 +2223,14 @@ function renderApiToggles() {
     const enabled = p.enabled !== false;
     const busy = apiToggleBusy === p.provider;
     const count = Number(p.modelCount ?? p.models?.length ?? 0);
+    const directCat = directCatalogs[p.provider];
     const catalogNote = p.provider === 'openrouter' && enabled && openrouterCatalog.models.length > count
       ? `${openrouterCatalog.models.length} catalog · ${count} pinned`
-      : p.provider === 'venice' && enabled && veniceCatalog.models.length > count
-        ? `${veniceCatalog.models.length} catalog`
-        : `${count} ${count === 1 ? 'model' : 'models'}`;
+      : directCat?.connected && enabled && directCat.models.length > count
+        ? `${directCat.models.length} catalog · ${count} pinned`
+        : p.provider === 'venice' && enabled && veniceCatalog.models.length > count
+          ? `${veniceCatalog.models.length} catalog`
+          : `${count} ${count === 1 ? 'model' : 'models'}`;
     const storageLabel = p.storage === 'keychain' ? 'Keychain' : p.storage === 'env' ? 'Env' : 'Session';
     const meta = enabled
       ? `${catalogNote} · ${storageLabel}`
@@ -2146,8 +2248,8 @@ function renderApiToggles() {
   });
   const cliRows = liveCli.map(p => `<div class="api-toggle-row">
     <div class="api-toggle-info">
-      <span class="api-toggle-title"><span class="svc-dot svc-connected" aria-hidden="true"></span>${escapeHTML(p.label || p.id)}</span>
-      <span class="api-toggle-meta">CLI subscription · active</span>
+      <span class="api-toggle-title"><span class="svc-dot svc-connected" aria-hidden="true"></span>${escapeHTML(p.name)}</span>
+      <span class="api-toggle-meta">${p.count} ${p.count === 1 ? 'model' : 'models'} · CLI subscription · active</span>
     </div>
     <button type="button" class="button button-quiet svc-action-btn" data-disconnect-cli-quick="${escapeHTML(p.id)}" ${connectionBusy ? 'disabled' : ''}>Disconnect</button>
   </div>`);
@@ -2182,6 +2284,9 @@ async function toggleApiProvider(provider, enabled) {
     } else if (provider === 'venice') {
       if (enabled) await loadVeniceCatalog(true);
       else veniceCatalog = { connected: false, models: [], warning: '' };
+    } else if (Object.hasOwn(directCatalogs, provider)) {
+      if (enabled) await loadDirectProviderCatalog(provider, true);
+      else directCatalogs[provider] = { connected: false, models: [], registered: [], warning: '' };
     }
     await refresh();
     if (!enabled && preferredProvider && !state.providers.some(p => p.id === preferredProvider && p.available !== false)) {
@@ -2232,12 +2337,15 @@ async function addProviderModel(provider, model, { select = false, feedbackEl = 
   const slug = String(model || '').trim();
   if (!slug) throw new Error('Enter a model ID.');
   openrouterBusyModel = slug;
+  directCatalogBusyModel = `${provider}:${slug}`;
   renderOpenRouterCatalog();
+  renderDirectProviderCatalogs();
   try {
     const result = await api('/api/providers/models', { method: 'POST', body: JSON.stringify({ provider, models: [slug] }) });
     if (Array.isArray(result.connectedApiProviders)) state.connectedApiProviders = result.connectedApiProviders;
     await refresh();
     if (provider === 'openrouter') await loadOpenRouterCatalog();
+    else if (Object.hasOwn(directCatalogs, provider)) await loadDirectProviderCatalog(provider);
     if ($('#settings-dialog')?.open) {
       await Promise.all([loadServices(), loadModelGroups(selectedModelSort)]);
       renderModelSettings();
@@ -2258,19 +2366,24 @@ async function addProviderModel(provider, model, { select = false, feedbackEl = 
     throw error;
   } finally {
     openrouterBusyModel = null;
+    directCatalogBusyModel = null;
     renderOpenRouterCatalog();
+    renderDirectProviderCatalogs();
   }
 }
 async function removeProviderModel(provider, model) {
   const slug = String(model || '').trim();
   if (!slug) return;
   openrouterBusyModel = slug;
+  directCatalogBusyModel = `${provider}:${slug}`;
   renderOpenRouterCatalog();
+  renderDirectProviderCatalogs();
   try {
     const result = await api('/api/providers/models', { method: 'DELETE', body: JSON.stringify({ provider, models: [slug] }) });
     if (Array.isArray(result.connectedApiProviders)) state.connectedApiProviders = result.connectedApiProviders;
     await refresh();
     if (provider === 'openrouter') await loadOpenRouterCatalog();
+    else if (Object.hasOwn(directCatalogs, provider)) await loadDirectProviderCatalog(provider);
     if ($('#settings-dialog')?.open) {
       await Promise.all([loadServices(), loadModelGroups(selectedModelSort)]);
       renderModelSettings();
@@ -2280,7 +2393,9 @@ async function removeProviderModel(provider, model) {
     toast(error.message);
   } finally {
     openrouterBusyModel = null;
+    directCatalogBusyModel = null;
     renderOpenRouterCatalog();
+    renderDirectProviderCatalogs();
   }
 }
 let selectedModelGroupId = 'flagship-waterfall';
@@ -2920,6 +3035,7 @@ function renderModelSettings() {
   renderApiToggles();
   renderVeniceCatalog();
   renderOpenRouterCatalog();
+  renderDirectProviderCatalogs();
   renderCustomModelForm();
   renderServicesHub();
   renderUltraRouterSection();
@@ -2938,11 +3054,98 @@ function renderModelSettings() {
 }
 
 let connectionConsent = null;
+let cliConnectionsData = [];
+
+function renderCliNativeSettings(connection) {
+  if (!connection.enabled || !connection.ready) return '';
+  const st = connection.settings || {};
+  const disabled = connectionBusy ? 'disabled' : '';
+  if (connection.id === 'codex-cli') {
+    const eff = st.reasoningEffort || '';
+    const tier = st.serviceTier || '';
+    const verb = st.verbosity || '';
+    const localParts = [];
+    if (connection.localDefaults) {
+      if (connection.localDefaults.model) localParts.push(connection.localDefaults.model);
+      if (connection.localDefaults.reasoningEffort) localParts.push(`effort=${connection.localDefaults.reasoningEffort}`);
+      if (connection.localDefaults.serviceTier) localParts.push(`tier=${connection.localDefaults.serviceTier}`);
+    }
+    const hintSegments = [
+      localParts.length ? `Config (<code>~/.codex/config.toml</code>): ${escapeHTML(localParts.join(' · '))}` : '',
+      connection.localCacheCount > 0 ? `Synced ${connection.localCacheCount} live models from <code>~/.codex/models_cache.json</code>` : ''
+    ].filter(Boolean);
+    const localHint = hintSegments.length ? `<p class="sub-local-hint">${hintSegments.join(' · ')}</p>` : '';
+    return `<div class="sub-settings-block">
+      <div class="sub-settings-grid">
+        <label class="sub-setting-field"><span>Reasoning effort</span><select data-sub-setting-id="codex-cli" data-sub-setting-key="reasoningEffort" ${disabled}>
+          <option value="" ${eff === '' ? 'selected' : ''}>Match composer</option>
+          <option value="low" ${eff === 'low' ? 'selected' : ''}>Low</option>
+          <option value="medium" ${eff === 'medium' ? 'selected' : ''}>Medium</option>
+          <option value="high" ${eff === 'high' ? 'selected' : ''}>High</option>
+          <option value="xhigh" ${eff === 'xhigh' ? 'selected' : ''}>Extra High (xhigh)</option>
+          <option value="max" ${eff === 'max' ? 'selected' : ''}>Max</option>
+          <option value="ultra" ${eff === 'ultra' ? 'selected' : ''}>Ultra</option>
+        </select></label>
+        <label class="sub-setting-field"><span>Service tier</span><select data-sub-setting-id="codex-cli" data-sub-setting-key="serviceTier" ${disabled}>
+          <option value="" ${tier === '' ? 'selected' : ''}>Default</option>
+          <option value="priority" ${tier === 'priority' ? 'selected' : ''}>Priority</option>
+          <option value="fast" ${tier === 'fast' ? 'selected' : ''}>Fast</option>
+          <option value="flex" ${tier === 'flex' ? 'selected' : ''}>Flex</option>
+        </select></label>
+        <label class="sub-setting-field"><span>Verbosity</span><select data-sub-setting-id="codex-cli" data-sub-setting-key="verbosity" ${disabled}>
+          <option value="" ${verb === '' ? 'selected' : ''}>Default</option>
+          <option value="low" ${verb === 'low' ? 'selected' : ''}>Low</option>
+          <option value="medium" ${verb === 'medium' ? 'selected' : ''}>Medium</option>
+          <option value="high" ${verb === 'high' ? 'selected' : ''}>High</option>
+        </select></label>
+      </div>
+      ${localHint}
+    </div>`;
+  }
+  if (connection.id === 'claude-code') {
+    const eff = st.effort || '';
+    return `<div class="sub-settings-block">
+      <div class="sub-settings-grid">
+        <label class="sub-setting-field"><span>Claude CLI effort</span><select data-sub-setting-id="claude-code" data-sub-setting-key="effort" ${disabled}>
+          <option value="" ${eff === '' ? 'selected' : ''}>Match composer</option>
+          <option value="low" ${eff === 'low' ? 'selected' : ''}>Low</option>
+          <option value="medium" ${eff === 'medium' ? 'selected' : ''}>Medium</option>
+          <option value="high" ${eff === 'high' ? 'selected' : ''}>High</option>
+          <option value="max" ${eff === 'max' ? 'selected' : ''}>Max</option>
+        </select></label>
+      </div>
+    </div>`;
+  }
+  return '';
+}
+
+function renderCliModelsSection(connection) {
+  if (!connection.enabled || !connection.ready) return '';
+  const activeModels = Array.isArray(connection.models) ? connection.models : [];
+  const activeSet = new Set(activeModels);
+  const available = Array.isArray(connection.availableModels) && connection.availableModels.length
+    ? connection.availableModels
+    : (Array.isArray(connection.suggestedModels) ? connection.suggestedModels : []);
+  const chips = available.map(model => {
+    const on = activeSet.has(model);
+    return `<button type="button" class="sub-model-chip ${on ? 'is-active' : ''}" data-sub-toggle-model="${escapeHTML(connection.id)}" data-model-name="${escapeHTML(model)}" aria-pressed="${on ? 'true' : 'false'}" ${connectionBusy ? 'disabled' : ''}><span class="sub-chip-check" aria-hidden="true">${on ? '✓' : '+'}</span><span>${escapeHTML(model)}</span></button>`;
+  }).join('');
+  return `<div class="sub-models-block">
+    <div class="sub-models-head"><span>Exposed in Model Picker</span><small>${activeModels.length} active</small></div>
+    <div class="sub-model-chips" role="group" aria-label="${escapeHTML(connection.name)} models">${chips}</div>
+    <div class="sub-custom-add">
+      <input type="text" class="sub-custom-input" data-sub-custom-input="${escapeHTML(connection.id)}" placeholder="Add custom model ID (e.g. ${escapeHTML(available[0] || 'model-id')})" aria-label="Add custom ${escapeHTML(connection.name)} model" autocomplete="off" spellcheck="false" maxlength="120" ${connectionBusy ? 'disabled' : ''}>
+      <button type="button" class="button button-quiet" data-sub-custom-add="${escapeHTML(connection.id)}" ${connectionBusy ? 'disabled' : ''}>+ Add</button>
+    </div>
+  </div>`;
+}
+
 async function loadModelConnections(force = false) {
   try {
     const { connections, consent } = await api(`/api/providers/connections${force ? '?refresh=1' : ''}`);
     connectionConsent = consent;
-    const cards = (connections || []).map(connection => {
+    cliConnectionsData = Array.isArray(connections) ? connections : [];
+    const cards = cliConnectionsData.map(connection => {
       const statusClass = connection.enabled && connection.ready
         ? 'sub-status-connected'
         : connection.ready
@@ -2950,14 +3153,17 @@ async function loadModelConnections(force = false) {
           : connection.installed
             ? 'sub-status-signin'
             : 'sub-status-missing';
+      const activeCount = Array.isArray(connection.models) ? connection.models.length : 0;
       const statusLabel = connection.enabled && connection.ready
-        ? 'Connected'
+        ? (activeCount > 1 ? `Connected · ${activeCount} models` : 'Connected')
         : connection.ready
           ? connection.authenticated ? 'Signed in' : 'Sign-in unverified'
           : connection.installed
             ? 'Sign in required'
             : 'Not installed';
-      const suggested = Array.isArray(connection.suggestedModels) ? connection.suggestedModels : [];
+      const suggested = Array.isArray(connection.availableModels) && connection.availableModels.length
+        ? connection.availableModels
+        : (Array.isArray(connection.suggestedModels) ? connection.suggestedModels : []);
       const currentModel = connection.model || '';
       const modelOptions = [
         '<option value="">CLI default</option>',
@@ -2965,12 +3171,42 @@ async function loadModelConnections(force = false) {
         ...suggested.map(model => `<option value="${escapeHTML(model)}" ${model === currentModel ? 'selected' : ''}>${escapeHTML(model)}</option>`),
       ].join('');
       const actionButtons = connection.enabled
-        ? `<button type="button" class="button button-secondary" data-connect-cli="${escapeHTML(connection.id)}" ${connectionBusy || !connection.ready ? 'disabled' : ''}>Update model</button><button type="button" class="button button-quiet" data-disconnect-cli="${escapeHTML(connection.id)}" ${connectionBusy ? 'disabled' : ''}>Disconnect</button>`
+        ? `<button type="button" class="button button-secondary" data-connect-cli="${escapeHTML(connection.id)}" ${connectionBusy || !connection.ready ? 'disabled' : ''}>Set default</button><button type="button" class="button button-quiet" data-disconnect-cli="${escapeHTML(connection.id)}" ${connectionBusy ? 'disabled' : ''}>Disconnect</button>`
         : `<button type="button" class="button button-primary" data-connect-cli="${escapeHTML(connection.id)}" aria-describedby="cli-inference-disclosure" ${connectionBusy || !connection.ready || !consent?.version ? 'disabled' : ''}>Add inference option</button>`;
-      return `<article class="subscription-card ${connection.enabled && connection.ready ? 'is-connected' : ''} ${!connection.installed ? 'is-missing' : ''}"><div class="subscription-card-top"><div class="subscription-identity"><strong>${escapeHTML(connection.name)}</strong>${connection.subscription ? `<span class="sub-plan-badge">${escapeHTML(connection.subscription)}</span>` : ''}</div><span class="sub-status-pill ${statusClass}">${escapeHTML(statusLabel)}</span></div><p class="field-help sub-detail">${escapeHTML(connection.detail || connection.loginHint || '')}</p><div class="subscription-card-controls"><select class="sub-model-select" data-sub-model="${escapeHTML(connection.id)}" aria-label="${escapeHTML(connection.name)} model" ${connectionBusy || !connection.ready ? 'disabled' : ''}>${modelOptions}</select><div class="subscription-card-actions">${actionButtons}</div></div></article>`;
+      return `<article class="subscription-card ${connection.enabled && connection.ready ? 'is-connected' : ''} ${!connection.installed ? 'is-missing' : ''}" data-sub-card="${escapeHTML(connection.id)}"><div class="subscription-card-top"><div class="subscription-identity"><strong>${escapeHTML(connection.name)}</strong>${connection.subscription ? `<span class="sub-plan-badge">${escapeHTML(connection.subscription)}</span>` : ''}</div><span class="sub-status-pill ${statusClass}">${escapeHTML(statusLabel)}</span></div><p class="field-help sub-detail">${escapeHTML(connection.detail || connection.loginHint || '')}</p><div class="subscription-card-controls"><select class="sub-model-select" data-sub-model="${escapeHTML(connection.id)}" aria-label="${escapeHTML(connection.name)} default model" ${connectionBusy || !connection.ready ? 'disabled' : ''}>${modelOptions}</select><div class="subscription-card-actions">${actionButtons}</div></div>${renderCliModelsSection(connection)}${renderCliNativeSettings(connection)}</article>`;
     }).join('');
-    $('#model-connections').innerHTML = `<div class="connections-header"><div><h3>Use an existing CLI login</h3><p class="field-help">Add an inference option without changing your selected model. Account limits, charges, and provider terms apply.</p></div><button type="button" class="button button-quiet" data-refresh-connections ${connectionBusy ? 'disabled' : ''}>Refresh logins</button></div><div id="cli-inference-disclosure">${window.SetupUI?.disclosureHTML(consent) || ''}</div><div class="subscription-grid">${cards}</div>`;
+    $('#model-connections').innerHTML = `<div class="connections-header"><div><h3>Use an existing CLI login</h3><p class="field-help">Connect a local CLI subscription to expose its full model lineup and native effort/tier controls right inside the Model Picker.</p></div><button type="button" class="button button-quiet" data-refresh-connections ${connectionBusy ? 'disabled' : ''}>Refresh logins</button></div><div id="cli-inference-disclosure">${window.SetupUI?.disclosureHTML(consent) || ''}</div><div class="subscription-grid">${cards}</div>`;
   } catch (error) { setText('#model-connections', error.message); }
+}
+
+async function updateCliSettings(id, patch, feedbackMsg = '') {
+  if (connectionBusy) return;
+  connectionBusy = true;
+  setText('#model-feedback', 'Updating CLI settings…');
+  $('#model-feedback')?.classList.remove('error');
+  try {
+    await api('/api/providers/connections', {
+      method: 'PATCH',
+      body: JSON.stringify({ id, ...patch }),
+    });
+    await refresh();
+    if ($('#settings-dialog')?.open) {
+      await Promise.all([loadModelConnections(), loadServices(), loadModelGroups(selectedModelSort)]);
+      renderModelSettings();
+    }
+    if ($('#model-picker')?.open) renderModelPicker();
+    renderComposer();
+    const msg = feedbackMsg || `Updated ${id} settings.`;
+    setText('#model-feedback', msg);
+    toast(msg);
+  } catch (error) {
+    $('#model-feedback')?.classList.add('error');
+    setText('#model-feedback', error.message);
+    toast(error.message);
+  } finally {
+    connectionBusy = false;
+    if ($('#settings-dialog')?.open) await loadModelConnections();
+  }
 }
 
 async function connectCli(id) {
@@ -3009,7 +3245,7 @@ async function disconnectCli(id) {
   $$('[data-connect-cli], [data-disconnect-cli], [data-refresh-connections]').forEach(button => button.disabled = true);
   try {
     await api('/api/providers/connections', { method: 'DELETE', body: JSON.stringify({ id }) });
-    if (preferredProvider === id) {
+    if (preferredProvider === id || preferredProvider?.startsWith(`${id}:`)) {
       preferredProvider = null;
       try { localStorage.removeItem('g0dc0d3.preferredProvider'); } catch {}
     }
@@ -7217,7 +7453,51 @@ $('#model-connections').addEventListener('click', event => {
   const disconnectBtn = event.target.closest('[data-disconnect-cli]');
   if (disconnectBtn) { disconnectCli(disconnectBtn.dataset.disconnectCli); return; }
   const connectBtn = event.target.closest('[data-connect-cli]');
-  if (connectBtn) connectCli(connectBtn.dataset.connectCli);
+  if (connectBtn) { connectCli(connectBtn.dataset.connectCli); return; }
+  const toggleChip = event.target.closest('[data-sub-toggle-model]');
+  if (toggleChip) {
+    const id = toggleChip.dataset.subToggleModel;
+    const model = toggleChip.dataset.modelName;
+    const conn = cliConnectionsData.find(c => c.id === id);
+    if (!conn || !model) return;
+    const current = Array.isArray(conn.models) ? [...conn.models] : [];
+    const exists = current.includes(model);
+    if (exists && current.length <= 1) {
+      toast(`Keep at least one ${conn.name} model enabled.`);
+      return;
+    }
+    const next = exists ? current.filter(m => m !== model) : [...current, model];
+    updateCliSettings(id, { models: next }, exists ? `Hid ${model} from Model Picker.` : `Added ${model} to Model Picker.`);
+    return;
+  }
+  const addCustomBtn = event.target.closest('[data-sub-custom-add]');
+  if (addCustomBtn) {
+    const id = addCustomBtn.dataset.subCustomAdd;
+    const input = $(`[data-sub-custom-input="${CSS.escape(id)}"]`);
+    const model = (input?.value || '').trim();
+    const conn = cliConnectionsData.find(c => c.id === id);
+    if (!conn || !model) { toast('Enter a model ID first.'); return; }
+    const current = Array.isArray(conn.models) ? [...conn.models] : [];
+    const next = [...new Set([...current, model])];
+    updateCliSettings(id, { models: next }, `Added ${model} to ${conn.name}.`).then(() => { if (input) input.value = ''; });
+  }
+});
+$('#model-connections').addEventListener('change', event => {
+  const sel = event.target.closest('[data-sub-setting-id]');
+  if (!sel) return;
+  const id = sel.dataset.subSettingId;
+  const key = sel.dataset.subSettingKey;
+  if (!id || !key) return;
+  const conn = cliConnectionsData.find(c => c.id === id);
+  const nextSettings = { ...(conn?.settings || {}), [key]: sel.value || null };
+  updateCliSettings(id, { settings: nextSettings }, `Updated ${conn?.name || id} ${humanize(key)}.`);
+});
+$('#model-connections').addEventListener('keydown', event => {
+  const input = event.target.closest('[data-sub-custom-input]');
+  if (!input || event.key !== 'Enter') return;
+  event.preventDefault();
+  const id = input.dataset.subCustomInput;
+  $(`[data-sub-custom-add="${CSS.escape(id)}"]`)?.click();
 });
 
 async function submitApiKey(inputOrKey, feedbackEl, provider = '') {
@@ -7245,6 +7525,7 @@ async function submitApiKey(inputOrKey, feedbackEl, provider = '') {
     await refresh();
     if (result.provider === 'openrouter') await loadOpenRouterCatalog(true);
     else if (result.provider === 'venice') await loadVeniceCatalog(true);
+    else if (Object.hasOwn(directCatalogs, result.provider)) await loadDirectProviderCatalog(result.provider, true);
     renderComposer();
     if ($('#settings-dialog').open) { await Promise.all([loadServices(true), loadModelGroups(selectedModelSort)]); renderModelSettings(); }
     setVisible('#welcome-setup', false);
@@ -7292,6 +7573,21 @@ $('#openrouter-list')?.addEventListener('click', event => {
   const removeBtn = event.target.closest('[data-or-remove]');
   if (removeBtn) { void removeProviderModel('openrouter', removeBtn.dataset.orRemove); }
 });
+for (const prov of DIRECT_CATALOG_KEYS) {
+  $(`#${prov}-filter`)?.addEventListener('input', event => {
+    directCatalogFilters[prov] = event.target.value || '';
+    renderDirectProviderCatalog(prov);
+  });
+  $(`#${prov}-refresh`)?.addEventListener('click', () => { void loadDirectProviderCatalog(prov, true); });
+  $(`#${prov}-list`)?.addEventListener('click', event => {
+    const addBtn = event.target.closest('[data-direct-add]');
+    if (addBtn) { void addProviderModel(addBtn.dataset.directProvider || prov, addBtn.dataset.directAdd).catch(err => toast(err.message)); return; }
+    const useBtn = event.target.closest('[data-direct-use]');
+    if (useBtn) { void selectModel(useBtn.dataset.directUse).catch(err => toast(err.message)); return; }
+    const removeBtn = event.target.closest('[data-direct-remove]');
+    if (removeBtn) { void removeProviderModel(removeBtn.dataset.directProvider || prov, removeBtn.dataset.directRemove); }
+  });
+}
 function openFinishedChange(event) {
   const launcher = event?.currentTarget || $('#command-open');
   const dialog = $('#finished-change');
@@ -7769,16 +8065,43 @@ function modelSelectionLock(task) {
 function pickerTask() { return pickerScope && selectedData?.task?.id === pickerScope ? selectedData.task : null; }
 function selectableModels(task) {
   const configured = state.providers.filter(p => p.available !== false && (task?.fixtureId || p.kind !== 'scripted'));
+  const configuredIds = new Set(configured.map(p => p.id));
   const catalog = !task || task.workspaceKind === 'conversation' ? veniceCatalog.models : [];
   // The catalog and configured Venice connections can refer to the same model.
   const catalogModels = new Set(catalog.map(model => model.model));
-  const base = [...catalog, ...configured.filter(p => !catalogModels.has(p.model) || !/venice/i.test(p.id))];
+  // Hide bare CLI subscription alias when per-model entries (e.g. codex-cli:gpt-5.4) are already present,
+  // unless it is the active model for this task.
+  const cliSubIdsWithChildren = new Set(
+    configured
+      .filter(p => ['codex', 'claude', 'gemini-cli', 'copilot-cli'].includes(p.kind) && p.id.includes(':'))
+      .map(p => p.id.split(':')[0])
+  );
+  const base = [
+    ...catalog,
+    ...configured.filter(p => {
+      if (catalogModels.has(p.model) && /venice/i.test(p.id)) return false;
+      if (cliSubIdsWithChildren.has(p.id) && task?.providerId !== p.id) return false;
+      return true;
+    })
+  ];
   if (!task?.fixtureId && openrouterCatalog.connected && Array.isArray(openrouterCatalog.models) && openrouterCatalog.models.length) {
     const existingIds = new Set(base.map(p => p.id));
     const existingOpenRouterModels = new Set(base.filter(p => p.id?.startsWith('openrouter:')).map(p => p.model).filter(Boolean));
     for (const m of openrouterCatalog.models) {
       if (existingIds.has(m.id) || existingOpenRouterModels.has(m.model)) continue;
       base.push({ ...m, kind: 'http', catalogAdd: true, catalogProvider: 'openrouter' });
+    }
+  }
+  if (!task?.fixtureId) {
+    for (const prov of DIRECT_CATALOG_KEYS) {
+      const dcat = directCatalogs[prov];
+      if (!dcat?.connected || !Array.isArray(dcat.models) || !dcat.models.length) continue;
+      const existingIds = new Set(base.map(p => p.id));
+      const existingModels = new Set(base.filter(p => p.id?.startsWith(`${prov}:`)).map(p => p.model).filter(Boolean));
+      for (const m of dcat.models) {
+        if (existingIds.has(m.id) || existingModels.has(m.model) || configuredIds.has(m.id)) continue;
+        base.push({ ...m, kind: 'http', catalogAdd: true, catalogProvider: prov });
+      }
     }
   }
   return base;
@@ -7820,24 +8143,36 @@ function modelMetaById(id) {
 
 function pickerBucketOf(p) {
   const id = String(p?.id || '');
+  if (p?.kind === 'codex' || id === 'codex-cli' || id.startsWith('codex-cli:')) return 'codex-cli';
+  if (p?.kind === 'claude' || id === 'claude-code' || id.startsWith('claude-code:')) return 'claude-code';
+  if (p?.kind === 'gemini-cli' || id === 'gemini-cli' || id.startsWith('gemini-cli:')) return 'gemini-cli';
+  if (p?.kind === 'copilot-cli' || id === 'copilot-cli' || id.startsWith('copilot-cli:')) return 'copilot-cli';
   if (p?.catalogProvider === 'openrouter' || id.startsWith('openrouter:')) return 'openrouter';
   if (catalogId(id) || id.startsWith('venice:') || /venice/i.test(id)) return 'venice';
-  if (id.startsWith('anthropic:')) return 'anthropic';
-  if (id.startsWith('openai:')) return 'openai';
-  if (id.startsWith('gemini:')) return 'gemini';
+  if (p?.catalogProvider === 'anthropic' || id.startsWith('anthropic:')) return 'anthropic';
+  if (p?.catalogProvider === 'openai' || id.startsWith('openai:')) return 'openai';
+  if (p?.catalogProvider === 'xai' || id.startsWith('xai:')) return 'xai';
+  if (p?.catalogProvider === 'gemini' || id.startsWith('gemini:')) return 'gemini';
+  if (p?.catalogProvider === 'meta' || id.startsWith('meta:')) return 'meta';
   if (id.startsWith('nous:')) return 'nous';
   if (p?.tier === 'local' || id.startsWith('local:')) return 'local';
-  if (['codex', 'claude', 'gemini-cli', 'copilot-cli', 'cli'].includes(p?.kind)) return 'cli';
+  if (p?.kind === 'cli') return 'cli';
   return 'other';
 }
 
 const PICKER_BUCKET_LABELS = {
   all: 'All',
+  'codex-cli': 'Codex',
+  'claude-code': 'Claude Code',
+  'gemini-cli': 'Gemini CLI',
+  'copilot-cli': 'Copilot',
   openrouter: 'OpenRouter',
   venice: 'Venice',
   anthropic: 'Anthropic',
   openai: 'OpenAI',
+  xai: 'Grok (xAI)',
   gemini: 'Gemini',
+  meta: 'Meta / Muse',
   nous: 'Nous',
   local: 'Local',
   cli: 'CLI',
@@ -7868,7 +8203,7 @@ function renderModelPicker() {
   if (filterBar) {
     if (bucketCounts.size >= 2) {
       filterBar.classList.remove('hidden');
-      const order = ['openrouter', 'anthropic', 'openai', 'gemini', 'venice', 'nous', 'local', 'cli', 'other'].filter(b => bucketCounts.has(b));
+      const order = ['codex-cli', 'claude-code', 'gemini-cli', 'copilot-cli', 'openai', 'anthropic', 'xai', 'gemini', 'meta', 'openrouter', 'venice', 'nous', 'local', 'cli', 'other'].filter(b => bucketCounts.has(b));
       const chips = [
         `<button type="button" class="model-filter-chip${pickerProviderFilter === 'all' ? ' active' : ''}" data-picker-filter="all" aria-pressed="${pickerProviderFilter === 'all'}">All · ${models.length}</button>`,
         ...order.map(b => `<button type="button" class="model-filter-chip${pickerProviderFilter === b ? ' active' : ''}" data-picker-filter="${b}" aria-pressed="${pickerProviderFilter === b}">${escapeHTML(PICKER_BUCKET_LABELS[b] || b)} · ${bucketCounts.get(b)}</button>`)
@@ -7919,7 +8254,20 @@ function renderModelPicker() {
   const rowsHtml = pickerModels.map((p,i) => {
     const name = p.label || p.model || p.id;
     const isOr = p.id?.startsWith('openrouter:') || p.catalogProvider === 'openrouter';
-    const connection = catalogId(p.id) || /venice/i.test(p.id) ? 'Venice' : isOr ? 'OpenRouter' : kindLabel(p.kind || 'http');
+    const isOpenAi = p.id?.startsWith('openai:') || p.catalogProvider === 'openai';
+    const isAnthropic = p.id?.startsWith('anthropic:') || p.catalogProvider === 'anthropic';
+    const isXai = p.id?.startsWith('xai:') || p.catalogProvider === 'xai';
+    const isGemini = p.id?.startsWith('gemini:') || p.catalogProvider === 'gemini';
+    const isMeta = p.id?.startsWith('meta:') || p.catalogProvider === 'meta';
+    const connection = catalogId(p.id) || /venice/i.test(p.id)
+      ? 'Venice'
+      : isOr ? 'OpenRouter'
+      : isOpenAi ? 'OpenAI API'
+      : isAnthropic ? 'Anthropic API'
+      : isXai ? 'xAI (Grok)'
+      : isGemini ? 'Gemini API'
+      : isMeta ? 'Meta AI'
+      : kindLabel(p.kind || 'http');
     const meta = metaOf(p);
     const detail = [
       connection,
@@ -7931,7 +8279,7 @@ function renderModelPicker() {
       recentModels.includes(p.id) && p.id !== selected ? 'Recent' : ''
     ].filter(Boolean).join(' · ');
     const badge = p.id === selected ? '✓' : p.catalogAdd ? '+' : '';
-    const badgeTitle = p.catalogAdd ? 'Click to add and select from OpenRouter' : '';
+    const badgeTitle = p.catalogAdd ? `Click to add and select from ${humanize(p.catalogProvider || 'catalog')}` : '';
     return `<button type="button" id="model-picker-option-${i}" class="model-picker-option ${p.catalogAdd ? 'is-catalog-add' : ''}" role="option" aria-selected="${p.id === selected}" data-pick-model="${escapeHTML(p.id)}" ${lock || routeBusy ? 'disabled' : ''}><span class="model-picker-name"><strong>${escapeHTML(name)}</strong><small>${escapeHTML(detail)}</small></span><span class="model-picker-check ${p.catalogAdd ? 'is-add' : ''}" aria-hidden="true" ${badgeTitle ? `title="${escapeHTML(badgeTitle)}"` : ''}>${badge}</span></button>`;
   }).join('');
   const overflowNote = totalMatches > pickerModels.length
@@ -7956,9 +8304,11 @@ async function openModelPicker(scope = selectedId, anchor = document.activeEleme
   $('#composer-model').setAttribute('aria-expanded', 'true');
   renderModelPicker();
   $('#model-picker-search').focus();
+  const activeApis = new Set((state.connectedApiProviders || []).filter(c => c.enabled !== false).map(c => c.provider));
   await Promise.all([
     loadVeniceCatalog(),
     state.openrouterConnectionId && (openrouterCatalog.stale || openrouterCatalog.models.length <= 20) ? loadOpenRouterCatalog() : Promise.resolve(),
+    ...DIRECT_CATALOG_KEYS.map(prov => activeApis.has(prov) && (!directCatalogs[prov].connected || directCatalogs[prov].stale) ? loadDirectProviderCatalog(prov) : Promise.resolve()),
     Array.isArray(state.modelGroups) && state.modelGroups.length ? Promise.resolve() : loadModelGroups()
   ]);
   pickerLoading = false;
@@ -8045,6 +8395,7 @@ async function choosePickerModel(id) {
         if (Array.isArray(result.connectedApiProviders)) state.connectedApiProviders = result.connectedApiProviders;
         await refresh();
         if (entry.catalogProvider === 'openrouter') await loadOpenRouterCatalog();
+        else if (Object.hasOwn(directCatalogs, entry.catalogProvider)) await loadDirectProviderCatalog(entry.catalogProvider);
       } finally {
         routeBusy = false;
       }
