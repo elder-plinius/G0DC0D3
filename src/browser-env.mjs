@@ -157,25 +157,85 @@ function parseKeySpec(rawKey) {
   return { ...base, ...(modifiers ? { modifiers } : {}) };
 }
 
+const DEEP_QUERY_HELPERS = `
+  function collectRoots(root, out) {
+    out.push(root);
+    const all = root.querySelectorAll ? root.querySelectorAll('*') : [];
+    for (const n of all) {
+      if (n.shadowRoot) collectRoots(n.shadowRoot, out);
+    }
+    return out;
+  }
+  function queryAllDeep(selector, root = document) {
+    const roots = collectRoots(root, []);
+    const seen = new Set();
+    const hits = [];
+    for (const r of roots) {
+      let list = [];
+      try { list = r.querySelectorAll(selector); } catch {}
+      for (const el of list) {
+        if (!seen.has(el)) { seen.add(el); hits.push(el); }
+      }
+    }
+    return hits;
+  }
+  function queryOneDeep(selector, root = document) {
+    const roots = collectRoots(root, []);
+    for (const r of roots) {
+      try {
+        const hit = r.querySelector(selector);
+        if (hit) return hit;
+      } catch {}
+    }
+    return null;
+  }
+  function deepActiveElement() {
+    let active = document.activeElement;
+    while (active && active.shadowRoot && active.shadowRoot.activeElement) {
+      active = active.shadowRoot.activeElement;
+    }
+    return active;
+  }
+`;
+
 const SNAPSHOT_SCRIPT = `(maxChars => {
-  const prev = document.querySelectorAll('[data-g0d-ref]');
-  for (const el of prev) el.removeAttribute('data-g0d-ref');
-  const sel = 'a[href], button, input, textarea, select, canvas, [role="button"], [role="link"], [role="textbox"], [role="checkbox"], [role="radio"], [role="tab"], [contenteditable="true"], summary, [onclick]';
-  const nodes = [...document.querySelectorAll(sel)];
-  const elements = [];
-  let idx = 0;
+  ${DEEP_QUERY_HELPERS}
+  for (const el of queryAllDeep('[data-g0d-ref]')) el.removeAttribute('data-g0d-ref');
+  const sel = 'a[href], button, input, textarea, select, canvas, [role="button"], [role="link"], [role="textbox"], [role="checkbox"], [role="radio"], [role="tab"], [role="combobox"], [role="menuitem"], [contenteditable="true"], summary, [onclick]';
+  const nodes = queryAllDeep(sel);
+  const vh = window.innerHeight || 800;
+  const vw = window.innerWidth || 1280;
+  const activeModal = queryOneDeep('dialog[open], [role="dialog"]:not([hidden]), [aria-modal="true"]:not([hidden])');
+  const candidates = [];
   for (const el of nodes) {
-    if (elements.length >= 60) break;
     const style = window.getComputedStyle(el);
     if (!style || style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) continue;
     const r = el.getBoundingClientRect();
     if (r.width < 2 || r.height < 2) continue;
+    const inModal = activeModal ? (activeModal.contains(el) || (el.getRootNode?.()?.host && activeModal.contains(el.getRootNode().host))) : false;
+    const inViewport = r.bottom > 0 && r.top < vh && r.right > 0 && r.left < vw;
+    const priority = inModal ? 0 : inViewport ? 1 : 2;
+    candidates.push({ el, r, priority });
+  }
+  candidates.sort((a, b) => a.priority - b.priority);
+  const elements = [];
+  let idx = 0;
+  for (const { el, r } of candidates) {
+    if (elements.length >= 80) break;
     const ref = 'e' + (++idx);
     el.setAttribute('data-g0d-ref', ref);
     const tag = el.tagName.toLowerCase();
     const role = el.getAttribute('role') || (tag === 'a' ? 'link' : tag === 'button' ? 'button' : tag);
     const rawText = (el.innerText || el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('title') || el.value || (tag === 'canvas' ? 'canvas ' + Math.round(r.width) + 'x' + Math.round(r.height) : '')).replace(/\\s+/g, ' ').trim();
     const isCheck = tag === 'input' && (el.type === 'checkbox' || el.type === 'radio');
+    const stateFlags = [];
+    if (el.getAttribute('aria-expanded') === 'true') stateFlags.push('expanded');
+    if (el.getAttribute('aria-selected') === 'true') stateFlags.push('selected');
+    if (el.getAttribute('aria-checked') === 'true') stateFlags.push('checked');
+    if (el.getAttribute('aria-invalid') === 'true') stateFlags.push('invalid');
+    const selectOpts = tag === 'select'
+      ? [...el.options].slice(0, 12).map(o => (o.textContent || o.value || '').trim().slice(0, 60)).filter(Boolean)
+      : null;
     const entry = {
       ref,
       tag,
@@ -186,16 +246,45 @@ const SNAPSHOT_SCRIPT = `(maxChars => {
       ...(isCheck ? { value: el.checked ? 'checked' : 'unchecked' } : (tag === 'input' || tag === 'textarea' || tag === 'select' ? { value: String(el.value || '').slice(0, 120) } : {})),
       ...(tag === 'a' && el.href ? { href: String(el.href).slice(0, 240) } : {}),
       ...(el.disabled ? { disabled: true } : {}),
+      ...(stateFlags.length ? { state: stateFlags.join(',') } : {}),
+      ...(selectOpts?.length ? { options: selectOpts } : {}),
       rect: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) },
     };
     elements.push(entry);
   }
-  const bodyText = (document.body?.innerText || document.documentElement?.textContent || '').replace(/[ \\t]+/g, ' ').replace(/\\n{3,}/g, '\\n\\n').trim();
+  function collectDeepText(root) {
+    let out = '';
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      if (node.nodeType === 1) {
+        const tag = node.tagName;
+        if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT') continue;
+        if (node.shadowRoot) out += ' ' + collectDeepText(node.shadowRoot);
+      } else if (node.nodeType === 3) {
+        const p = node.parentElement;
+        if (!p || p.tagName === 'SCRIPT' || p.tagName === 'STYLE' || p.tagName === 'NOSCRIPT') continue;
+        const st = window.getComputedStyle(p);
+        if (st && (st.display === 'none' || st.visibility === 'hidden')) continue;
+        const t = node.nodeValue.trim();
+        if (t) out += (out ? ' ' : '') + t;
+      }
+    }
+    return out;
+  }
+  let bodyText = (document.body?.innerText || document.documentElement?.textContent || '').replace(/[ \\t]+/g, ' ').replace(/\\n{3,}/g, '\\n\\n').trim();
+  const shadowHosts = queryAllDeep('*').filter(el => el.shadowRoot);
+  if (shadowHosts.length) {
+    const shadowText = shadowHosts.map(h => collectDeepText(h.shadowRoot)).filter(Boolean).join('\\n').replace(/[ \\t]+/g, ' ').trim();
+    if (shadowText) bodyText = bodyText ? bodyText + '\\n' + shadowText : shadowText;
+  }
   const truncated = bodyText.length > maxChars;
+  const maxY = Math.max(0, Math.round((document.documentElement?.scrollHeight || document.body?.scrollHeight || vh) - vh));
   return {
     url: location.href,
     title: document.title || '',
-    viewport: { width: window.innerWidth, height: window.innerHeight },
+    viewport: { width: vw, height: vh },
+    scroll: { x: Math.max(0, Math.round(window.scrollX || 0)), y: Math.max(0, Math.round(window.scrollY || 0)), maxY },
     text: truncated ? bodyText.slice(0, maxChars) + '\\n[…truncated…]' : bodyText,
     truncated,
     elements,
@@ -320,6 +409,7 @@ class CdpSession {
     const frameTree = await this.send('Page.getFrameTree').catch(() => null);
     this.mainFrameId = frameTree?.frameTree?.frame?.id || null;
     await this.send('Runtime.enable');
+    await this.send('Network.enable').catch(() => {});
     await this.send('Log.enable').catch(() => {});
     await this.send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] }).catch(() => {});
     await this.send('Page.addScriptToEvaluateOnNewDocument', { source: CONTAINMENT_INIT_SCRIPT }).catch(() => {});
@@ -362,6 +452,20 @@ class CdpSession {
       }, 3000).catch(() => {});
     } else if (msg.method === 'Fetch.requestPaused') {
       void this._handleFetchPaused(msg.params);
+    } else if (msg.method === 'Network.responseReceived') {
+      const resp = msg.params?.response;
+      const status = Number(resp?.status || 0);
+      if (status >= 400) {
+        const reqUrl = String(resp?.url || '').slice(0, 200);
+        const statusText = String(resp?.statusText || '').trim();
+        this._pushConsole('network', `HTTP ${status}${statusText ? ` ${statusText}` : ''} ${reqUrl}`.slice(0, 400));
+      }
+    } else if (msg.method === 'Network.loadingFailed') {
+      const errText = String(msg.params?.errorText || '').trim();
+      if (errText && !/ERR_BLOCKED_BY_CLIENT|ERR_ABORTED/i.test(errText)) {
+        const resType = String(msg.params?.type || 'resource');
+        this._pushConsole('network', `Failed ${resType} load: ${errText}`.slice(0, 400));
+      }
     } else if (msg.method === 'Log.entryAdded') {
       const e = msg.params?.entry;
       if (e && (e.level === 'error' || e.level === 'warning')) {
@@ -445,7 +549,7 @@ class CdpSession {
   }
 
   async wait(ms) {
-    const clamped = Math.max(0, Math.min(5000, Number(ms) || 0));
+    const clamped = Math.max(0, Math.min(8000, Number(ms) || 0));
     if (clamped > 0) await new Promise(r => setTimeout(r, clamped));
   }
 
@@ -502,15 +606,17 @@ class CdpSession {
     };
   }
 
-  async resolveTargetPoint({ ref, selector, x, y }) {
+  async resolveTargetPoint({ ref, selector, x, y, focus = false }) {
     if (Number.isFinite(x) && Number.isFinite(y)) return { x: Number(x), y: Number(y) };
     const css = ref ? `[data-g0d-ref="${String(ref).replace(/"/g, '')}"]` : selector;
     if (!css) throw fault('BROWSER_TARGET_REQUIRED', 'Provide ref (e.g. "e3"), selector, or x/y coordinates.');
     const expr = `(() => {
-      const el = document.querySelector(${JSON.stringify(css)});
+      ${DEEP_QUERY_HELPERS}
+      const el = queryOneDeep(${JSON.stringify(css)});
       if (!el) return null;
       if (el.disabled) return { disabled: true };
       el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+      if (${Boolean(focus)} && typeof el.focus === 'function') { try { el.focus(); } catch {} }
       const r = el.getBoundingClientRect();
       return { x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width, h: r.height, tag: el.tagName.toLowerCase() };
     })()`;
@@ -589,14 +695,64 @@ class CdpSession {
     const action = String(args.action || '').toLowerCase();
     if (action === 'back') {
       await this.send('Runtime.evaluate', { expression: 'history.back()' });
+      await this.waitForLoad(4000);
       await this.wait(args.waitMs ?? 350);
     } else if (action === 'forward') {
       await this.send('Runtime.evaluate', { expression: 'history.forward()' });
+      await this.waitForLoad(4000);
       await this.wait(args.waitMs ?? 350);
     } else if (action === 'reload') {
       await this.send('Page.reload', { ignoreCache: false });
       await this.waitForLoad(10000);
       await this.wait(args.waitMs ?? 300);
+    } else if (action === 'wait') {
+      const budgetMs = Math.max(100, Math.min(8000, Number(args.waitMs ?? 3000)));
+      const css = args.ref ? `[data-g0d-ref="${String(args.ref).replace(/"/g, '')}"]` : (args.selector || '');
+      const wantText = typeof args.text === 'string' && args.text.trim() ? args.text.trim() : '';
+      if (!css && !wantText) {
+        await this.wait(budgetMs);
+      } else {
+        const deadline = Date.now() + budgetMs;
+        let matched = false;
+        while (Date.now() <= deadline) {
+          try {
+            const probe = await this.send('Runtime.evaluate', {
+              expression: `(() => {
+                ${DEEP_QUERY_HELPERS}
+                const sel = ${JSON.stringify(css)};
+                const txt = ${JSON.stringify(wantText.toLowerCase())};
+                let selOk = !sel;
+                if (sel) {
+                  const el = queryOneDeep(sel);
+                  if (el) {
+                    const st = window.getComputedStyle(el);
+                    const r = el.getBoundingClientRect();
+                    selOk = Boolean(st && st.display !== 'none' && st.visibility !== 'hidden' && Number(st.opacity) !== 0 && r.width >= 1 && r.height >= 1);
+                  }
+                }
+                let txtOk = !txt;
+                if (txt) {
+                  let allText = (document.body?.innerText || '').toLowerCase();
+                  if (!allText.includes(txt)) {
+                    for (const h of queryAllDeep('*')) {
+                      if (h.shadowRoot && String(h.shadowRoot.textContent || '').toLowerCase().includes(txt)) { txtOk = true; break; }
+                    }
+                  } else {
+                    txtOk = true;
+                  }
+                }
+                return selOk && txtOk;
+              })()`,
+              returnByValue: true,
+            }, 3000);
+            if (probe?.result?.value === true) { matched = true; break; }
+          } catch {}
+          await this.wait(100);
+        }
+        if (!matched) {
+          throw fault('BROWSER_WAIT_TIMEOUT', `Timed out after ${budgetMs}ms waiting for ${[css ? `selector "${css}"` : '', wantText ? `text "${wantText}"` : ''].filter(Boolean).join(' and ')}.`);
+        }
+      }
     } else if (action === 'scroll') {
       const dx = Number(args.deltaX) || 0;
       const dy = args.deltaY === undefined ? 500 : (Number(args.deltaY) || 0);
@@ -615,7 +771,7 @@ class CdpSession {
       await this.wait(args.waitMs ?? 300);
     } else if (action === 'type') {
       if (args.ref || args.selector || (Number.isFinite(args.x) && Number.isFinite(args.y))) {
-        const pt = await this.resolveTargetPoint(args);
+        const pt = await this.resolveTargetPoint({ ...args, focus: true });
         await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: pt.x, y: pt.y });
         await this.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: pt.x, y: pt.y, button: 'left', clickCount: 1 });
         await this.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: pt.x, y: pt.y, button: 'left', clickCount: 1 });
@@ -623,7 +779,8 @@ class CdpSession {
       if (args.clear) {
         await this.send('Runtime.evaluate', {
           expression: `(() => {
-            const el = document.activeElement;
+            ${DEEP_QUERY_HELPERS}
+            const el = deepActiveElement();
             if (!el) return;
             if ('value' in el) {
               const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -658,20 +815,29 @@ class CdpSession {
       if (!css) throw fault('BROWSER_TARGET_REQUIRED', 'Provide ref or selector for select action.');
       const res = await this.send('Runtime.evaluate', {
         expression: `(() => {
-          const el = document.querySelector(${JSON.stringify(css)});
-          if (!el || el.tagName !== 'SELECT') return false;
+          ${DEEP_QUERY_HELPERS}
+          const el = queryOneDeep(${JSON.stringify(css)});
+          if (!el || el.tagName !== 'SELECT') return { ok: false, reason: 'not_found' };
           const want = ${JSON.stringify(String(args.text ?? ''))};
           const opts = [...el.options];
           const match = opts.find(o => o.value === want) || opts.find(o => o.textContent.trim().toLowerCase() === want.trim().toLowerCase());
-          if (!match) return false;
-          el.value = match.value;
+          if (!match) return { ok: false, reason: 'option_missing', options: opts.slice(0, 12).map(o => o.textContent.trim() + ' (' + o.value + ')') };
+          const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set;
+          if (setter) setter.call(el, match.value);
+          else el.value = match.value;
           el.dispatchEvent(new Event('input', { bubbles: true }));
           el.dispatchEvent(new Event('change', { bubbles: true }));
-          return true;
+          return { ok: true };
         })()`,
         returnByValue: true,
       });
-      if (!res?.result?.value) throw fault('BROWSER_ELEMENT_NOT_FOUND', `Select element not found: ${args.ref || args.selector}`);
+      const selOut = res?.result?.value;
+      if (!selOut?.ok) {
+        if (selOut?.reason === 'option_missing') {
+          throw fault('BROWSER_OPTION_NOT_FOUND', `Option "${args.text}" not found on ${args.ref || args.selector}. Available: ${(selOut.options || []).join(', ')}`);
+        }
+        throw fault('BROWSER_ELEMENT_NOT_FOUND', `Select element not found: ${args.ref || args.selector}`);
+      }
       await this.wait(args.waitMs ?? 200);
     } else {
       throw fault('INVALID_TOOL', `Unsupported browser action: ${action}`);

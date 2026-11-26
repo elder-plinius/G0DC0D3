@@ -399,6 +399,7 @@
       <p class="field-help" id="model-current"></p>
       <p class="form-feedback" id="model-feedback" role="status"></p>
     </div>
+    <section id="api-toggles-section" class="settings-card api-toggles-section" aria-label="Active API providers" hidden></section>
     <section id="api-key-setup" class="settings-card api-key-setup">
       <div class="settings-card-head">
         <h4>Connect a Provider or Local Server</h4>
@@ -460,6 +461,7 @@
   <dialog id="model-picker" class="model-picker" aria-label="Choose model">
     <div class="model-picker-heading"><strong>Models</strong><span id="model-picker-scope"></span><button type="button" class="icon-button" data-close="model-picker" aria-label="Close model picker">×</button></div>
     <div class="model-picker-search"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg><input id="model-picker-search" type="search" role="combobox" aria-label="Search models" aria-controls="model-picker-results" aria-expanded="true" aria-autocomplete="list" placeholder="Search models…" autocomplete="off" spellcheck="false"></div>
+    <div id="model-picker-filters" class="model-picker-filters hidden" role="group" aria-label="Filter models by API provider"></div>
     <p id="model-picker-note" class="model-picker-note"></p>
     <div id="model-picker-results" role="listbox" aria-label="Available models"></div>
     <p id="model-picker-error" class="model-picker-error" role="alert"></p>

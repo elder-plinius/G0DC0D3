@@ -363,8 +363,8 @@ function newConversationProviders() {
     }
   } catch {}
   if (allGroup?.providerIds?.length) {
-    const liveVenice = veniceUncensored && !catalogId(veniceUncensored) ? [veniceUncensored] : [];
-    return [...new Set([...base, ...allGroup.providerIds, ...liveVenice])].slice(0, 10);
+    const liveGodmode = godmodeDefault && !catalogId(godmodeDefault) ? [godmodeDefault] : [];
+    return [...new Set([...base, ...allGroup.providerIds, ...liveGodmode])].slice(0, 10);
   }
   return base;
 }
@@ -1267,6 +1267,62 @@ async function restoreCheckpointAction(task, hash) {
   }
 }
 
+function formatCompactTokens(n) {
+  const num = Number(n) || 0;
+  if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(num >= 10_000_000 ? 1 : 2)}M`;
+  if (num >= 1_000) return `${(num / 1_000).toFixed(num >= 100_000 ? 0 : 1)}k`;
+  return String(Math.round(num));
+}
+
+function formatEstimatedCostUsd(usd) {
+  if (!Number.isFinite(usd) || usd <= 0) return '';
+  if (usd < 0.001) return '<$0.001';
+  if (usd < 0.01) return `~$${usd.toFixed(4)}`;
+  if (usd < 1) return `~$${usd.toFixed(3)}`;
+  return `~$${usd.toFixed(2)}`;
+}
+
+function pricingForProviderId(providerId) {
+  if (!providerId) return null;
+  const prov = providerById(providerId);
+  const meta = prov?.meta || modelMetaById(providerId);
+  if (meta?.billing === 'local' || meta?.billing === 'subscription' || prov?.tier === 'local' || prov?.kind === 'cli') return null;
+  const p = prov?.pricing || meta?.pricing;
+  if (p && Number.isFinite(p.inputPer1M) && Number.isFinite(p.outputPer1M) && (p.inputPer1M > 0 || p.outputPer1M > 0)) {
+    return p;
+  }
+  if (prov?.model && Array.isArray(openrouterCatalog?.models)) {
+    const m = openrouterCatalog.models.find(item => item.id === prov.model);
+    if (m?.pricing && Number.isFinite(m.pricing.inputPer1M) && Number.isFinite(m.pricing.outputPer1M) && (m.pricing.inputPer1M > 0 || m.pricing.outputPer1M > 0)) {
+      return m.pricing;
+    }
+  }
+  return null;
+}
+
+function computeTaskUsageSummary(task, events) {
+  const evList = Array.isArray(events) ? events : [];
+  let totalIn = 0, totalOut = 0, estCostUsd = 0, pricedTurns = 0;
+  for (const ev of evList) {
+    if (ev.type !== 'model.response') continue;
+    const usage = ev.data?.response?.usage;
+    if (!usage || typeof usage !== 'object') continue;
+    const inTok = Number(usage.input_tokens ?? usage.prompt_tokens ?? 0) || 0;
+    const outTok = Number(usage.output_tokens ?? usage.completion_tokens ?? 0) || 0;
+    totalIn += inTok;
+    totalOut += outTok;
+    const pid = ev.data?.providerId || task?.providerId;
+    const pricing = pricingForProviderId(pid);
+    if (pricing) {
+      estCostUsd += (inTok * pricing.inputPer1M + outTok * pricing.outputPer1M) / 1_000_000;
+      pricedTurns += 1;
+    }
+  }
+  const totalTokens = totalIn + totalOut;
+  const costLabel = pricedTurns > 0 ? formatEstimatedCostUsd(estCostUsd) : '';
+  return { totalIn, totalOut, totalTokens, estCostUsd, costLabel };
+}
+
 function renderTaskMetaStrip(task) {
   const strip = $('#task-meta-strip');
   if (!strip) return;
@@ -1289,13 +1345,14 @@ function renderTaskMetaStrip(task) {
     ? `<button type="button" class="strip-action-btn strip-canvas-btn${artifactDockState.open ? ' is-active' : ''}" data-toggle-artifact-dock title="${artifactDockState.open ? `Hide ${dockLabel.toLowerCase()} panel` : `Open ${dockLabel.toLowerCase()} panel`}" aria-pressed="${artifactDockState.open ? 'true' : 'false'}"><span class="strip-dot" aria-hidden="true"></span><span>${dockLabel}</span></button>`
     : '';
   const evList = Array.isArray(selectedData?.events) ? selectedData.events : [];
+  const usageSummary = computeTaskUsageSummary(task, evList);
   const lastReq = [...evList].reverse().find(e => e.type === 'model.request' && Number.isFinite(e.data?.contextBytes));
   const estBytes = lastReq
     ? Number(lastReq.data.contextBytes)
     : (String(task.objective || '').length + (task.followups || []).reduce((s, f) => s + String(f?.message || '').length, 0) + evList.filter(e => e.type === 'model.response').reduce((s, e) => s + String(e.data?.response?.text || '').length, 0));
   const ctxPct = Math.min(100, Math.round((estBytes / (128 * 1024)) * 100));
   const turnCount = 1 + (task.followups?.length || 0);
-  const showCtx = ctxPct >= 60 || Boolean(task.workingSummary);
+  const showCtx = ctxPct >= 25 || Boolean(task.workingSummary);
   const ctxTone = ctxPct >= 85 ? 'ctx-high' : ctxPct >= 65 ? 'ctx-warn' : '';
   const showCompactBtn = task.workspaceKind !== 'conversation' || ctxPct >= 50 || turnCount >= 6;
   const priv = state.privacy?.settings || {};
@@ -1314,6 +1371,11 @@ function renderTaskMetaStrip(task) {
   if (calls > 0) {
     const nearLimit = maxCalls > 0 && calls >= maxCalls * 0.8;
     metaParts.push(`<span class="strip-meta-item strip-calls${nearLimit ? ' is-warn' : ''}" title="Model calls used / call limit">${escapeHTML(calls)}/${escapeHTML(maxCalls || '—')} calls</span>`);
+  }
+  if (usageSummary.totalTokens > 0) {
+    const tokLabel = `${formatCompactTokens(usageSummary.totalTokens)} tok${usageSummary.costLabel ? ` · ${usageSummary.costLabel}` : ''}`;
+    const tokTitle = `Observed tokens: ${usageSummary.totalIn.toLocaleString()} in + ${usageSummary.totalOut.toLocaleString()} out = ${usageSummary.totalTokens.toLocaleString()} total${usageSummary.costLabel ? ` · Estimated API spend ${usageSummary.costLabel}` : ''}`;
+    metaParts.push(`<span class="strip-meta-item strip-usage" title="${escapeHTML(tokTitle)}">${escapeHTML(tokLabel)}</span>`);
   }
   if (showCtx) {
     metaParts.push(`<span class="strip-meta-item strip-ctx ${ctxTone}" title="Conversation context budget (~${Math.round(estBytes / 1024)} / 128 KiB · ${turnCount} turns)">${ctxPct}% ctx</span>`);
@@ -1964,11 +2026,98 @@ function renderOpenRouterCatalog() {
   const tail = filtered.length > limit ? `<p class="field-help openrouter-list-more">Showing ${limit} of ${filtered.length} matching models — type to narrow the list.</p>` : '';
   listEl.innerHTML = rows + tail;
 }
+let apiToggleBusy = null;
+
+function renderApiToggles() {
+  const section = $('#api-toggles-section');
+  if (!section) return;
+  const profiles = Array.isArray(state.connectedApiProviders) ? state.connectedApiProviders : [];
+  section.hidden = profiles.length === 0;
+  if (!profiles.length) return;
+  const activeCount = profiles.filter(p => p.enabled !== false).length;
+  const rows = profiles.map(p => {
+    const enabled = p.enabled !== false;
+    const busy = apiToggleBusy === p.provider;
+    const count = Number(p.modelCount ?? p.models?.length ?? 0);
+    const catalogNote = p.provider === 'openrouter' && enabled && openrouterCatalog.models.length > count
+      ? `${openrouterCatalog.models.length} catalog · ${count} pinned`
+      : p.provider === 'venice' && enabled && veniceCatalog.models.length > count
+        ? `${veniceCatalog.models.length} catalog`
+        : `${count} ${count === 1 ? 'model' : 'models'}`;
+    const storageLabel = p.storage === 'keychain' ? 'Keychain' : p.storage === 'env' ? 'Env' : 'Session';
+    const meta = enabled
+      ? `${catalogNote} · ${storageLabel}`
+      : `Paused (${count} ${count === 1 ? 'model' : 'models'} hidden · key kept in ${storageLabel.toLowerCase()})`;
+    return `<div class="api-toggle-row ${enabled ? '' : 'is-disabled'}">
+      <div class="api-toggle-info">
+        <span class="api-toggle-title"><span class="svc-dot ${enabled ? 'svc-connected' : 'svc-muted'}" aria-hidden="true"></span>${escapeHTML(p.label || humanize(p.provider))}</span>
+        <span class="api-toggle-meta">${escapeHTML(meta)}</span>
+      </div>
+      <button type="button" class="api-switch" role="switch" aria-checked="${enabled ? 'true' : 'false'}" data-toggle-api-provider="${escapeHTML(p.provider)}" data-toggle-enabled="${enabled ? 'false' : 'true'}" ${busy ? 'disabled' : ''}>
+        <span class="api-switch-track" aria-hidden="true"><span class="api-switch-thumb"></span></span>
+        <span>${busy ? 'Saving…' : enabled ? 'Active' : 'Disabled'}</span>
+      </button>
+    </div>`;
+  }).join('');
+  section.innerHTML = `<div class="settings-card-head">
+    <h4>Active API Providers</h4>
+    <p>${activeCount} of ${profiles.length} connected API${profiles.length === 1 ? '' : 's'} enabled. Turn any API off to hide its models from the picker &amp; routing without deleting your saved key.</p>
+  </div><div class="api-toggles-list">${rows}</div>`;
+}
+
+async function toggleApiProvider(provider, enabled) {
+  if (!provider || apiToggleBusy) return;
+  apiToggleBusy = provider;
+  renderApiToggles();
+  try {
+    const res = await api('/api/providers/profile', {
+      method: 'PATCH',
+      body: JSON.stringify({ provider, enabled: Boolean(enabled) }),
+    });
+    if (Array.isArray(res.connectedApiProviders)) state.connectedApiProviders = res.connectedApiProviders;
+    if ('openrouterConnectionId' in res) state.openrouterConnectionId = res.openrouterConnectionId;
+    if ('veniceConnectionId' in res) state.veniceConnectionId = res.veniceConnectionId;
+    if (provider === 'openrouter') {
+      if (enabled) await loadOpenRouterCatalog(true);
+      else openrouterCatalog = { connected: false, models: [], registered: [], warning: '' };
+    } else if (provider === 'venice') {
+      if (enabled) await loadVeniceCatalog(true);
+      else veniceCatalog = { connected: false, models: [], warning: '' };
+    }
+    await refresh();
+    if (!enabled && preferredProvider && !state.providers.some(p => p.id === preferredProvider && p.available !== false)) {
+      const nextActive = state.providers.find(p => p.available !== false && p.kind !== 'scripted');
+      preferredProvider = nextActive?.id || '';
+      try {
+        if (preferredProvider) localStorage.setItem('g0dc0d3.preferredProvider', preferredProvider);
+        else localStorage.removeItem('g0dc0d3.preferredProvider');
+      } catch {}
+    }
+    renderComposer();
+    if ($('#settings-dialog')?.open) {
+      await Promise.all([loadServices(true), loadModelGroups(selectedModelSort)]);
+      renderModelSettings();
+    }
+    if ($('#model-picker')?.open) renderModelPicker();
+    const name = res.label || humanize(provider);
+    const msg = enabled ? `Enabled ${name}.` : `Disabled ${name} (saved key kept).`;
+    setModelFeedback(msg);
+    toast(msg);
+  } catch (error) {
+    setModelFeedback(error.message, true);
+    toast(error.message);
+  } finally {
+    apiToggleBusy = null;
+    renderApiToggles();
+    renderServicesHub();
+  }
+}
+
 function renderCustomModelForm() {
   const wrap = $('#custom-model-setup');
   const select = $('#custom-model-provider');
   if (!wrap || !select) return;
-  const connected = Array.isArray(state.connectedApiProviders) ? state.connectedApiProviders : [];
+  const connected = (Array.isArray(state.connectedApiProviders) ? state.connectedApiProviders : []).filter(c => c.enabled !== false);
   wrap.hidden = connected.length === 0;
   if (!connected.length) return;
   const prev = select.value;
@@ -2100,6 +2249,9 @@ function renderServiceTile(svc) {
     action = `<button type="button" class="button button-secondary svc-action-btn" data-service-connect="${escapeHTML(svc.id)}" ${connectionBusy ? 'disabled' : ''}>Review connection</button>`;
   } else if (svc.category === 'api' && svc.status === 'unconfigured') {
     action = `<button type="button" class="button button-quiet svc-action-btn" data-service-add-key="${escapeHTML(svc.id)}">Add key</button>`;
+  } else if (svc.category === 'api' && svc.connected) {
+    const nextOn = !svc.enabled;
+    action = `<button type="button" class="button ${nextOn ? 'button-secondary' : 'button-quiet'} svc-action-btn" data-toggle-api-provider="${escapeHTML(svc.id)}" data-toggle-enabled="${nextOn ? 'true' : 'false'}" ${apiToggleBusy === svc.id ? 'disabled' : ''}>${nextOn ? 'Enable' : 'Disable'}</button>`;
   } else if (svc.id === 'local-inference' && svc.status !== 'connected') {
     action = '<button type="button" class="button button-quiet svc-action-btn" data-service-add-local>Add model</button>';
   }
@@ -2649,6 +2801,7 @@ function formatRouteSummary(ids, scopePrefix) {
 }
 
 function renderModelSettings() {
+  renderApiToggles();
   renderVeniceCatalog();
   renderOpenRouterCatalog();
   renderCustomModelForm();
@@ -4197,6 +4350,7 @@ function closeArtifactDock({ recordDismiss = true } = {}) {
   artifactDockState.open = false;
   artifactDockState.manualOverrideForKey = null;
   artifactDockState.fullscreen = false;
+  artifactDockState.inspectMode = false;
   artifactDockState.session = null;
   artifactDockState.logs = [];
   const dock = $('#artifact-dock');
@@ -4271,6 +4425,7 @@ async function openLivePreview({ taskId, entry, html, files, title, artifactKey,
     artifactDockState.viewMode = 'preview';
     artifactDockState.consoleOpen = false;
     artifactDockState.fullscreen = false;
+    artifactDockState.inspectMode = false;
     if (!auto) artifactDismissedKeys.delete(artifactDockState.key);
 
     const dock = $('#artifact-dock');
@@ -4299,6 +4454,7 @@ async function openLivePreview({ taskId, entry, html, files, title, artifactKey,
           <button type="button" class="live-vp-btn${artifactDockState.viewport === 'mobile' ? ' active' : ''}" data-preview-vp="mobile" aria-pressed="${artifactDockState.viewport === 'mobile'}" title="Mobile (390px)">Mobile</button>
         </div>
         <div class="live-browser-actions">
+          <button type="button" class="button button-quiet live-browser-btn" data-preview-inspect aria-pressed="false" title="Click any element in the preview to reference it in chat">⌖ Inspect</button>
           <button type="button" class="button button-quiet live-browser-btn" data-preview-reload title="Reload preview">↻</button>
           <button type="button" class="button button-quiet live-browser-btn" data-preview-download title="Download standalone file">↓ Save</button>
           <button type="button" class="button button-quiet live-browser-btn" data-preview-console aria-expanded="false">Console · <span class="live-console-count">0</span></button>
@@ -4329,9 +4485,22 @@ async function openLivePreview({ taskId, entry, html, files, title, artifactKey,
       fromBottom: true,
       anchorEl: dock,
     });
+    const inspectBtn = dock.querySelector('[data-preview-inspect]');
     const consoleBtn = dock.querySelector('[data-preview-console]');
     const fullscreenBtn = dock.querySelector('[data-preview-fullscreen]');
     const countEl = dock.querySelector('.live-console-count');
+
+    const setInspectMode = (next, notifyFrame = true) => {
+      artifactDockState.inspectMode = Boolean(next);
+      if (inspectBtn) {
+        inspectBtn.classList.toggle('is-inspecting', artifactDockState.inspectMode);
+        inspectBtn.setAttribute('aria-pressed', String(artifactDockState.inspectMode));
+        inspectBtn.textContent = artifactDockState.inspectMode ? '⌖ Picking…' : '⌖ Inspect';
+      }
+      if (notifyFrame) {
+        try { iframe?.contentWindow?.postMessage({ type: 'g0d-preview-inspect-mode', token: session.token, enabled: artifactDockState.inspectMode }, '*'); } catch {}
+      }
+    };
 
     const renderConsole = () => {
       if (countEl) countEl.textContent = String(artifactDockState.logs.length);
@@ -4353,15 +4522,52 @@ async function openLivePreview({ taskId, entry, html, files, title, artifactKey,
 
     const onMessage = event => {
       const data = event.data;
-      if (!data || data.type !== 'g0d-preview-console' || data.token !== session.token) return;
-      artifactDockState.logs.push({ level: data.level === 'warn' ? 'warn' : 'error', message: String(data.message || '') });
-      if (artifactDockState.logs.length > 50) artifactDockState.logs.shift();
-      renderConsole();
+      if (!data || data.token !== session.token) return;
+      if (event.source && iframe?.contentWindow && event.source !== iframe.contentWindow) return;
+      if (data.type === 'g0d-preview-console') {
+        artifactDockState.logs.push({ level: data.level === 'warn' ? 'warn' : 'error', message: String(data.message || '') });
+        if (artifactDockState.logs.length > 50) artifactDockState.logs.shift();
+        renderConsole();
+        return;
+      }
+      if (data.type === 'g0d-preview-inspect-cancel') {
+        setInspectMode(false, false);
+        return;
+      }
+      if (data.type === 'g0d-preview-picked' && data.element) {
+        setInspectMode(false, false);
+        const el = data.element;
+        const sel = String(el.selector || el.tag || 'element').slice(0, 140);
+        const dims = el.rect ? `${el.rect.w}×${el.rect.h}px` : '';
+        const txt = el.text ? `"${String(el.text).slice(0, 60)}"` : '';
+        const stParts = [];
+        if (el.styles?.fontSize) stParts.push(`font ${el.styles.fontSize}`);
+        if (el.styles?.color) stParts.push(`color ${el.styles.color}`);
+        if (el.styles?.background && el.styles.background !== 'rgba(0, 0, 0, 0)' && el.styles.background !== 'transparent') stParts.push(`bg ${el.styles.background}`);
+        const detail = [txt, dims, stParts.join(', ')].filter(Boolean).join(' · ');
+        const snippet = `Element \`${sel}\`${detail ? ` (${detail})` : ''} in ${session.entry || label}:\n`;
+        const input = $('#composer-input');
+        if (input) {
+          const cur = input.value;
+          input.value = cur ? `${cur.replace(/\s+$/, '')}\n${snippet}` : snippet;
+          input.focus();
+          input.selectionStart = input.selectionEnd = input.value.length;
+          resizeComposer();
+          captureComposerDraft();
+          renderComposer();
+        }
+        toast(`Picked ${sel} — describe your edit.`);
+      }
     };
     const onKey = event => {
-      if (event.key === 'Escape' && artifactDockState.open && artifactDockState.fullscreen && !document.querySelector('dialog[open]') && (Date.now() - lastDialogCloseAt > 120)) {
-        event.preventDefault();
-        setFullscreen(false);
+      if (event.key === 'Escape' && artifactDockState.open && !document.querySelector('dialog[open]') && (Date.now() - lastDialogCloseAt > 120)) {
+        if (artifactDockState.inspectMode) {
+          event.preventDefault();
+          setInspectMode(false, true);
+        } else if (artifactDockState.fullscreen) {
+          event.preventDefault();
+          setFullscreen(false);
+        }
       }
     };
     artifactDockState.onMessage = onMessage;
@@ -4375,6 +4581,7 @@ async function openLivePreview({ taskId, entry, html, files, title, artifactKey,
       if (modeBtn) {
         artifactDockState.viewMode = modeBtn.dataset.artifactMode;
         const isCode = artifactDockState.viewMode === 'code';
+        if (isCode && artifactDockState.inspectMode) setInspectMode(false, true);
         stage.classList.toggle('hidden', isCode);
         codePane.classList.toggle('hidden', !isCode);
         if (isCode) renderArtifactCodePane(dock);
@@ -4396,7 +4603,23 @@ async function openLivePreview({ taskId, entry, html, files, title, artifactKey,
         });
         return;
       }
+      if (event.target.closest('[data-preview-inspect]')) {
+        if (artifactDockState.viewMode === 'code') {
+          artifactDockState.viewMode = 'preview';
+          stage.classList.remove('hidden');
+          codePane.classList.add('hidden');
+          dock.querySelectorAll('[data-artifact-mode]').forEach(b => {
+            const active = b.dataset.artifactMode === 'preview';
+            b.classList.toggle('active', active);
+            b.setAttribute('aria-pressed', String(active));
+          });
+        }
+        setInspectMode(!artifactDockState.inspectMode, true);
+        if (artifactDockState.inspectMode) toast('Click any element in the preview to inspect it (Esc to cancel).');
+        return;
+      }
       if (event.target.closest('[data-preview-reload]')) {
+        setInspectMode(false, false);
         artifactDockState.logs.length = 0;
         renderConsole();
         iframe.src = `${session.url}?t=${Date.now()}`;
@@ -4543,6 +4766,8 @@ function detectAgentBrowserView(data) {
         url: r.url || '',
         title: r.title || r.url || 'Contained Browser',
         screenshotUrl: r.screenshotUrl,
+        viewport: r.viewport || null,
+        elementCount: Array.isArray(r.elements) ? r.elements.length : null,
         consoleErrors: Array.isArray(r.consoleErrors) ? r.consoleErrors : [],
         artifactKey: `browser:${task.id}:${r.screenshotUrl}`,
       };
@@ -4571,14 +4796,21 @@ function openAgentBrowserDock(view) {
   splitter?.classList.remove('hidden');
   document.body.classList.add('artifact-open');
   const errCount = view.consoleErrors?.length || 0;
+  const metaBits = [
+    view.viewport?.width && view.viewport?.height ? `${view.viewport.width}×${view.viewport.height}` : '',
+    Number.isFinite(view.elementCount) ? `${view.elementCount} refs` : '',
+    errCount ? `${errCount} ${errCount === 1 ? 'issue' : 'issues'}` : '',
+  ].filter(Boolean).join(' · ');
   dock.innerHTML = `
     <header class="artifact-toolbar">
       <div class="artifact-title-group">
         <span class="live-browser-dot" aria-hidden="true"></span>
         <span class="agent-browser-badge">Agent Browser</span>
         <code title="${escapeHTML(view.url)}">${escapeHTML(view.url || view.title)}</code>
+        ${metaBits ? `<span class="agent-browser-meta">${escapeHTML(metaBits)}</span>` : ''}
       </div>
       <div class="live-browser-actions">
+        ${view.url ? `<button type="button" class="button button-quiet live-browser-btn" data-browser-copy-url title="Copy current URL">Copy URL</button>` : ''}
         <button type="button" class="button button-quiet live-browser-btn" data-browser-refresh title="Refresh live screenshot">↻</button>
         <button type="button" class="button button-quiet live-browser-btn" data-preview-fullscreen aria-pressed="${artifactDockState.fullscreen ? 'true' : 'false'}" title="Toggle fullscreen (Esc exits)">${artifactDockState.fullscreen ? '✕ Exit full' : '⛶ Fullscreen'}</button>
         <button type="button" class="icon-button" data-preview-close aria-label="Close agent browser">×</button>
@@ -4607,6 +4839,10 @@ function openAgentBrowserDock(view) {
   window.addEventListener('keydown', onKey);
   dock.onclick = event => {
     if (event.target.closest('[data-preview-close]')) { closeArtifactDock({ recordDismiss: true }); return; }
+    if (event.target.closest('[data-browser-copy-url]') && view.url) {
+      navigator.clipboard?.writeText(view.url).then(() => toast('Copied browser URL.')).catch(() => {});
+      return;
+    }
     if (event.target.closest('[data-browser-refresh]')) {
       const img = dock.querySelector('.agent-browser-shot');
       const sep = view.screenshotUrl.includes('?') ? '&' : '?';
@@ -4975,15 +5211,11 @@ function renderSelected(data, force = false) {
   renderControls(task);
   renderCrew();
   const events = Array.isArray(data.events) ? data.events : [];
-  let totalIn = 0, totalOut = 0;
-  for (const ev of events) {
-    const usage = ev.type === 'model.response' ? ev.data?.response?.usage : null;
-    if (!usage || typeof usage !== 'object') continue;
-    totalIn += Number(usage.input_tokens ?? usage.prompt_tokens ?? 0) || 0;
-    totalOut += Number(usage.output_tokens ?? usage.completion_tokens ?? 0) || 0;
-  }
-  const tokenTotal = totalIn + totalOut;
-  const usageHtml = tokenTotal > 0 ? `<span title="Observed prompt + completion tokens"><strong>${escapeHTML(tokenTotal.toLocaleString())}</strong> tokens</span>` : '';
+  const usageSummary = computeTaskUsageSummary(task, events);
+  const usageTitle = `Observed prompt + completion tokens: ${usageSummary.totalIn.toLocaleString()} in · ${usageSummary.totalOut.toLocaleString()} out`;
+  const usageHtml = usageSummary.totalTokens > 0
+    ? `<span title="${escapeHTML(usageTitle)}"><strong>${escapeHTML(usageSummary.totalTokens.toLocaleString())}</strong> tokens</span>${usageSummary.costLabel ? `<span title="Estimated API spend from catalog pricing"><strong>${escapeHTML(usageSummary.costLabel)}</strong> est.</span>` : ''}`
+    : '';
   const tierCounter = provider?.tier ? `<span title="Active provider tier"><strong>${escapeHTML(provider.tier)}</strong> tier</span>` : '';
   const modeCounter = `<span title="Execution mode"><strong>${escapeHTML(task.planMode ? 'Plan' : 'Build')}</strong> mode</span>`;
   $('#task-counters').innerHTML = `<span title="Model requests used / call limit"><strong>${escapeHTML(task.calls ?? 0)} / ${escapeHTML(task.policy?.maxCalls ?? '—')}</strong> calls</span><span title="Recovery attempts used / limit"><strong>${escapeHTML(task.recoveries ?? 0)} / ${escapeHTML(task.policy?.maxAttempts ?? '—')}</strong> recoveries</span>${tierCounter}${modeCounter}${usageHtml}`;
@@ -6576,9 +6808,20 @@ $('#new-model-options').addEventListener('change', event => {
   renderComposer();
 });
 $('#header-services-btn')?.addEventListener('click', () => openSettings('models'));
+$('#api-toggles-section')?.addEventListener('click', event => {
+  const toggleBtn = event.target.closest('[data-toggle-api-provider]');
+  if (toggleBtn) {
+    void toggleApiProvider(toggleBtn.dataset.toggleApiProvider, toggleBtn.dataset.toggleEnabled === 'true');
+  }
+});
 $('#connected-services-hub')?.addEventListener('click', event => {
   if (event.target.closest('[data-refresh-services]')) {
     Promise.all([loadServices(true), loadModelConnections(true)]);
+    return;
+  }
+  const toggleBtn = event.target.closest('[data-toggle-api-provider]');
+  if (toggleBtn) {
+    void toggleApiProvider(toggleBtn.dataset.toggleApiProvider, toggleBtn.dataset.toggleEnabled === 'true');
     return;
   }
   const connectBtn = event.target.closest('[data-service-connect]');
@@ -6756,11 +6999,18 @@ async function submitApiKey(inputOrKey, feedbackEl, provider = '') {
       preferredProvider = result.registered[0];
       try { localStorage.setItem('g0dc0d3.preferredProvider', preferredProvider); } catch {}
     }
+    if (Array.isArray(result.connectedApiProviders)) state.connectedApiProviders = result.connectedApiProviders;
     await refresh();
+    if (result.provider === 'openrouter') await loadOpenRouterCatalog(true);
+    else if (result.provider === 'venice') await loadVeniceCatalog(true);
     renderComposer();
-    if ($('#settings-dialog').open) { await Promise.all([loadVeniceCatalog(), loadOpenRouterCatalog(), loadServices(), loadModelGroups(selectedModelSort)]); renderModelSettings(); }
+    if ($('#settings-dialog').open) { await Promise.all([loadServices(true), loadModelGroups(selectedModelSort)]); renderModelSettings(); }
     setVisible('#welcome-setup', false);
-    toast(`Connected ${providerName} (${result.registered.length} model${result.registered.length === 1 ? '' : 's'}).`);
+    const totalOr = result.provider === 'openrouter' && openrouterCatalog.models.length > result.registered.length
+      ? `${openrouterCatalog.models.length} catalog · ${result.registered.length} pinned`
+      : `${result.registered.length} model${result.registered.length === 1 ? '' : 's'}`;
+    setText(feedbackEl, `Connected ${providerName} (${totalOr}).${storageNote}`);
+    toast(`Connected ${providerName} (${totalOr}).`);
   } catch (error) {
     $(feedbackEl)?.classList.add('error');
     setText(feedbackEl, error.message);
@@ -7258,6 +7508,7 @@ let pickerReturnFocus = null;
 let pickerModels = [];
 let pickerIndex = 0;
 let pickerLoading = false;
+let pickerProviderFilter = 'all';
 let recentModels = [];
 try { const saved = JSON.parse(localStorage.getItem('g0dc0d3.recentModels') || '[]'); if (Array.isArray(saved)) recentModels = saved.filter(id => typeof id === 'string').slice(0, 5); } catch {}
 
@@ -7321,6 +7572,32 @@ function modelMetaById(id) {
   return null;
 }
 
+function pickerBucketOf(p) {
+  const id = String(p?.id || '');
+  if (p?.catalogProvider === 'openrouter' || id.startsWith('openrouter:')) return 'openrouter';
+  if (catalogId(id) || id.startsWith('venice:') || /venice/i.test(id)) return 'venice';
+  if (id.startsWith('anthropic:')) return 'anthropic';
+  if (id.startsWith('openai:')) return 'openai';
+  if (id.startsWith('gemini:')) return 'gemini';
+  if (id.startsWith('nous:')) return 'nous';
+  if (p?.tier === 'local' || id.startsWith('local:')) return 'local';
+  if (['codex', 'claude', 'gemini-cli', 'copilot-cli', 'cli'].includes(p?.kind)) return 'cli';
+  return 'other';
+}
+
+const PICKER_BUCKET_LABELS = {
+  all: 'All',
+  openrouter: 'OpenRouter',
+  venice: 'Venice',
+  anthropic: 'Anthropic',
+  openai: 'OpenAI',
+  gemini: 'Gemini',
+  nous: 'Nous',
+  local: 'Local',
+  cli: 'CLI',
+  other: 'Other',
+};
+
 function renderModelPicker() {
   if (!$('#model-picker').open) return;
   const task = pickerTask(), selected = task?.providerId || newConversationProviders()[0];
@@ -7331,7 +7608,30 @@ function renderModelPicker() {
   // Keep the actual active connection visible even when a catalog alias exists.
   if (selected && !models.some(p => p.id === selected)) {
     const active = providerById(selected);
-    if (active) models.unshift(active);
+    if (active && active.available !== false) models.unshift(active);
+  }
+  const bucketCounts = new Map();
+  for (const m of models) {
+    const b = pickerBucketOf(m);
+    bucketCounts.set(b, (bucketCounts.get(b) || 0) + 1);
+  }
+  if (pickerProviderFilter !== 'all' && !bucketCounts.has(pickerProviderFilter)) {
+    pickerProviderFilter = 'all';
+  }
+  const filterBar = $('#model-picker-filters');
+  if (filterBar) {
+    if (bucketCounts.size >= 2) {
+      filterBar.classList.remove('hidden');
+      const order = ['openrouter', 'anthropic', 'openai', 'gemini', 'venice', 'nous', 'local', 'cli', 'other'].filter(b => bucketCounts.has(b));
+      const chips = [
+        `<button type="button" class="model-filter-chip${pickerProviderFilter === 'all' ? ' active' : ''}" data-picker-filter="all" aria-pressed="${pickerProviderFilter === 'all'}">All · ${models.length}</button>`,
+        ...order.map(b => `<button type="button" class="model-filter-chip${pickerProviderFilter === b ? ' active' : ''}" data-picker-filter="${b}" aria-pressed="${pickerProviderFilter === b}">${escapeHTML(PICKER_BUCKET_LABELS[b] || b)} · ${bucketCounts.get(b)}</button>`)
+      ];
+      filterBar.innerHTML = chips.join('');
+    } else {
+      filterBar.classList.add('hidden');
+      filterBar.innerHTML = '';
+    }
   }
   const rank = p => {
     if (p.id === selected) return -3;
@@ -7345,7 +7645,8 @@ function renderModelPicker() {
     return Number(m?.effectiveIntelligence ?? m?.intelligence ?? 0);
   };
   models.sort((a,b) => rank(a) - rank(b) || (iqOf(b) - iqOf(a)) || (a.label || a.id).localeCompare(b.label || b.id));
-  const matched = models.filter(p => `${p.label || ''} ${p.name || ''} ${p.model || ''} ${p.id}`.toLowerCase().includes(query));
+  const scoped = pickerProviderFilter === 'all' ? models : models.filter(p => pickerBucketOf(p) === pickerProviderFilter);
+  const matched = scoped.filter(p => `${p.label || ''} ${p.name || ''} ${p.model || ''} ${p.id}`.toLowerCase().includes(query));
   // If OpenRouter is connected and the user typed a custom org/model slug not yet listed, offer 1-click add.
   if (!task?.fixtureId && openrouterCatalog.connected && /^[a-zA-Z0-9][a-zA-Z0-9._-]+\/[a-zA-Z0-9][a-zA-Z0-9:._/+~-]{0,120}$/.test(rawQuery)) {
     const exactExists = matched.some(p => p.model?.toLowerCase() === query && p.id?.startsWith('openrouter:'));
@@ -7411,12 +7712,20 @@ async function openModelPicker(scope = selectedId, anchor = document.activeEleme
   $('#model-picker-search').focus();
   await Promise.all([
     loadVeniceCatalog(),
-    state.openrouterConnectionId && (openrouterCatalog.stale || openrouterCatalog.models.length <= 1) ? loadOpenRouterCatalog() : Promise.resolve(),
+    state.openrouterConnectionId && (openrouterCatalog.stale || openrouterCatalog.models.length <= 20) ? loadOpenRouterCatalog() : Promise.resolve(),
     Array.isArray(state.modelGroups) && state.modelGroups.length ? Promise.resolve() : loadModelGroups()
   ]);
   pickerLoading = false;
   renderModelPicker();
 }
+$('#model-picker-filters')?.addEventListener('click', event => {
+  const chip = event.target.closest('[data-picker-filter]');
+  if (!chip) return;
+  pickerProviderFilter = chip.dataset.pickerFilter || 'all';
+  pickerIndex = 0;
+  renderModelPicker();
+  $('#model-picker-search')?.focus();
+});
 
 async function selectModel(id, {scope = pickerScope, backup} = {}) {
   if (!id || routeBusy) return false;

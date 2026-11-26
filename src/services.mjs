@@ -259,11 +259,12 @@ export function createServiceStatus({
 
       // 3. Direct API Key Providers
       const apis = API_SERVICES.map(svc => {
-        const matched = allLiveProviders.filter(p => {
-          if (p.available === false) return false;
+        const allForService = allLiveProviders.filter(p => {
           if (String(p.id || '').startsWith(`${svc.id}:`)) return true;
           try { return p.baseUrl && new URL(p.baseUrl).hostname.toLowerCase() === svc.host; } catch { return false; }
         });
+        const matched = allForService.filter(p => p.available !== false);
+        const pausedByUser = matched.length === 0 && allForService.length > 0 && allForService.every(p => p.disabledByUser);
         const zdr = classifyProviderZdr({ baseUrl: svc.baseUrl, kind: 'http' });
         const privacyCheck = checkProviderPrivacyAllowed({ id: svc.id, label: svc.name, baseUrl: svc.baseUrl, kind: 'http' }, privacy);
         const blocked = matched.length > 0 && !privacyCheck.allowed;
@@ -272,20 +273,26 @@ export function createServiceStatus({
           name: svc.name,
           category: 'api',
           billing: svc.billing,
-          connected: matched.length > 0,
+          connected: matched.length > 0 || pausedByUser,
+          enabled: matched.length > 0,
+          pausedByUser,
           blocked,
-          modelCount: matched.length,
-          models: matched.map(p => p.model || p.label || p.id),
-          status: blocked ? 'blocked' : matched.length > 0 ? 'connected' : 'unconfigured',
+          modelCount: matched.length || allForService.length,
+          models: (matched.length ? matched : allForService).map(p => p.model || p.label || p.id),
+          status: blocked ? 'blocked' : matched.length > 0 ? 'connected' : pausedByUser ? 'paused' : 'unconfigured',
           statusLabel: blocked
             ? (privacy.localOnly ? 'Blocked (Local-Only)' : 'Blocked (Strict ZDR)')
             : matched.length > 0
-              ? `Connected · ${matched.length} ${matched.length === 1 ? 'model' : 'models'}`
-              : 'Not connected',
+              ? `Active · ${matched.length} ${matched.length === 1 ? 'model' : 'models'}`
+              : pausedByUser
+                ? 'Disabled'
+                : 'Not connected',
           zdr,
           detail: matched.length > 0
             ? matched.map(p => p.model || p.id).slice(0, 3).join(', ') + (matched.length > 3 ? ` +${matched.length - 3} more` : '')
-            : svc.description
+            : pausedByUser
+              ? `Key saved (${allForService.length} ${allForService.length === 1 ? 'model' : 'models'}) — currently disabled. Enable to include in model picker & routing.`
+              : svc.description
         };
       });
 
