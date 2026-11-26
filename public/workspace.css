@@ -4246,9 +4246,31 @@ body.is-resizing-panel-h iframe { pointer-events: none; }
 }
 
 /* Compact narrow task header & single-row scrollable tabs */
+body.artifact-open .task-workspace.workspace-compact,
 .task-workspace.workspace-compact {
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto auto auto auto minmax(12rem, 1fr);
+  grid-template-rows: auto auto auto auto minmax(5rem, 1fr);
+}
+:root[data-theme="light"] .header-services-btn {
+  background: #ffffff;
+  border-color: #d7d2e0;
+  color: #1f1c26;
+}
+:root[data-theme="light"] .header-services-btn:hover {
+  background: #f4f1fa;
+  border-color: #8b6cd4;
+}
+:root[data-theme="light"] .new-thread-button {
+  background: #eef8f1;
+  border-color: #8bc79c;
+  color: #1b5c30;
+}
+:root[data-theme="light"] .task-item-row.selected {
+  background: #ece5fa;
+  border-color: #b79ce8;
+}
+:root[data-theme="light"] .task-item-row.selected .task-item-name {
+  color: #1f1930;
 }
 .task-workspace.workspace-compact .task-heading {
   grid-column: 1;
