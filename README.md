@@ -11,14 +11,14 @@
   <img src="https://img.shields.io/badge/runtime-Node_22.13%2B-339933?style=flat-square" alt="Node.js 22.13+">
   <img src="https://img.shields.io/badge/npm_deps-0-d97706?style=flat-square" alt="Zero npm dependencies">
   <img src="https://img.shields.io/badge/telemetry-ZERO-dc2626?style=flat-square" alt="Zero Telemetry">
-  <img src="https://img.shields.io/badge/tests-269%2F269-16a34a?style=flat-square" alt="269 tests passing">
+  <img src="https://img.shields.io/badge/tests-300%2F300-16a34a?style=flat-square" alt="300 tests passing">
 </p>
 
 <p align="center">
   <img src="docs/screenshots/godmode-dark.png" alt="GODMODƎ Workspace" width="88%">
 </p>
 
-Local-first AI chat, prompt-transparency & prefill lab, contained Chromium agent browser, and autonomous Git worktree coding studio — built on **Node.js 22.13+ SQLite** and a native **macOS AppKit/`WKWebView`** shell, with **zero npm dependencies** and **zero telemetry**.
+Local-first AI workbench, **Conclave** multi-agent stage, **live CDP browser mirror**, wire-level **System Lab**, and autonomous **Git worktree** coding studio — built on **Node.js 22.13+ SQLite** and a native **macOS AppKit/`WKWebView`** shell, with **zero npm dependencies** and **zero telemetry**.
 
 ---
 
@@ -46,13 +46,14 @@ CLI: `node src/cli.mjs --help` · Tests: `npm test` · Eval: `npm run bench:self
 
 ---
 
-## What's Inside
+## What Makes It Different
 
-- **Two Surfaces (`⌘⇧G`)**: **`GODMODƎ`** (sovereign local chat, contained Chromium agent browser, offline HTML5/SVG/Mermaid live canvas) and **`GODCODƎ`** (Git worktrees, multi-model patch races, Plan/Build mode, `Safe` default permission gate, Git checkpoints).
-- **Full Wire Transparency (`Settings → System`)**: Inspect, edit, and reset all **13 system prompt blocks**, **27 tool schemas**, **Prefills & Message Shaping** (off by default), and **Live Wire Preview** before a single byte leaves localhost.
-- **Multi-Provider Hub & Ultra-Plinian**: Venice Catalog, Anthropic, OpenAI, Gemini, OpenRouter, Nous Portal, local Ollama/vLLM (`G0D_ALLOW_PRIVATE_HTTP=1` for LAN/Docker hosts), and optional local CLI bridges (off by default; invokes official local binaries with zero token extraction).
-- **Long-Horizon `High` / `Max` Engine**: Effort-scaled timeouts (up to 10 min) & output ceilings (up to 64k), 250-call default budget with `+100` continue, hybrid compaction, and adaptive recovery.
-- **Defense-in-Depth**: macOS Seatbelt / Linux `bwrap` command sandboxing, device-only Keychain / `secret-tool`, Strict ZDR & Local-Only Airgap, outbound secret redaction, strict zero-inline-`style=` CSP, and pre-request CDP SSRF gating. See [SECURITY.md](SECURITY.md).
+- **The Conclave (Multi-Agent Council & Live Stage)**: Dispatch parallel specialist agents across *different* engines at once (Claude, Codex, OpenRouter, Venice, Grok, Gemini, Meta, or local models), watch live Constellation/Timeline/Card telemetry, steer workers mid-flight, and forge custom specialists with benchmark radar stats & 1-click formations.
+- **Live Browser Mirror & Window Pop-Out**: Watch agents browse and test your apps live via CDP screencast + animated click reticles right inside the dock — or pop out an isolated non-headless Chromium window for 60fps WebGL, audio, and manual SSO/login takeover.
+- **Full Wire Transparency (`Settings → System`)**: Inspect, edit, and reset every system prompt block, all **27 tool schemas**, **Prefills & Message Shaping** (off by default), and **Live Wire Preview** before a single byte leaves localhost.
+- **First-Class Multi-Model CLI & Direct API Hub**: Expose full model lineups from local **Codex** (live `~/.codex/models_cache.json` sync + native effort/tier/verbosity), **Claude Code**, **Gemini CLI**, and **GitHub Copilot** logins alongside direct **OpenAI**, **Anthropic**, **xAI (Grok)**, **Google Gemini**, **Meta AI (Muse / Llama)**, **OpenRouter**, **Venice**, **Nous**, and **local Ollama/vLLM/MLX** — with live account catalogs and **Ultra-Plinian** routing & 2–4 model blind-judged arenas.
+- **Two Surfaces (`⌘⇧G`)**: **`GODMODƎ`** (sovereign chat, live browser, offline HTML5/SVG/Mermaid canvas with click-to-inspect) and **`GODCODƎ`** (isolated Git worktrees, multi-model patch races, Plan/Build mode, `Safe` default permission gate, Git checkpoints/rewind, long-horizon effort scaling & adaptive recovery).
+- **Zero-Dep Defense-in-Depth**: **0 npm dependencies**, **0 telemetry**, macOS Seatbelt / Linux `bwrap` command sandboxing, device-only Keychain / `secret-tool`, **Strict ZDR & Local-Only Airgap**, outbound secret redaction, strict zero-inline-`style=` CSP, and pre-request CDP SSRF gating. See [SECURITY.md](SECURITY.md).
 
 <details>
 <summary>More screenshots</summary>
