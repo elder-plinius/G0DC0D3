@@ -1711,7 +1711,7 @@ async function executeSlashCommand(raw) {
     }
     return { handled: true };
   }
-  if (cmd === '/pantheon' || cmd === '/swarm') {
+  if (cmd === '/conclave' || cmd === '/pantheon' || cmd === '/swarm') {
     clearInput();
     if (arg && /^(demo|preview)$/i.test(arg.trim())) window.G0DPantheon?.open({ demo: true });
     else if (arg && /^(cards|timeline|stage|roster)$/i.test(arg.trim())) window.G0DPantheon?.open({ lens: arg.trim().toLowerCase() });
@@ -1883,7 +1883,7 @@ async function submitMessage(event) {
     if (!arg) { window.G0DThemes?.togglePopover(true); return; }
     const hit = window.G0DThemes?.matchByQuery(arg);
     if (hit) window.G0DThemes.apply(hit.id, { persist: true, notify: true });
-    else toast(`Unknown theme "${arg}". Try: obsidian, minimal, light, dragons, psychedelic, hacker, synthwave, volcano, ancient, celestial.`);
+    else toast(`Unknown theme "${arg}". Try: obsidian, minimal, alabaster, dragons, psychedelic, hacker, synthwave, vesuvian, ancient, celestial.`);
     return;
   }
   if (['/settings','/models','/prompts','/help'].includes(message)) {
@@ -5172,8 +5172,8 @@ function renderCommands() {
       { kind: 'action', title: 'Toggle Plan Mode', detail: draftPlanMode ? 'Start next chat in Build Mode' : 'Start next chat in read-only Plan Mode', keywords: 'plan build /plan /build', run: () => togglePlanMode(null) },
     ]),
     { kind: 'action', title: 'Forge Task Megaprompt (/forge)', detail: 'Synthesize a model-calibrated Megaprompt & acceptance rubric in the composer', keywords: 'forge megaprompt metaprompt metacognition ultra /forge', run: () => { const c = $('#composer-input'); if (c) { c.value = c.value.trim() ? `/forge ${c.value.trim()}` : '/forge '; c.focus(); } } },
-    { kind: 'action', title: 'Forge Pantheon Agent (Stats Builder)', detail: 'Build a custom specialist with live benchmark radar stats from any API or CLI harness', keywords: 'pantheon agent builder stats radar roster codex claude hermes grok antigravity', run: () => { window.G0DPantheon?.open({ lens: 'roster' }); window.G0DPantheon?.openBuilder(null); } },
-    { kind: 'action', title: 'Open The Pantheon (Multi-Agent Stage)', detail: 'Visualize parallel subagents, Coding Crews, and Arena races (/pantheon)', keywords: 'pantheon swarm multi agent subagent crew arena constellation stage /pantheon /swarm', run: () => window.G0DPantheon?.open() },
+    { kind: 'action', title: 'Forge Conclave Agent (Stats Builder)', detail: 'Build a custom specialist with live benchmark radar stats from any API or CLI harness', keywords: 'conclave pantheon agent builder stats radar roster codex claude hermes grok antigravity', run: () => { window.G0DPantheon?.open({ lens: 'roster' }); window.G0DPantheon?.openBuilder(null); } },
+    { kind: 'action', title: 'Open The Conclave (Multi-Agent Stage)', detail: 'Visualize parallel subagents, Diff Races, and Arena councils (/conclave)', keywords: 'conclave pantheon swarm multi agent subagent crew arena council stage /conclave /pantheon /swarm', run: () => window.G0DPantheon?.open() },
     { kind: 'action', title: 'Open Models & Subscriptions', detail: 'CLI logins, API keys, and local models', keywords: 'claude codex gemini copilot ollama key provider /model', run: () => openSettings('models') },
     ...(window.G0DThemes ? window.G0DThemes.list().map(t => ({
       kind: 'action',
@@ -7541,11 +7541,11 @@ window.toast = toast;
     { cmd: '/help', hint: 'Show available slash commands & shortcuts' },
     { cmd: '/ultra', hint: 'Toggle Ultra-Plinian mode' },
     { cmd: '/fixtures', hint: 'Browse test fixtures' },
-    { cmd: '/theme', hint: 'Switch UI theme (/theme ancient | celestial | dragons | psychedelic | hacker | minimal | synthwave | volcano)' },
+    { cmd: '/theme', hint: 'Switch UI theme (/theme obsidian | minimal | alabaster | dragons | psychedelic | hacker | synthwave | vesuvian | ancient | celestial)' },
     { cmd: '/settings', hint: 'Open settings' },
     { cmd: '/forge', hint: 'Forge a task-specific Megaprompt & rubric into the composer (/forge <prompt>)' },
-    { cmd: '/pantheon', hint: 'Open The Pantheon live multi-agent constellation & arena stage' },
-    { cmd: '/swarm', hint: 'Open The Pantheon multi-agent swarm visualizer' },
+    { cmd: '/conclave', hint: 'Open The Conclave live multi-agent council & arena stage' },
+    { cmd: '/swarm', hint: 'Open The Conclave multi-agent swarm visualizer' },
     { cmd: '/benchmark', hint: 'Run offline harness diagnostics' },
     { cmd: '/clear', hint: 'Start a new conversation' },
   ];

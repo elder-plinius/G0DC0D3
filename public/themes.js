@@ -14,7 +14,7 @@
     },
     {
       id: 'minimal',
-      name: 'Minimalist Noir',
+      name: 'Minimal',
       short: 'Minimal',
       emoji: '',
       base: 'dark',
@@ -24,8 +24,8 @@
     },
     {
       id: 'light',
-      name: 'Alabaster Light',
-      short: 'Light',
+      name: 'Alabaster',
+      short: 'Alabaster',
       emoji: '',
       base: 'light',
       animated: false,
@@ -34,7 +34,7 @@
     },
     {
       id: 'dragons',
-      name: 'Dragon Realm',
+      name: 'Dragons',
       short: 'Dragons',
       emoji: '',
       base: 'dark',
@@ -44,7 +44,7 @@
     },
     {
       id: 'psychedelic',
-      name: 'Psychedelic Melt',
+      name: 'Psychedelic',
       short: 'Psychedelic',
       emoji: '',
       base: 'dark',
@@ -54,7 +54,7 @@
     },
     {
       id: 'hacker',
-      name: 'Ultra Hacker',
+      name: 'Hacker',
       short: 'Hacker',
       emoji: '',
       base: 'dark',
@@ -64,7 +64,7 @@
     },
     {
       id: 'synthwave',
-      name: "Synthwave '84",
+      name: 'Synthwave',
       short: 'Synthwave',
       emoji: '',
       base: 'dark',
@@ -74,28 +74,28 @@
     },
     {
       id: 'volcano',
-      name: 'Plinian Vesuvius',
-      short: 'Vesuvius',
+      name: 'Vesuvian',
+      short: 'Vesuvian',
       emoji: '',
       base: 'dark',
       animated: true,
       badge: 'Live',
-      desc: 'Rising volcanic magma sparks & incandescent ash.'
+      desc: 'Mount Vesuvius caldera, flowing magma fissures & Plinian sparks.'
     },
     {
       id: 'ancient',
-      name: 'Ancient Greco-Roman',
+      name: 'Ancient',
       short: 'Ancient',
       emoji: '',
       base: 'light',
       animated: true,
       badge: 'Live',
-      desc: 'Carrara marble colonnade, gold leaf, Pompeian crimson & Pantheon sunbeams.'
+      desc: 'Carrara marble colonnade, gold leaf, Pompeian crimson & oculus sunbeams.'
     },
     {
       id: 'celestial',
-      name: 'Astral Observatory',
-      short: 'Astral',
+      name: 'Celestial',
+      short: 'Celestial',
       emoji: '',
       base: 'dark',
       animated: true,

@@ -121,19 +121,19 @@
         <div class="pantheon-title-wrap">
           <span class="pantheon-sigil" aria-hidden="true">✦</span>
           <div class="pantheon-title-copy">
-            <h2 class="pantheon-title">THE PANTHEON</h2>
-            <p class="pantheon-subtitle" id="pantheon-subtitle">Multi-Agent Constellation &amp; Arena Stage</p>
+            <h2 class="pantheon-title">THE CONCLAVE</h2>
+            <p class="pantheon-subtitle" id="pantheon-subtitle">Multi-Agent Council &amp; Arena Stage</p>
           </div>
         </div>
         <div class="pantheon-header-controls">
-          <div class="pantheon-lenses" role="tablist" aria-label="Pantheon views">
+          <div class="pantheon-lenses" role="tablist" aria-label="Conclave views">
             <button type="button" class="pantheon-lens active" role="tab" aria-selected="true" data-pantheon-lens="stage">✦ Stage</button>
             <button type="button" class="pantheon-lens" role="tab" aria-selected="false" data-pantheon-lens="cards">▤ Cards</button>
             <button type="button" class="pantheon-lens" role="tab" aria-selected="false" data-pantheon-lens="timeline">◫ Timeline</button>
             <button type="button" class="pantheon-lens" role="tab" aria-selected="false" data-pantheon-lens="roster">⛨ Roster</button>
           </div>
-          <button type="button" class="icon-button pantheon-expand-btn" id="pantheon-expand" title="Expand or restore Pantheon stage" aria-label="Expand Pantheon stage" aria-pressed="false">⤢</button>
-          <button type="button" class="icon-button" id="pantheon-close" title="Close Pantheon" aria-label="Close Pantheon">×</button>
+          <button type="button" class="icon-button pantheon-expand-btn" id="pantheon-expand" title="Expand or restore Conclave stage" aria-label="Expand Conclave stage" aria-pressed="false">⤢</button>
+          <button type="button" class="icon-button" id="pantheon-close" title="Close Conclave" aria-label="Close Conclave">×</button>
         </div>
       </header>
       <div class="pantheon-telemetry-bar" id="pantheon-telemetry-bar">
@@ -147,7 +147,7 @@
           <button type="button" class="button button-quiet pantheon-demo-toggle" id="pantheon-demo-btn" title="Preview an interactive multi-agent constellation">Preview Swarm</button>
         </div>
       </div>
-      <div class="pantheon-replay-bar hidden" id="pantheon-replay-bar" aria-label="Pantheon Time-Travel Replay">
+      <div class="pantheon-replay-bar hidden" id="pantheon-replay-bar" aria-label="Conclave Time-Travel Replay">
         <button type="button" class="button button-quiet pantheon-replay-btn" id="pantheon-replay-toggle">▶ Replay 4×</button>
         <input type="range" class="pantheon-replay-scrub" id="pantheon-replay-scrub" min="0" max="100" value="100" aria-label="Scrub replay timeline">
         <span class="pantheon-replay-time" id="pantheon-replay-time">LIVE</span>
@@ -439,7 +439,7 @@
       // Showcase Head-to-Head Arena Race mode on cycle 5!
       return {
         taskId: 'demo',
-        title: 'Pantheon Preview · Ultra-Plinian Arena',
+        title: 'Conclave Preview · Ultra-Plinian Arena',
         status: 'completed',
         mode: 'arena',
         orchestrator: { modelLabel: 'Ultra-Plinian Router', status: 'completed', calls: 3, maxCalls: 250, recoveries: 0 },
@@ -466,7 +466,7 @@
     const w3Status = cycle >= 4 ? 'completed' : cycle >= 2 ? 'tool' : 'thinking';
     return {
       taskId: 'demo',
-      title: 'Pantheon Live Preview',
+      title: 'Conclave Live Preview',
       status: cycle >= 4 ? 'completed' : 'running',
       mode: 'swarm',
       orchestrator: { modelLabel: 'Gemini 4 Neon', status: cycle >= 4 ? 'completed' : 'running', calls: 5 + cycle, maxCalls: 250, recoveries: cycle >= 2 ? 1 : 0 },
@@ -846,7 +846,7 @@
     if (sub) {
       sub.textContent = data?.title
         ? `${data.title} · ${data.orchestrator?.modelLabel ? shortModel(data.orchestrator.modelLabel) : 'Orchestrator'}`
-        : 'Multi-Agent Constellation & Arena Stage';
+        : 'Multi-Agent Council & Arena Stage';
     }
     const setT = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = String(v); };
     setT('pantheon-stat-active', data?.stats?.activeWorkers ?? 0);
@@ -1875,7 +1875,7 @@
   function toggleSquadMember(slug) {
     if (selectedSquad.has(slug)) selectedSquad.delete(slug);
     else if (selectedSquad.size < 4) selectedSquad.add(slug);
-    else if (typeof window.toast === 'function') window.toast('Up to 4 parallel agents per Pantheon Squad.');
+    else if (typeof window.toast === 'function') window.toast('Up to 4 parallel agents per Conclave Squad.');
     renderRosterView();
   }
 
@@ -1883,7 +1883,7 @@
     const agents = (rosterData?.agents || []).filter(a => slugs.includes(a.slug));
     if (!agents.length) return;
     const lines = agents.map(a => `- agent.spawn(role: "${a.slug}"${a.resolvedProviderId ? `, model: "${a.resolvedProviderId}"` : ''}) — ${a.name} [${a.engineLabel}, OVR ${a.stats?.overall || 85}, ${a.primarySpecialty.replace(/_/g, ' ')}]`);
-    const prompt = `Coordinate a parallel Pantheon Squad (${agents.length} specialist${agents.length === 1 ? '' : 's'}) using agent.spawn concurrently:\n${lines.join('\n')}\n\nSynthesize their findings and deliver a verified final result for: `;
+    const prompt = `Convene a parallel Conclave Squad (${agents.length} specialist${agents.length === 1 ? '' : 's'}) using agent.spawn concurrently:\n${lines.join('\n')}\n\nSynthesize their findings and deliver a verified final result for: `;
     const input = document.getElementById('composer-input');
     if (input) {
       input.value = prompt;
@@ -1891,7 +1891,7 @@
       input.focus();
       input.setSelectionRange(prompt.length, prompt.length);
     }
-    if (typeof window.toast === 'function') window.toast(`✦ Loaded ${agents.length}-agent Pantheon Squad into composer — add your goal and press Enter!`);
+    if (typeof window.toast === 'function') window.toast(`✦ Loaded ${agents.length}-agent Conclave Squad into composer — add your goal and press Enter!`);
   }
 
   function deploySelectedSquad() {
@@ -1959,7 +1959,7 @@
     const lines = agents.length
       ? agents.map(a => `- agent.spawn(role: "${a.slug}"${a.resolvedProviderId ? `, model: "${a.resolvedProviderId}"` : ''}) — ${a.name} [${a.engineLabel}, OVR ${a.stats?.overall || 85}]`)
       : f.agents.map(slug => `- agent.spawn(role: "${slug}")`);
-    const prompt = `Deploy Pantheon Formation "${f.name}" (${lines.length} specialist${lines.length === 1 ? '' : 's'}) concurrently via agent.spawn:\n${lines.join('\n')}\n\nGoal: ${f.goal || ''}`;
+    const prompt = `Convene Conclave Formation "${f.name}" (${lines.length} specialist${lines.length === 1 ? '' : 's'}) concurrently via agent.spawn:\n${lines.join('\n')}\n\nGoal: ${f.goal || ''}`;
     const input = document.getElementById('composer-input');
     if (input) {
       input.value = prompt;
@@ -1996,7 +1996,7 @@
     const el = document.getElementById('pantheon-view-roster');
     if (!el) return;
     if (!rosterData) {
-      el.innerHTML = '<div class="pantheon-empty-cards"><p>Loading Pantheon Roster &amp; real benchmark matrix…</p></div>';
+      el.innerHTML = '<div class="pantheon-empty-cards"><p>Loading Conclave Roster &amp; real benchmark matrix…</p></div>';
       return;
     }
     const agents = rosterData.agents || [];
@@ -2014,7 +2014,7 @@
       <section class="pb-panel" id="pantheon-builder" aria-label="Agent Stats Builder">
         <header class="pb-head">
           <div>
-            <h3>⚒ Forge Pantheon Agent</h3>
+            <h3>⚒ Forge Conclave Agent</h3>
             <p>Stats are calculated live from real benchmark priors &amp; your local per-domain Elo.</p>
           </div>
           <button type="button" class="button button-quiet" id="pb-best-fit" title="Auto-select highest OVR engine for these specialties">✦ Best Fit</button>
@@ -2077,7 +2077,7 @@
           </div>
           <label>System Directives<textarea id="pb-instructions" rows="2" maxlength="4000" placeholder="Role instructions injected when spawned…">${esc(builderDraft.instructions || '')}</textarea></label>
           <div class="pb-actions">
-            <button type="submit" class="button button-primary" id="pb-save">Save to Pantheon</button>
+            <button type="submit" class="button button-primary" id="pb-save">Save to Conclave</button>
             <button type="button" class="button button-secondary" id="pb-cancel">Cancel</button>
             ${builderDraft.custom && !builderDraft.builtin ? '<button type="button" class="button button-danger" id="pb-delete">Delete</button>' : ''}
           </div>
@@ -2176,7 +2176,7 @@
     });
   }
 
-  window.G0DPantheon = {
+  window.G0DConclave = window.G0DPantheon = {
     open,
     close,
     toggle,
