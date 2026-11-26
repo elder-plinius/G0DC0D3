@@ -7,6 +7,7 @@
 }
 
 :root {
+  color-scheme: dark;
   --bg: #080a0d;
   --bg-elevated: #0f1319;
   --bg-card: #12171f;
@@ -25,6 +26,7 @@
 }
 
 [data-theme="light"] {
+  color-scheme: light;
   --bg: #f6f8fa;
   --bg-elevated: #ffffff;
   --bg-card: #ffffff;
@@ -202,7 +204,7 @@ code, pre { font-family: var(--mono); }
   flex-direction: column;
   align-items: center;
   gap: 0.45rem;
-  width: min(680px, 100%);
+  width: min(790px, 100%);
 }
 .source-quick-label { font-size: 0.78rem; color: var(--text-muted); }
 .code-line {
@@ -221,6 +223,7 @@ code, pre { font-family: var(--mono); }
   font-size: 0.8rem;
   overflow-x: auto;
   white-space: nowrap;
+  scrollbar-width: thin;
   color: var(--text);
 }
 
