@@ -345,9 +345,11 @@ function newConversationProviders() {
   const pol = RecoveryUI.policy(null);
   const godmodeOn = pol.mode !== 'ask' && (pol.maxAttempts || 0) > 0;
   const allGroup = Array.isArray(state.modelGroups) ? state.modelGroups.find(g => g.id === 'all-smartest') : null;
-  const veniceUncensored = godmodeOn ? RecoveryUI.findVeniceUncensored(live, state.veniceConnectionId, veniceCatalog.models) : null;
+  const godmodeDefault = godmodeOn
+    ? (RecoveryUI.findVeniceUncensored(live, state.veniceConnectionId, veniceCatalog.models) || RecoveryUI.findOpenRouterGodmode(live))
+    : null;
   const gemini4Neon = !godmodeOn ? RecoveryUI.findGemini4Neon(live, state.veniceConnectionId, veniceCatalog.models) : null;
-  const defaultChoice = preferredProvider || veniceUncensored || gemini4Neon || (allGroup?.providerIds?.length ? allGroup.providerIds[0] : null);
+  const defaultChoice = preferredProvider || godmodeDefault || gemini4Neon || (allGroup?.providerIds?.length ? allGroup.providerIds[0] : null);
   const base = RecoveryUI.initialChatRoute(live, defaultChoice, state.veniceConnectionId, preferredVeniceBackup, veniceCatalog.models);
   if (!base.length || base[0]?.startsWith('venice-catalog:')) return base;
   if (!godmodeOn) return base;
@@ -2660,8 +2662,8 @@ function renderModelSettings() {
   if (task) renderRouting(task);
   else {
     const route = newConversationProviders();
-    const isVeniceDefault = !preferredProvider && route[0] && /venice[-_.\s]?uncensored/i.test(`${route[0]} ${providerById(route[0])?.model || ''} ${providerById(route[0])?.label || ''}`);
-    setText('#model-current', formatRouteSummary(route, isVeniceDefault ? 'New chats (G0DM0D3 default)' : 'New chats'));
+    const isGodmodeDefault = !preferredProvider && route[0] && /(?:venice[-_.\s]?uncensored|nousresearch[-_/.]hermes[-_.]?4[-_.]?405b)/i.test(`${route[0]} ${providerById(route[0])?.model || ''} ${providerById(route[0])?.label || ''}`);
+    setText('#model-current', formatRouteSummary(route, isGodmodeDefault ? 'New chats (G0DM0D3 default)' : 'New chats'));
   }
   setText('#settings-pick-model-label', providerById(task?.providerId || newConversationProviders()[0])?.label || 'Choose model');
 }

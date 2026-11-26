@@ -984,16 +984,17 @@ async function toggleUltra(task) {
       if (state.veniceConnectionId && !veniceCatalog.models.length) {
         try { await loadVeniceCatalog(); } catch {}
       }
-      const veniceUncensored = RecoveryUI.findVeniceUncensored(liveProviders(), state.veniceConnectionId, veniceCatalog.models);
+      const godmodeDefault = RecoveryUI.findVeniceUncensored(liveProviders(), state.veniceConnectionId, veniceCatalog.models)
+        || RecoveryUI.findOpenRouterGodmode(liveProviders());
       const gemini4Neon = RecoveryUI.findGemini4Neon(liveProviders(), state.veniceConnectionId, veniceCatalog.models);
       if (enabling) {
-        if ((!preferredProvider || preferredProvider === gemini4Neon) && veniceUncensored) {
+        if ((!preferredProvider || preferredProvider === gemini4Neon) && godmodeDefault) {
           preferredProvider = null;
           try { localStorage.removeItem('g0dc0d3.preferredProvider'); } catch {}
-          toast('GODMODƎ enabled · defaulting to ' + (providerById(veniceUncensored)?.label || 'Venice Uncensored'));
+          toast('GODMODƎ enabled · defaulting to ' + (providerById(godmodeDefault)?.label || 'G0DM0D3 default'));
         }
       } else {
-        if ((!preferredProvider || preferredProvider === veniceUncensored) && gemini4Neon) {
+        if ((!preferredProvider || preferredProvider === godmodeDefault) && gemini4Neon) {
           preferredProvider = null;
           try { localStorage.removeItem('g0dc0d3.preferredProvider'); } catch {}
           toast('GODMODƎ off · defaulting to ' + (providerById(gemini4Neon)?.label || 'Gemini 4 Neon'));
