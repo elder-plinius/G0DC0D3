@@ -157,7 +157,7 @@ test('Pantheon UI renders Stage, Cards, Timeline, Arena Race, Worker Inspector, 
     })).result);
     assert.equal(openCheck.open, true);
     assert.equal(openCheck.inlineStyles, 0);
-    assert.equal(openCheck.hasPresets, 3);
+    assert.equal(openCheck.hasPresets, 4);
 
     // Click Preview Swarm, switch across Cards & Timeline & inspect a worker
     await pool.act(sid, { action: 'click', selector: '#pantheon-demo-btn', waitMs: 350 }, { privacy: { localOnly: false } });

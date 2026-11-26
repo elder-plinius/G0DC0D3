@@ -42,6 +42,15 @@ import {
   normalizeMetacognitionMode,
   shouldAutoForge
 } from './metacognition.mjs';
+import {
+  AGENT_ARCHETYPES,
+  buildStarterRoster,
+  computeAgentStats,
+  detectExternalHarnesses,
+  EXTERNAL_HARNESSES,
+  normalizeRosterAgent,
+  slugifyAgent
+} from './pantheon-roster.mjs';
 import { validateExecution, validateChecks } from './runner.mjs';
 import { SourceChanges } from './source-changes.mjs';
 import { CrewController } from './crew.mjs';
@@ -2970,6 +2979,106 @@ export class Runtime {
       workspaceKind,
       outbound: this.outboundOptions()
     });
+  }
+  async getPantheonRoster() {
+    const candidates = await this.listRoutableCandidates('conversation');
+    const harnesses = await detectExternalHarnesses({ providers: this.providers, catalog: this.catalog });
+    const routerSettings = this.getRouterSettings();
+    const matrix = loadBenchmarkMatrix(routerSettings.customBenchmarks || {});
+    const learning = this.getLearning();
+    const byId = new Map(candidates.map(c => [c.id, c]));
+    const harnessById = new Map(harnesses.map(h => [h.id, h]));
+
+    const savedRaw = this.store.getLocalState('pantheon_roster', []);
+    const savedList = Array.isArray(savedRaw) ? savedRaw : [];
+    const starters = buildStarterRoster(candidates, harnesses);
+    const mergedMap = new Map();
+    for (const s of starters) mergedMap.set(s.slug, s);
+    for (const custom of savedList) {
+      if (!custom?.slug) continue;
+      mergedMap.set(custom.slug, { ...mergedMap.get(custom.slug), ...custom, custom: true });
+    }
+
+    const enrichAgent = (ag) => {
+      const h = ag.harnessId ? harnessById.get(ag.harnessId) : null;
+      const resolvedProvId = ag.providerId || h?.providerId || null;
+      const cand = resolvedProvId ? (byId.get(resolvedProvId) || this.providers.get(resolvedProvId) || this.catalog?.get?.(resolvedProvId) || null) : null;
+      const stats = computeAgentStats({
+        candidate: cand,
+        harnessId: ag.harnessId,
+        primarySpecialty: ag.primarySpecialty,
+        secondarySpecialty: ag.secondarySpecialty,
+        matrix,
+        learning
+      });
+      const engineLabel = cand?.label || (h ? h.name : ag.harnessCommand ? `CLI · ${ag.harnessCommand}` : 'Auto-Route Best Fit');
+      const ready = Boolean(cand) || Boolean(h && (h.status === 'connected' || h.status === 'installed')) || Boolean(!ag.providerId && !ag.harnessId && candidates.length > 0);
+      return { ...ag, resolvedProviderId: resolvedProvId, engineLabel, ready, stats };
+    };
+
+    const engines = candidates.slice(0, 60).map(c => ({
+      id: c.id,
+      label: c.label,
+      model: c.model,
+      kind: c.kind,
+      tier: c.tier || 'standard',
+      stats: computeAgentStats({ candidate: c, matrix, learning })
+    }));
+
+    return {
+      agents: [...mergedMap.values()].map(enrichAgent),
+      harnesses,
+      engines,
+      archetypes: AGENT_ARCHETYPES,
+      domains: ROUTER_DOMAINS
+    };
+  }
+  async savePantheonAgent(payload = {}) {
+    const savedRaw = this.store.getLocalState('pantheon_roster', []);
+    const list = Array.isArray(savedRaw) ? [...savedRaw] : [];
+    const targetSlug = slugifyAgent(payload.slug || payload.name);
+    const existingIdx = list.findIndex(a => a?.slug === targetSlug);
+    const normalized = normalizeRosterAgent(payload, existingIdx >= 0 ? list[existingIdx] : null);
+    if (existingIdx >= 0) list[existingIdx] = normalized;
+    else list.push(normalized);
+    this.store.setLocalState('pantheon_roster', list.slice(0, 48));
+    const roster = await this.getPantheonRoster();
+    const saved = roster.agents.find(a => a.slug === normalized.slug) || normalized;
+    return { ok: true, agent: saved, roster };
+  }
+  async deletePantheonAgent(rawSlug) {
+    const slug = slugifyAgent(rawSlug);
+    const savedRaw = this.store.getLocalState('pantheon_roster', []);
+    const list = Array.isArray(savedRaw) ? savedRaw : [];
+    const next = list.filter(a => a?.slug !== slug);
+    this.store.setLocalState('pantheon_roster', next);
+    const roster = await this.getPantheonRoster();
+    return { ok: true, deleted: next.length !== list.length, slug, roster };
+  }
+  async previewPantheonStats({ providerId = null, harnessId = null, primarySpecialty = 'swe_coding', secondarySpecialty = 'math_reasoning' } = {}) {
+    const candidates = await this.listRoutableCandidates('conversation');
+    const routerSettings = this.getRouterSettings();
+    const matrix = loadBenchmarkMatrix(routerSettings.customBenchmarks || {});
+    const learning = this.getLearning();
+    let cand = providerId ? (candidates.find(c => c.id === providerId) || this.providers.get(providerId) || this.catalog?.get?.(providerId) || null) : null;
+    if (!cand && harnessId) {
+      const h = EXTERNAL_HARNESSES.find(x => x.id === harnessId);
+      if (h) {
+        cand = candidates.find(c => (h.providerPrefix && c.id.startsWith(h.providerPrefix)) || (h.providerRegex && h.providerRegex.test(`${c.id} ${c.model || ''} ${c.label || ''}`))) || h.benchmarkProbe;
+      }
+    }
+    const stats = computeAgentStats({ candidate: cand, harnessId, primarySpecialty, secondarySpecialty, matrix, learning });
+    // Also suggest the strongest connected engine for these specialties!
+    let bestEngine = null;
+    if (candidates.length) {
+      const ranked = candidates.map(c => ({
+        id: c.id,
+        label: c.label,
+        overall: computeAgentStats({ candidate: c, primarySpecialty, secondarySpecialty, matrix, learning }).overall
+      })).sort((a, b) => b.overall - a.overall);
+      bestEngine = ranked[0] || null;
+    }
+    return { stats, bestEngine };
   }
   async getRouterState() {
     const settings = this.getRouterSettings();

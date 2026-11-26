@@ -221,6 +221,11 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
       }
       if(req.method==='POST' && url.pathname==='/api/router/preview')return send(res,200,await runtime.previewUltraRoute(await readBody(req)));
       if(req.method==='POST' && url.pathname==='/api/metacognition/forge')return send(res,200,await runtime.forgeMetapromptPreview(await readBody(req)));
+      if(req.method==='GET' && url.pathname==='/api/pantheon/roster')return send(res,200,await runtime.getPantheonRoster());
+      if(req.method==='POST' && url.pathname==='/api/pantheon/roster')return send(res,201,await runtime.savePantheonAgent(await readBody(req)));
+      if(req.method==='POST' && url.pathname==='/api/pantheon/stats/preview')return send(res,200,await runtime.previewPantheonStats(await readBody(req)));
+      const rosterDelMatch = req.method === 'DELETE' && url.pathname.match(/^\/api\/pantheon\/roster\/([^/]+)$/);
+      if (rosterDelMatch) return send(res, 200, await runtime.deletePantheonAgent(decodeURIComponent(rosterDelMatch[1])));
       if(req.method==='DELETE' && url.pathname==='/api/router/reset') {
         await readBody(req).catch(()=>({}));
         runtime.resetRouter();

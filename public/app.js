@@ -1714,7 +1714,8 @@ async function executeSlashCommand(raw) {
   if (cmd === '/pantheon' || cmd === '/swarm') {
     clearInput();
     if (arg && /^(demo|preview)$/i.test(arg.trim())) window.G0DPantheon?.open({ demo: true });
-    else if (arg && /^(cards|timeline|stage)$/i.test(arg.trim())) window.G0DPantheon?.open({ lens: arg.trim().toLowerCase() });
+    else if (arg && /^(cards|timeline|stage|roster)$/i.test(arg.trim())) window.G0DPantheon?.open({ lens: arg.trim().toLowerCase() });
+    else if (arg && /^(builder|forge)$/i.test(arg.trim())) { window.G0DPantheon?.open({ lens: 'roster' }); window.G0DPantheon?.openBuilder(null); }
     else window.G0DPantheon?.toggle();
     return { handled: true };
   }
@@ -5171,6 +5172,7 @@ function renderCommands() {
       { kind: 'action', title: 'Toggle Plan Mode', detail: draftPlanMode ? 'Start next chat in Build Mode' : 'Start next chat in read-only Plan Mode', keywords: 'plan build /plan /build', run: () => togglePlanMode(null) },
     ]),
     { kind: 'action', title: 'Forge Task Megaprompt (/forge)', detail: 'Synthesize a model-calibrated Megaprompt & acceptance rubric in the composer', keywords: 'forge megaprompt metaprompt metacognition ultra /forge', run: () => { const c = $('#composer-input'); if (c) { c.value = c.value.trim() ? `/forge ${c.value.trim()}` : '/forge '; c.focus(); } } },
+    { kind: 'action', title: 'Forge Pantheon Agent (Stats Builder)', detail: 'Build a custom specialist with live benchmark radar stats from any API or CLI harness', keywords: 'pantheon agent builder stats radar roster codex claude hermes grok antigravity', run: () => { window.G0DPantheon?.open({ lens: 'roster' }); window.G0DPantheon?.openBuilder(null); } },
     { kind: 'action', title: 'Open The Pantheon (Multi-Agent Stage)', detail: 'Visualize parallel subagents, Coding Crews, and Arena races (/pantheon)', keywords: 'pantheon swarm multi agent subagent crew arena constellation stage /pantheon /swarm', run: () => window.G0DPantheon?.open() },
     { kind: 'action', title: 'Open Models & Subscriptions', detail: 'CLI logins, API keys, and local models', keywords: 'claude codex gemini copilot ollama key provider /model', run: () => openSettings('models') },
     ...(window.G0DThemes ? window.G0DThemes.list().map(t => ({

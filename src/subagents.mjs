@@ -64,8 +64,25 @@ async function resolveNoSymlinkDir(rootDir, segments) {
   }
 }
 
-export async function discoverSubagents(task) {
+export async function discoverSubagents(task, runtime = null) {
   const agents = new Map(Object.entries(BUILTIN_SUBAGENTS));
+  // Hydrate custom Pantheon Roster agents so agent.spawn(role: '<slug>') works seamlessly!
+  try {
+    const rosterRaw = runtime?.store?.getLocalState?.('pantheon_roster', []);
+    if (Array.isArray(rosterRaw)) {
+      for (const ag of rosterRaw) {
+        if (!ag?.slug) continue;
+        agents.set(ag.slug.toLowerCase(), {
+          name: ag.slug.toLowerCase(),
+          displayName: ag.name || ag.slug,
+          description: ag.description || `Pantheon agent (${ag.name || ag.slug})`,
+          model: ag.providerId || ag.harnessId || null,
+          instructions: ag.instructions || `You are ${ag.name || ag.slug}, a Pantheon specialist.`,
+          source: 'pantheon_roster'
+        });
+      }
+    }
+  } catch {}
   const dirSpecs = [
     { root: os.homedir(), segments: ['.g0dc0d3', 'agents'] },
     ...(task?.sourcePath ? [
@@ -133,7 +150,7 @@ function selectSubagentProvider(runtime, parentTask, spec, modelHint, privacy) {
 export async function runSpecialistSubagent({ runtime, parentTask, role = 'explore', prompt, modelHint, maxTurns = 4, signal, workerId = null, onProgress = null }) {
   const started = Date.now();
   const startedAt = new Date(started).toISOString();
-  const agents = await discoverSubagents(parentTask);
+  const agents = await discoverSubagents(parentTask, runtime);
   const roleKey = String(role || 'explore').trim().toLowerCase();
   const spec = agents.get(roleKey) || BUILTIN_SUBAGENTS.explore;
   const outbound = runtime.outboundOptions();

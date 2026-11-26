@@ -39,6 +39,13 @@
   let stageHitTargets = [];
   let timelineHitTargets = [];
   let fetchToken = 0;
+  let rosterData = null;
+  let selectedSquad = new Set();
+  let builderOpen = false;
+  let builderDraft = null;
+  let builderStats = null;
+  let builderBestEngine = null;
+  const SIGILS = ['✦', '⚡', '◈', '⛨', '⌘', 'λ', 'Ω', 'Δ'];
 
   const esc = (s) => String(s ?? '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -108,6 +115,7 @@
             <button type="button" class="pantheon-lens active" role="tab" aria-selected="true" data-pantheon-lens="stage">✦ Stage</button>
             <button type="button" class="pantheon-lens" role="tab" aria-selected="false" data-pantheon-lens="cards">▤ Cards</button>
             <button type="button" class="pantheon-lens" role="tab" aria-selected="false" data-pantheon-lens="timeline">◫ Timeline</button>
+            <button type="button" class="pantheon-lens" role="tab" aria-selected="false" data-pantheon-lens="roster">⛨ Roster</button>
           </div>
           <button type="button" class="icon-button pantheon-expand-btn" id="pantheon-expand" title="Expand or restore Pantheon stage" aria-label="Expand Pantheon stage" aria-pressed="false">⤢</button>
           <button type="button" class="icon-button" id="pantheon-close" title="Close Pantheon" aria-label="Close Pantheon">×</button>
@@ -141,6 +149,7 @@
             <p class="pantheon-standby-copy">Launch a parallel specialist squad, run a verified Coding Crew, or race two frontier models head-to-head.</p>
             <div class="pantheon-presets">
               <button type="button" class="button button-primary" data-pantheon-preset="research">✦ Parallel Research Squad</button>
+              <button type="button" class="button button-secondary" data-pantheon-preset="roster">⛨ Agent Builder &amp; Roster</button>
               <button type="button" class="button button-secondary" data-pantheon-preset="crew">⚙ Code &amp; Review Crew</button>
               <button type="button" class="button button-secondary" data-pantheon-preset="arena">⚡ Head-to-Head Arena</button>
             </div>
@@ -158,6 +167,7 @@
           <canvas id="pantheon-timeline-canvas" class="pantheon-timeline-canvas" aria-label="Parallel worker execution timeline"></canvas>
           <div class="pantheon-timeline-empty hidden" id="pantheon-timeline-empty">No worker runs recorded yet. Launch a squad or click <strong>Preview Swarm</strong> above.</div>
         </section>
+        <section class="pantheon-view pantheon-roster-view hidden" id="pantheon-view-roster" role="tabpanel"></section>
       </div>
       <section class="pantheon-inspector hidden" id="pantheon-inspector" aria-label="Worker inspector">
         <header class="pantheon-inspector-head">
@@ -191,6 +201,61 @@
       if (cardBtn) { selectWorker(cardBtn.dataset.pantheonSelect); return; }
       const approveBtn = e.target.closest('[data-pantheon-approve]');
       if (approveBtn) { resolveApprovalFromPantheon(approveBtn.dataset.pantheonApprove); return; }
+      if (e.target.closest('#roster-forge-new')) { openBuilder(null); return; }
+      if (e.target.closest('#roster-deploy-squad')) { deploySelectedSquad(); return; }
+      const harnessChip = e.target.closest('[data-roster-harness]');
+      if (harnessChip) { openBuilderForHarness(harnessChip.dataset.rosterHarness); return; }
+      const archBtn = e.target.closest('[data-pb-archetype]');
+      if (archBtn) { applyArchetypeToDraft(archBtn.dataset.pbArchetype); return; }
+      const sigilBtn = e.target.closest('[data-pb-sigil]');
+      if (sigilBtn && builderDraft) { builderDraft.sigil = sigilBtn.dataset.pbSigil; renderRosterView(); return; }
+      if (e.target.closest('#pb-best-fit')) { applyBestFitEngine(); return; }
+      if (e.target.closest('#pb-cancel')) { builderOpen = false; renderRosterView(); return; }
+      if (e.target.closest('#pb-delete') && builderDraft?.slug) { deleteRosterAgent(builderDraft.slug); return; }
+      const editAg = e.target.closest('[data-roster-edit]');
+      if (editAg) { openBuilder(editAg.dataset.rosterEdit); return; }
+      const sqBtn = e.target.closest('[data-roster-squad]');
+      if (sqBtn) { toggleSquadMember(sqBtn.dataset.rosterSquad); return; }
+      const spawnAg = e.target.closest('[data-roster-spawn]');
+      if (spawnAg) { deploySingleAgent(spawnAg.dataset.rosterSpawn); return; }
+    });
+
+    dock.addEventListener('change', (e) => {
+      if (!builderOpen || !builderDraft) return;
+      if (e.target.id === 'pb-engine') {
+        const val = e.target.value || '';
+        if (val.startsWith('api::')) {
+          builderDraft.engineType = 'api';
+          builderDraft.providerId = val.slice(5);
+          builderDraft.harnessId = null;
+        } else if (val.startsWith('harness::')) {
+          builderDraft.engineType = 'harness';
+          builderDraft.harnessId = val.slice(9);
+          const h = (rosterData?.harnesses || []).find(x => x.id === builderDraft.harnessId);
+          builderDraft.providerId = h?.providerId || null;
+        } else if (val === 'custom_cli') {
+          builderDraft.engineType = 'custom_cli';
+          builderDraft.providerId = null;
+          builderDraft.harnessId = null;
+        } else {
+          builderDraft.engineType = 'api';
+          builderDraft.providerId = null;
+          builderDraft.harnessId = null;
+        }
+        refreshBuilderStats();
+        return;
+      }
+      if (e.target.id === 'pb-primary') { builderDraft.primarySpecialty = e.target.value; refreshBuilderStats(); return; }
+      if (e.target.id === 'pb-secondary') { builderDraft.secondarySpecialty = e.target.value; refreshBuilderStats(); return; }
+      if (e.target.id === 'pb-autonomy') { builderDraft.autonomy = e.target.value; return; }
+      if (e.target.id === 'pb-effort') { builderDraft.effort = e.target.value; return; }
+    });
+
+    dock.addEventListener('submit', (e) => {
+      if (e.target.id === 'pb-form') {
+        e.preventDefault();
+        saveBuilderAgent();
+      }
     });
 
     dock.querySelector('#pi-steer-form')?.addEventListener('submit', async (e) => {
@@ -286,6 +351,11 @@
   }
 
   function triggerPreset(preset) {
+    if (preset === 'roster') {
+      setLens('roster');
+      openBuilder(null);
+      return;
+    }
     const input = document.getElementById('composer-input');
     if (preset === 'research') {
       const prompt = 'Use parallel agent.spawn subagents (explore, reviewer, and uncensored) to simultaneously map the architecture, audit for bugs/security edge cases, and synthesize a concrete action plan.';
@@ -456,7 +526,7 @@
   }
 
   function setLens(lens) {
-    activeLens = ['stage', 'cards', 'timeline'].includes(lens) ? lens : 'stage';
+    activeLens = ['stage', 'cards', 'timeline', 'roster'].includes(lens) ? lens : 'stage';
     const dock = dockEl();
     if (!dock) return;
     dock.querySelectorAll('[data-pantheon-lens]').forEach(btn => {
@@ -467,9 +537,11 @@
     dock.querySelector('#pantheon-view-stage')?.classList.toggle('hidden', activeLens !== 'stage');
     dock.querySelector('#pantheon-view-cards')?.classList.toggle('hidden', activeLens !== 'cards');
     dock.querySelector('#pantheon-view-timeline')?.classList.toggle('hidden', activeLens !== 'timeline');
+    dock.querySelector('#pantheon-view-roster')?.classList.toggle('hidden', activeLens !== 'roster');
     if (activeLens === 'stage') drawStage();
     if (activeLens === 'cards') renderCards();
     if (activeLens === 'timeline') drawTimeline();
+    if (activeLens === 'roster') loadRoster();
   }
 
   function selectWorker(workerId) {
@@ -1187,6 +1259,494 @@
     }
   }
 
+  // ── Pantheon Agent Stats Builder & Cross-Harness Roster ──
+  function drawRadarChart(canvas, stats, { compact = false } = {}) {
+    if (!canvas || !stats?.radar) return;
+    const w = compact ? 92 : 196;
+    const h = compact ? 84 : 176;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+    }
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+
+    const pal = themePalette();
+    const axes = [
+      { key: 'swe', label: 'SWE' },
+      { key: 'ui', label: 'UI' },
+      { key: 'math', label: 'MATH' },
+      { key: 'sec', label: 'SEC' },
+      { key: 'prose', label: 'PROSE' },
+      { key: 'agency', label: 'AGY' },
+    ];
+    const cx = w / 2;
+    const cy = h / 2;
+    const radius = compact ? 29 : 58;
+    const n = axes.length;
+
+    // Concentric hex web rings (33%, 66%, 100%)
+    [0.33, 0.66, 1].forEach((ring, ri) => {
+      ctx.beginPath();
+      for (let i = 0; i < n; i++) {
+        const ang = -Math.PI / 2 + (i * Math.PI * 2) / n;
+        const x = cx + Math.cos(ang) * radius * ring;
+        const y = cy + Math.sin(ang) * radius * ring;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      ctx.strokeStyle = pal.isLight ? 'rgba(24,25,27,0.12)' : 'rgba(255,255,255,0.11)';
+      ctx.lineWidth = ri === 2 ? 1.2 : 0.8;
+      ctx.stroke();
+    });
+
+    // Radial spokes + axis labels
+    axes.forEach((ax, i) => {
+      const ang = -Math.PI / 2 + (i * Math.PI * 2) / n;
+      const x = cx + Math.cos(ang) * radius;
+      const y = cy + Math.sin(ang) * radius;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(x, y);
+      ctx.strokeStyle = pal.isLight ? 'rgba(24,25,27,0.09)' : 'rgba(255,255,255,0.08)';
+      ctx.lineWidth = 0.8;
+      ctx.stroke();
+
+      const lx = cx + Math.cos(ang) * (radius + (compact ? 11 : 18));
+      const ly = cy + Math.sin(ang) * (radius + (compact ? 9 : 15));
+      ctx.fillStyle = pal.muted;
+      ctx.font = compact ? '600 7.5px ui-monospace, SFMono-Regular, monospace' : '600 9px ui-monospace, SFMono-Regular, monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(compact ? ax.label.slice(0, 3) : `${ax.label} ${stats.radar[ax.key] ?? 0}`, lx, ly);
+    });
+
+    // Data polygon
+    const fillTone = stats.overall >= 92 ? (pal.isLight ? 'rgba(217, 119, 6, 0.24)' : 'rgba(251, 191, 36, 0.24)')
+      : (pal.isLight ? 'rgba(109, 40, 217, 0.22)' : 'rgba(167, 139, 250, 0.28)');
+    const strokeTone = stats.overall >= 92 ? pal.gold : pal.violet;
+
+    ctx.beginPath();
+    axes.forEach((ax, i) => {
+      const val = Math.max(12, Math.min(100, Number(stats.radar[ax.key] ?? 70))) / 100;
+      const ang = -Math.PI / 2 + (i * Math.PI * 2) / n;
+      const x = cx + Math.cos(ang) * radius * val;
+      const y = cy + Math.sin(ang) * radius * val;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.closePath();
+    ctx.fillStyle = fillTone;
+    ctx.fill();
+    ctx.strokeStyle = strokeTone;
+    ctx.lineWidth = compact ? 1.6 : 2.1;
+    ctx.stroke();
+
+    // Glowing vertices
+    axes.forEach((ax, i) => {
+      const val = Math.max(12, Math.min(100, Number(stats.radar[ax.key] ?? 70))) / 100;
+      const ang = -Math.PI / 2 + (i * Math.PI * 2) / n;
+      const x = cx + Math.cos(ang) * radius * val;
+      const y = cy + Math.sin(ang) * radius * val;
+      ctx.fillStyle = strokeTone;
+      ctx.beginPath();
+      ctx.arc(x, y, compact ? 2.1 : 3.2, 0, Math.PI * 2);
+      ctx.fill();
+    });
+  }
+
+  async function loadRoster(force = false) {
+    if (rosterData && !force) {
+      renderRosterView();
+      return;
+    }
+    try {
+      const res = await fetch('/api/pantheon/roster');
+      if (!res.ok) return;
+      rosterData = await res.json();
+      renderRosterView();
+    } catch {}
+  }
+
+  function openBuilder(slug = null) {
+    if (!rosterData) {
+      loadRoster(true).then(() => openBuilder(slug));
+      return;
+    }
+    const existing = slug ? (rosterData.agents || []).find(a => a.slug === slug) : null;
+    if (existing) {
+      builderDraft = { ...existing };
+      builderStats = existing.stats || null;
+    } else {
+      const firstEngine = rosterData.engines?.[0] || null;
+      builderDraft = {
+        slug: '',
+        name: '',
+        sigil: '✦',
+        engineType: 'api',
+        providerId: firstEngine?.id || null,
+        harnessId: null,
+        harnessCommand: '',
+        primarySpecialty: 'swe_coding',
+        secondarySpecialty: 'math_reasoning',
+        autonomy: 'read_only',
+        effort: 'high',
+        instructions: 'Deliver surgical, evidence-backed engineering output with zero hand-waving.',
+        custom: false,
+      };
+      builderStats = firstEngine?.stats || null;
+    }
+    builderOpen = true;
+    renderRosterView();
+    refreshBuilderStats();
+  }
+
+  function openBuilderForHarness(harnessId) {
+    if (!rosterData) return;
+    const h = (rosterData.harnesses || []).find(x => x.id === harnessId);
+    if (!h) return;
+    builderDraft = {
+      slug: `${h.id.replace(/[^a-z0-9]+/gi, '-')}-agent`,
+      name: `${h.shortName} Specialist`,
+      sigil: '⚡',
+      engineType: 'harness',
+      providerId: h.providerId || null,
+      harnessId: h.id,
+      harnessCommand: h.command || '',
+      primarySpecialty: h.id === 'hermes' || h.id === 'grok' ? 'security_research' : 'swe_coding',
+      secondarySpecialty: 'math_reasoning',
+      autonomy: 'external_harness',
+      effort: 'high',
+      instructions: `Coordinate directly via ${h.name} (${h.command}). Focus on deep precision, clean diffs, and independent verification.`,
+      custom: false,
+    };
+    builderStats = h.stats || null;
+    builderOpen = true;
+    renderRosterView();
+    refreshBuilderStats();
+  }
+
+  function applyArchetypeToDraft(archetypeId) {
+    if (!rosterData || !builderDraft) return;
+    const arch = (rosterData.archetypes || []).find(a => a.id === archetypeId);
+    if (!arch) return;
+    builderDraft.name = builderDraft.name || arch.name;
+    builderDraft.sigil = arch.sigil;
+    builderDraft.primarySpecialty = arch.primarySpecialty;
+    builderDraft.secondarySpecialty = arch.secondarySpecialty;
+    builderDraft.autonomy = arch.autonomy;
+    builderDraft.effort = arch.effort;
+    builderDraft.instructions = arch.instructions;
+    renderRosterView();
+    refreshBuilderStats();
+  }
+
+  async function refreshBuilderStats() {
+    if (!builderDraft) return;
+    try {
+      const res = await fetch('/api/pantheon/stats/preview', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-g0d-request': '1' },
+        body: JSON.stringify({
+          providerId: builderDraft.providerId || null,
+          harnessId: builderDraft.harnessId || null,
+          primarySpecialty: builderDraft.primarySpecialty,
+          secondarySpecialty: builderDraft.secondarySpecialty,
+        }),
+      });
+      if (!res.ok) return;
+      const json = await res.json();
+      builderStats = json.stats || builderStats;
+      builderBestEngine = json.bestEngine || null;
+      updateBuilderStatsDom();
+    } catch {}
+  }
+
+  function applyBestFitEngine() {
+    if (!builderDraft || !builderBestEngine?.id) {
+      if (typeof window.toast === 'function') window.toast('Connect an API or CLI harness to auto-pick the strongest engine.');
+      return;
+    }
+    builderDraft.engineType = 'api';
+    builderDraft.providerId = builderBestEngine.id;
+    builderDraft.harnessId = null;
+    renderRosterView();
+    refreshBuilderStats();
+    if (typeof window.toast === 'function') window.toast(`Selected strongest match: ${builderBestEngine.label} (OVR ${builderBestEngine.overall}).`);
+  }
+
+  function syncDraftTextFieldsFromDom() {
+    if (!builderDraft) return;
+    const nameEl = document.getElementById('pb-name');
+    const cmdEl = document.getElementById('pb-custom-cmd');
+    const instEl = document.getElementById('pb-instructions');
+    if (nameEl) builderDraft.name = nameEl.value.trim();
+    if (cmdEl) builderDraft.harnessCommand = cmdEl.value.trim();
+    if (instEl) builderDraft.instructions = instEl.value.trim();
+  }
+
+  async function saveBuilderAgent() {
+    syncDraftTextFieldsFromDom();
+    if (!builderDraft?.name) {
+      if (typeof window.toast === 'function') window.toast('Give your agent a name first.');
+      document.getElementById('pb-name')?.focus();
+      return;
+    }
+    try {
+      const res = await fetch('/api/pantheon/roster', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-g0d-request': '1' },
+        body: JSON.stringify(builderDraft),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Could not save agent.');
+      rosterData = json.roster;
+      builderOpen = false;
+      builderDraft = null;
+      renderRosterView();
+      if (typeof window.toast === 'function') window.toast(`✦ Forged "${json.agent.name}" (OVR ${json.agent.stats?.overall ?? ''}) — ready for agent.spawn & Squad Deploy.`);
+    } catch (err) {
+      if (typeof window.toast === 'function') window.toast(err.message || 'Save failed.');
+    }
+  }
+
+  async function deleteRosterAgent(slug) {
+    try {
+      const res = await fetch(`/api/pantheon/roster/${encodeURIComponent(slug)}`, {
+        method: 'DELETE',
+        headers: { 'x-g0d-request': '1' },
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Could not delete agent.');
+      rosterData = json.roster;
+      selectedSquad.delete(slug);
+      builderOpen = false;
+      builderDraft = null;
+      renderRosterView();
+      if (typeof window.toast === 'function') window.toast(`Removed custom agent "${slug}".`);
+    } catch (err) {
+      if (typeof window.toast === 'function') window.toast(err.message || 'Delete failed.');
+    }
+  }
+
+  function toggleSquadMember(slug) {
+    if (selectedSquad.has(slug)) selectedSquad.delete(slug);
+    else if (selectedSquad.size < 4) selectedSquad.add(slug);
+    else if (typeof window.toast === 'function') window.toast('Up to 4 parallel agents per Pantheon Squad.');
+    renderRosterView();
+  }
+
+  function deploySquadSlugs(slugs) {
+    const agents = (rosterData?.agents || []).filter(a => slugs.includes(a.slug));
+    if (!agents.length) return;
+    const lines = agents.map(a => `- agent.spawn(role: "${a.slug}"${a.resolvedProviderId ? `, model: "${a.resolvedProviderId}"` : ''}) — ${a.name} [${a.engineLabel}, OVR ${a.stats?.overall || 85}, ${a.primarySpecialty.replace(/_/g, ' ')}]`);
+    const prompt = `Coordinate a parallel Pantheon Squad (${agents.length} specialist${agents.length === 1 ? '' : 's'}) using agent.spawn concurrently:\n${lines.join('\n')}\n\nSynthesize their findings and deliver a verified final result for: `;
+    const input = document.getElementById('composer-input');
+    if (input) {
+      input.value = prompt;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.focus();
+      input.setSelectionRange(prompt.length, prompt.length);
+    }
+    if (typeof window.toast === 'function') window.toast(`✦ Loaded ${agents.length}-agent Pantheon Squad into composer — add your goal and press Enter!`);
+  }
+
+  function deploySelectedSquad() {
+    if (!selectedSquad.size) {
+      const fallback = (rosterData?.agents || []).slice(0, 3).map(a => a.slug);
+      deploySquadSlugs(fallback);
+      return;
+    }
+    deploySquadSlugs([...selectedSquad]);
+  }
+
+  function deploySingleAgent(slug) {
+    deploySquadSlugs([slug]);
+  }
+
+  const fmtCtx = (n) => {
+    const v = Number(n) || 128000;
+    return v >= 1000000 ? `${(v / 1000000).toFixed(v % 1000000 === 0 ? 0 : 1)}M ctx` : `${Math.round(v / 1000)}K ctx`;
+  };
+  function updateBuilderStatsDom() {
+    const st = builderStats;
+    if (!st) return;
+    const setT = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = String(val); };
+    setT('pb-ovr-num', st.overall ?? 85);
+    setT('pb-tier-badge', st.tier || 'A+');
+    setT('pb-family-label', `${st.family || 'Model'} · ${fmtCtx(st.contextWindow)}`);
+    setT('pb-speed-val', `${st.speed ?? 75}`);
+    setT('pb-cost-val', `${st.costIndex ?? 70}`);
+    const sp = document.getElementById('pb-speed-bar');
+    if (sp) sp.value = st.speed ?? 75;
+    const cp = document.getElementById('pb-cost-bar');
+    if (cp) cp.value = st.costIndex ?? 70;
+    const customWrap = document.getElementById('pb-custom-cmd-wrap');
+    if (customWrap) customWrap.classList.toggle('hidden', builderDraft?.engineType !== 'custom_cli');
+    drawRadarChart(document.getElementById('pb-radar-canvas'), st, { compact: false });
+  }
+
+  function renderRosterView() {
+    const el = document.getElementById('pantheon-view-roster');
+    if (!el) return;
+    if (!rosterData) {
+      el.innerHTML = '<div class="pantheon-empty-cards"><p>Loading Pantheon Roster &amp; real benchmark matrix…</p></div>';
+      return;
+    }
+    const agents = rosterData.agents || [];
+    const harnesses = rosterData.harnesses || [];
+    const engines = rosterData.engines || [];
+    const domains = rosterData.domains || [];
+    const archetypes = rosterData.archetypes || [];
+    const domainOpts = (selected) => domains.map(d => `<option value="${esc(d.id)}" ${d.id === selected ? 'selected' : ''}>${esc(d.shortLabel)}</option>`).join('');
+
+    const currentEngineVal = builderDraft
+      ? (builderDraft.engineType === 'custom_cli' ? 'custom_cli' : builderDraft.engineType === 'harness' && builderDraft.harnessId ? `harness::${builderDraft.harnessId}` : builderDraft.providerId ? `api::${builderDraft.providerId}` : '')
+      : '';
+
+    const builderHtml = builderOpen && builderDraft ? `
+      <section class="pb-panel" id="pantheon-builder" aria-label="Agent Stats Builder">
+        <header class="pb-head">
+          <div>
+            <h3>⚒ Forge Pantheon Agent</h3>
+            <p>Stats are calculated live from real benchmark priors &amp; your local per-domain Elo.</p>
+          </div>
+          <button type="button" class="button button-quiet" id="pb-best-fit" title="Auto-select highest OVR engine for these specialties">✦ Best Fit</button>
+        </header>
+        <div class="pb-archetypes">
+          ${archetypes.map(a => `<button type="button" class="pb-arch-pill" data-pb-archetype="${esc(a.id)}">${esc(a.sigil)} ${esc(a.name)}</button>`).join('')}
+        </div>
+        <div class="pb-hero">
+          <canvas id="pb-radar-canvas" class="pb-radar-canvas" width="196" height="176" aria-label="Live 6-axis agent stat radar"></canvas>
+          <div class="pb-readout">
+            <div class="pb-ovr-row">
+              <span class="pb-ovr-label">OVR</span>
+              <strong class="pb-ovr-num" id="pb-ovr-num">${esc(builderStats?.overall ?? 85)}</strong>
+              <span class="pb-tier-badge" id="pb-tier-badge">${esc(builderStats?.tier || 'A+')}</span>
+            </div>
+            <p class="pb-family" id="pb-family-label">${esc(builderStats?.family || 'Model')} · ${fmtCtx(builderStats?.contextWindow)}</p>
+            <div class="pb-meter-row"><span>Speed</span><progress id="pb-speed-bar" max="100" value="${esc(builderStats?.speed ?? 75)}"></progress><strong id="pb-speed-val">${esc(builderStats?.speed ?? 75)}</strong></div>
+            <div class="pb-meter-row"><span>Efficiency</span><progress id="pb-cost-bar" max="100" value="${esc(builderStats?.costIndex ?? 70)}"></progress><strong id="pb-cost-val">${esc(builderStats?.costIndex ?? 70)}</strong></div>
+          </div>
+        </div>
+        <form id="pb-form" class="pb-form" autocomplete="off">
+          <div class="pb-row-two">
+            <label>Agent Name<input type="text" id="pb-name" value="${esc(builderDraft.name || '')}" placeholder="e.g. Hermes Red-Team Oracle" maxlength="64" required></label>
+            <div class="pb-sigil-field">
+              <span>Sigil</span>
+              <div class="pb-sigil-row">${SIGILS.map(s => `<button type="button" class="pb-sigil-btn ${builderDraft.sigil === s ? 'active' : ''}" data-pb-sigil="${esc(s)}">${esc(s)}</button>`).join('')}</div>
+            </div>
+          </div>
+          <label>Backing Engine or External Harness
+            <select id="pb-engine">
+              <option value="" ${!currentEngineVal ? 'selected' : ''}>Auto-Route Best Connected Engine</option>
+              ${engines.length ? `<optgroup label="Connected Raw APIs &amp; Stack Models">${engines.map(e => `<option value="api::${esc(e.id)}" ${currentEngineVal === `api::${e.id}` ? 'selected' : ''}>${esc(e.label)} (OVR ${esc(e.stats?.overall ?? 80)})</option>`).join('')}</optgroup>` : ''}
+              <optgroup label="External Harnesses (Codex, Claude Code, Antigravity, Hermes, Grok…)">
+                ${harnesses.map(h => `<option value="harness::${esc(h.id)}" ${currentEngineVal === `harness::${h.id}` ? 'selected' : ''}>${esc(h.name)} · ${h.status === 'connected' ? 'Connected' : h.status === 'installed' ? 'CLI Installed' : 'Bridge'} (OVR ${esc(h.stats?.overall ?? 85)})</option>`).join('')}
+              </optgroup>
+              <option value="custom_cli" ${currentEngineVal === 'custom_cli' ? 'selected' : ''}>Custom Local CLI Harness Bridge…</option>
+            </select>
+          </label>
+          <label id="pb-custom-cmd-wrap" class="${builderDraft.engineType === 'custom_cli' ? '' : 'hidden'}">Local Harness Command<input type="text" id="pb-custom-cmd" value="${esc(builderDraft.harnessCommand || '')}" placeholder="e.g. agy, codex, claude, hermes, grok" maxlength="120"></label>
+          <div class="pb-row-two">
+            <label>Primary Specialty<select id="pb-primary">${domainOpts(builderDraft.primarySpecialty)}</select></label>
+            <label>Secondary Specialty<select id="pb-secondary">${domainOpts(builderDraft.secondarySpecialty)}</select></label>
+          </div>
+          <div class="pb-row-two">
+            <label>Autonomy
+              <select id="pb-autonomy">
+                <option value="read_only" ${builderDraft.autonomy === 'read_only' ? 'selected' : ''}>Read-Only Specialist</option>
+                <option value="workspace_builder" ${builderDraft.autonomy === 'workspace_builder' ? 'selected' : ''}>Workspace Builder</option>
+                <option value="external_harness" ${builderDraft.autonomy === 'external_harness' ? 'selected' : ''}>External Harness Delegate</option>
+              </select>
+            </label>
+            <label>Reasoning Effort
+              <select id="pb-effort">
+                <option value="fast" ${builderDraft.effort === 'fast' ? 'selected' : ''}>Fast</option>
+                <option value="medium" ${builderDraft.effort === 'medium' ? 'selected' : ''}>Medium</option>
+                <option value="high" ${builderDraft.effort === 'high' ? 'selected' : ''}>High</option>
+                <option value="max" ${builderDraft.effort === 'max' ? 'selected' : ''}>Max</option>
+              </select>
+            </label>
+          </div>
+          <label>System Directives<textarea id="pb-instructions" rows="2" maxlength="4000" placeholder="Role instructions injected when spawned…">${esc(builderDraft.instructions || '')}</textarea></label>
+          <div class="pb-actions">
+            <button type="submit" class="button button-primary" id="pb-save">Save to Pantheon</button>
+            <button type="button" class="button button-secondary" id="pb-cancel">Cancel</button>
+            ${builderDraft.custom && !builderDraft.builtin ? '<button type="button" class="button button-danger" id="pb-delete">Delete</button>' : ''}
+          </div>
+        </form>
+      </section>` : '';
+
+    el.innerHTML = `
+      <div class="roster-toolbar">
+        <button type="button" class="button button-primary" id="roster-forge-new">+ Forge Agent</button>
+        <div class="roster-squad-tray">
+          <span class="roster-squad-count">Squad · ${selectedSquad.size}/4</span>
+          <button type="button" class="button button-secondary" id="roster-deploy-squad">✦ Deploy Squad</button>
+        </div>
+      </div>
+      <div class="roster-harnesses" aria-label="External harnesses and bridges">
+        <span class="roster-strip-label">Harnesses</span>
+        <div class="roster-harness-pills">
+          ${harnesses.map(h => `<button type="button" class="roster-harness-pill status-${esc(h.status)}" data-roster-harness="${esc(h.id)}" title="${esc(`${h.name} (${h.status}) — click to forge an agent for this harness`)}"><i class="rh-dot"></i><span>${esc(h.shortName)}</span><small>${esc(h.stats?.overall ?? 85)}</small></button>`).join('')}
+        </div>
+      </div>
+      ${builderHtml}
+      <div class="roster-grid" id="pantheon-roster-grid">
+        ${agents.map(ag => {
+          const inSquad = selectedSquad.has(ag.slug);
+          const r = ag.stats?.radar || {};
+          return `<article class="roster-card ${inSquad ? 'is-in-squad' : ''}">
+            <header class="roster-card-head">
+              <div class="roster-card-id">
+                <span class="roster-sigil">${esc(ag.sigil || '✦')}</span>
+                <div>
+                  <strong>${esc(ag.name)}</strong>
+                  <small>${esc(ag.engineLabel)}</small>
+                </div>
+              </div>
+              <span class="roster-ovr-pill tier-${esc(String(ag.stats?.tier || 'A').replace('+', 'p'))}">OVR ${esc(ag.stats?.overall ?? 85)} · ${esc(ag.stats?.tier || 'A')}</span>
+            </header>
+            <div class="roster-card-body">
+              <canvas class="roster-mini-radar" data-mini-radar="${esc(ag.slug)}" width="92" height="84" aria-hidden="true"></canvas>
+              <div class="roster-stat-grid">
+                <span>SWE <strong>${esc(r.swe ?? 80)}</strong></span>
+                <span>UI <strong>${esc(r.ui ?? 78)}</strong></span>
+                <span>MTH <strong>${esc(r.math ?? 78)}</strong></span>
+                <span>SEC <strong>${esc(r.sec ?? 75)}</strong></span>
+                <span>WRI <strong>${esc(r.prose ?? 78)}</strong></span>
+                <span>AGY <strong>${esc(r.agency ?? 72)}</strong></span>
+              </div>
+            </div>
+            <div class="roster-tags">
+              <span class="pantheon-file-chip">${esc(ag.primarySpecialty.replace(/_/g, ' '))}</span>
+              <span class="pantheon-file-chip">${esc(ag.autonomy === 'external_harness' ? 'harness' : ag.autonomy === 'workspace_builder' ? 'builder' : 'read-only')}</span>
+              <span class="pantheon-status-pill tone-${ag.ready ? 'sage' : 'amber'}">${ag.ready ? 'Ready' : 'Bridge'}</span>
+            </div>
+            <footer class="roster-card-foot">
+              <button type="button" class="button ${inSquad ? 'button-primary' : 'button-secondary'}" data-roster-squad="${esc(ag.slug)}">${inSquad ? '✓ In Squad' : '+ Squad'}</button>
+              <button type="button" class="button button-quiet" data-roster-edit="${esc(ag.slug)}">Edit</button>
+              <button type="button" class="button button-quiet" data-roster-spawn="${esc(ag.slug)}">Spawn →</button>
+            </footer>
+          </article>`;
+        }).join('')}
+      </div>
+    `;
+
+    // Paint all Retina radar canvases (builder + each roster card!)
+    if (builderOpen && builderStats) {
+      drawRadarChart(document.getElementById('pb-radar-canvas'), builderStats, { compact: false });
+    }
+    el.querySelectorAll('canvas[data-mini-radar]').forEach(cv => {
+      const ag = agents.find(a => a.slug === cv.dataset.miniRadar);
+      if (ag?.stats) drawRadarChart(cv, ag.stats, { compact: true });
+    });
+  }
+
   window.G0DPantheon = {
     open,
     close,
@@ -1195,6 +1755,8 @@
     syncTask,
     ingestStreamEvent,
     loadSnapshot,
+    loadRoster,
+    openBuilder,
     startDemo,
     stopDemo,
     isOpen: () => isOpenState,
