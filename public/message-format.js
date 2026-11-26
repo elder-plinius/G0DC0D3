@@ -342,16 +342,17 @@ function formatMessageBody(text, markdown = false) {
     const highlighted = language ? highlightCode(content, language) : (typeof hljs !== 'undefined' ? hljs.highlightAuto(content).value : messageEscape(content));
     const lineCount = content ? content.replace(/\n$/, '').split('\n').length : 0;
     const isCollapsible = lineCount >= 2;
+    const startCollapsed = lineCount > 20;
     const lineLabel = lineCount > 1 ? `<span class="code-line-count">${lineCount} lines</span>` : '';
     const baseLang = language.split(/[:\s]/)[0].toLowerCase();
     const isMermaid = baseLang === 'mermaid';
     const isPreviewable = isMermaid || /^(?:html?|svg)$/i.test(baseLang) || (/^xml$/i.test(baseLang) && /^\s*<(?:!doctype\s+html|html|svg)/i.test(content));
     const previewCodeBtn = isPreviewable ? `<button type="button" class="code-action-btn code-preview-btn" data-preview-code data-preview-lang="${messageEscape(baseLang || 'html')}" aria-label="${isMermaid ? 'Render Mermaid diagram' : 'Run live preview'}">${isMermaid ? '▶ Diagram' : '▶ Preview'}</button>` : '';
-    const collapseBtn = isCollapsible ? `<button type="button" class="code-action-btn" data-collapse-code aria-expanded="false" aria-label="Expand code block">Expand</button>` : '';
+    const collapseBtn = isCollapsible ? `<button type="button" class="code-action-btn" data-collapse-code aria-expanded="${startCollapsed ? 'false' : 'true'}" aria-label="${startCollapsed ? 'Expand' : 'Collapse'} code block">${startCollapsed ? 'Expand' : 'Collapse'}</button>` : '';
     const wrapBtn = `<button type="button" class="code-action-btn" data-wrap-code aria-pressed="false" aria-label="Toggle word wrap">Wrap</button>`;
     const numbered = lineCount > 1 ? wrapCodeLines(highlighted) : highlighted;
     const numberedCls = lineCount > 1 ? ' has-line-numbers' : '';
-    const collapsedCls = isCollapsible ? ' is-collapsed' : '';
+    const collapsedCls = startCollapsed ? ' is-collapsed' : '';
     return `<div class="message-code-block${collapsedCls}"><div class="message-code-header"><span class="code-lang-group"><span class="message-code-lang">${messageEscape(displayLang)}</span>${lineLabel}</span><span class="code-header-actions">${previewCodeBtn}${collapseBtn}${wrapBtn}<button type="button" class="code-copy" data-copy-code aria-label="Copy code block">Copy</button></span></div><pre class="message-code hljs${numberedCls}" tabindex="0" role="region" aria-label="Code block"><code>${numbered}</code></pre></div>`;
   }).join('');
 }

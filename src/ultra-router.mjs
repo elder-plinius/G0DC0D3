@@ -20,9 +20,12 @@ export const ROUTER_DOMAINS = Object.freeze([
 
 const DOMAIN_IDS = new Set(ROUTER_DOMAINS.map(d => d.id));
 const VALID_MODES = new Set(['off', 'auto_route', 'auto_arena', 'manual_arena']);
+const VALID_METACOG_MODES = new Set(['off', 'smart', 'auto_forge']);
 
 export const DEFAULT_ROUTER_SETTINGS = Object.freeze({
   mode: 'off', // 'off' | 'auto_route' | 'auto_arena' | 'manual_arena'
+  arenaSize: 3, // 2 | 3 | 4 contenders in Auto-Arena
+  metacognition: 'smart', // 'off' | 'smart' | 'auto_forge'
   weights: Object.freeze({ quality: 0.72, compliance: 0.20, speed: 0.05, cost: 0.03 }),
   exploration: true,
   domainPins: Object.freeze({}),
@@ -58,6 +61,19 @@ export function normalizeRouterSettings(input = {}, base = DEFAULT_ROUTER_SETTIN
   };
 
   const exploration = input.exploration !== undefined ? Boolean(input.exploration) : (base.exploration !== false);
+  let arenaSize = [2, 3, 4].includes(Number(base.arenaSize)) ? Number(base.arenaSize) : 3;
+  if (input.arenaSize !== undefined) {
+    const parsedSize = Number(input.arenaSize);
+    if (!Number.isInteger(parsedSize) || ![2, 3, 4].includes(parsedSize)) {
+      throw Object.assign(new Error('arenaSize must be 2, 3, or 4.'), { code: 'INVALID_ROUTER_SETTINGS', status: 400 });
+    }
+    arenaSize = parsedSize;
+  }
+  const rawMeta = input.metacognition !== undefined ? String(input.metacognition).trim().toLowerCase() : (base.metacognition || 'smart');
+  if (!VALID_METACOG_MODES.has(rawMeta)) {
+    throw Object.assign(new Error(`Metacognition mode must be one of: ${[...VALID_METACOG_MODES].join(', ')}.`), { code: 'INVALID_ROUTER_SETTINGS', status: 400 });
+  }
+  const metacognition = rawMeta;
 
   const domainPins = { ...(base.domainPins || {}) };
   if (input.domainPins && typeof input.domainPins === 'object' && !Array.isArray(input.domainPins)) {
@@ -97,7 +113,7 @@ export function normalizeRouterSettings(input = {}, base = DEFAULT_ROUTER_SETTIN
     }
   }
 
-  return { mode, weights, exploration, domainPins, customBenchmarks };
+  return { mode, arenaSize, metacognition, weights, exploration, domainPins, customBenchmarks };
 }
 
 export function loadBenchmarkMatrix(customBenchmarks = {}) {
@@ -162,7 +178,7 @@ export function classifyPromptDomain(objective = '', { files = [], attachments =
   }
 
   // SWE & Systems coding
-  const sweHits = (lower.match(/\b(?:refactor|debug|fix (?:the |this )?bug|unit test|integration test|api|endpoint|server|database|sql|sqlite|postgres\w*|redis|docker|kubernetes|git|pr|diff|commit|typescript|javascript|python|rust|golang|swift|node\.?js|cli|sdk|module|function|class|race condition|memory leak|benchmark|compiler|parser|architecture|backend)\b|\bc\+\+(?=\s|$|[,.;:!?)/])/g) || []).length;
+  const sweHits = (lower.match(/\b(?:refactor|debug|fix (?:the |this )?bug|unit test|integration test|api|endpoint|server|database|sql|sqlite|postgres\w*|redis|docker|kubernetes|git|pr|diff|commit|typescript|javascript|python|rust|golang|swift|node\.?js|cli|sdk|module|function|class|race condition|memory leak|benchmark|compiler|parser|architecture|backend|distributed|idempoten\w*|event[- ]?sourc\w*|microservice\w*|middleware|schema|webhook|concurrency|lock[- ]?free)\b|\bc\+\+(?=\s|$|[,.;:!?)/])/g) || []).length;
   if (sweHits > 0) {
     scores.swe_coding += 28 + Math.min(60, sweHits * 14);
     signals.push(`swe_terms:${sweHits}`);
@@ -371,27 +387,44 @@ export function routeUltraPlinian({ objective = '', files = [], attachments = []
     .sort((a, b) => b.benchmarkPrior - a.benchmarkPrior)[0];
   if (topUncensored) waterfallIds.push(topUncensored.id);
 
-  // For Auto-Arena: pick top 2 Venice catalog contenders + an independent fast/high-agency judge (requires >=3 catalog models)
-  const catalogRanked = ranked.filter(r => r.id.startsWith('venice-catalog:'));
-  let arenaPair = null;
+  // For Auto-Arena: pick up to cfg.arenaSize (2..4) distinct-family contenders across connected HTTP & Venice catalog models + an independent Judge
+  const draftCapable = ranked.filter(r => r.id.startsWith('venice-catalog:') || candidates.find(c => c.id === r.id)?.kind === 'http');
+  const pool = draftCapable;
+  let arenaModels = null;
   let judgeId = null;
-  if (catalogRanked.length >= 3) {
-    const first = catalogRanked[0];
-    // Prefer a distinct family for contender #2 so the blind judge compares genuinely different models
-    const second = catalogRanked.find(c => c.id !== first.id && c.family !== first.family) || catalogRanked[1];
-    const pair = [first.id, second.id];
-    const judgeCandidate = catalogRanked.find(c => c.id === 'venice-catalog:z-ai-glm-5-3-flash' && !pair.includes(c.id))
-      || catalogRanked.find(c => !pair.includes(c.id) && c.speed >= 80)
-      || catalogRanked.find(c => !pair.includes(c.id));
-    if (judgeCandidate) {
-      arenaPair = pair;
+  if (pool.length >= 2) {
+    // Always reserve 1 independent Judge when 3+ models are available so contenders don't self-judge
+    const targetCount = pool.length >= 3 ? Math.max(2, Math.min(cfg.arenaSize || 3, pool.length - 1, 4)) : 2;
+    const chosen = [];
+    const usedFamilies = new Set();
+    // Pass 1: maximize family diversity so the Blind Judge compares genuinely distinct models
+    for (const c of pool) {
+      if (chosen.length >= targetCount) break;
+      if (!usedFamilies.has(c.family)) {
+        chosen.push(c.id);
+        usedFamilies.add(c.family);
+      }
+    }
+    // Pass 2: fill remaining slots if fewer distinct families than targetCount
+    for (const c of pool) {
+      if (chosen.length >= targetCount) break;
+      if (!chosen.includes(c.id)) chosen.push(c.id);
+    }
+    const judgeCandidate = pool.find(c => /glm-5-3-flash|gemini-4-neon|claude-sonnet/i.test(c.id) && !chosen.includes(c.id))
+      || pool.find(c => !chosen.includes(c.id) && c.speed >= 80)
+      || pool.find(c => !chosen.includes(c.id))
+      || pool[0];
+    if (chosen.length >= 2 && judgeCandidate) {
+      arenaModels = chosen;
       judgeId = judgeCandidate.id;
     }
   }
+  const arenaPair = arenaModels;
 
   const domainMeta = ROUTER_DOMAINS.find(d => d.id === classification.primaryDomain) || ROUTER_DOMAINS[0];
   return {
     mode: cfg.mode,
+    arenaSize: cfg.arenaSize,
     domain: classification.primaryDomain,
     domainLabel: domainMeta.shortLabel,
     secondaryDomain: classification.secondaryDomain,
@@ -400,6 +433,7 @@ export function routeUltraPlinian({ objective = '', files = [], attachments = []
     selectedId: selected?.id || null,
     selected,
     waterfallIds: waterfallIds.slice(0, 8),
+    arenaModels,
     arenaPair,
     judgeId,
     ranked: ranked.slice(0, 12),

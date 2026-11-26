@@ -102,6 +102,7 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
   const setup = createSetup(runtime.store);
   const worktrees = new WorktreeProjects(runtime.store, { get: id => providers.get(id) ?? catalog.get(id) },
     { outboundOptions: () => runtime.outboundOptions() });
+  runtime.worktrees = worktrees;
   const previews = createPreviewRegistry(runtime);
   async function loadSelected(ids) {
     if (Array.isArray(ids) && ids.some(id => isCatalogModel(id) || providers.get(id)?.baseUrl === veniceEndpoint)) await catalog.list();
@@ -212,6 +213,12 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
         fixtures:fixtures.map(({id,title,description,objective})=>({id,title,description,objective})),scenarios:scriptedScenarios,benchmark,version:'0.2.0',capabilities,limitations,personas:PERSONAS,tools:TOOLS.map(({name,description,parameters,result})=>({name,description,parameters,resultSchema:result})),executionAvailable:isSandboxSupportedPlatform(),sessionProtected:auth,workflows:listWorkflows(),permissions:runtime.getGlobalPermissions(),privacy:runtime.getPrivacy(),overseer:runtime.getOverseer(),router:runtime.getRouterSettings(),modelGroups:runtime.getModelGroups({sortBy,catalog:modelCatalog}),sortModes:MODEL_SORT_MODES,catalogMeta:modelCatalog.meta()
       });
       }
+      if(req.method==='GET' && url.pathname==='/api/browser/settings')return send(res,200,await runtime.getBrowserInfo());
+      if(req.method==='PATCH' && url.pathname==='/api/browser/settings') {
+        const body = await readBody(req);
+        runtime.updateBrowserSettings(body);
+        return send(res,200,await runtime.getBrowserInfo());
+      }
       if(req.method==='GET' && url.pathname==='/api/overseer')return send(res,200,runtime.getOverseer());
       if(req.method==='PATCH' && url.pathname==='/api/overseer')return send(res,200,runtime.updateOverseer(await readBody(req)));
       if(req.method==='GET' && url.pathname==='/api/router')return send(res,200,await runtime.getRouterState());
@@ -220,6 +227,16 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
         return send(res,200,await runtime.getRouterState());
       }
       if(req.method==='POST' && url.pathname==='/api/router/preview')return send(res,200,await runtime.previewUltraRoute(await readBody(req)));
+      if(req.method==='POST' && url.pathname==='/api/metacognition/forge')return send(res,200,await runtime.forgeMetapromptPreview(await readBody(req)));
+      if(req.method==='GET' && url.pathname==='/api/conclave/roster')return send(res,200,await runtime.getConclaveRoster());
+      if(req.method==='POST' && url.pathname==='/api/conclave/roster')return send(res,201,await runtime.saveConclaveAgent(await readBody(req)));
+      if(req.method==='POST' && url.pathname==='/api/conclave/stats/preview')return send(res,200,await runtime.previewConclaveStats(await readBody(req)));
+      const rosterDelMatch = req.method === 'DELETE' && url.pathname.match(/^\/api\/conclave\/roster\/([^/]+)$/);
+      if (rosterDelMatch) return send(res, 200, await runtime.deleteConclaveAgent(decodeURIComponent(rosterDelMatch[1])));
+      if(req.method==='GET' && url.pathname==='/api/conclave/formations')return send(res,200,{formations:runtime.getConclaveFormations()});
+      if(req.method==='POST' && url.pathname==='/api/conclave/formations')return send(res,201,runtime.saveConclaveFormation(await readBody(req)));
+      const formDelMatch = req.method === 'DELETE' && url.pathname.match(/^\/api\/conclave\/formations\/([^/]+)$/);
+      if (formDelMatch) return send(res, 200, runtime.deleteConclaveFormation(decodeURIComponent(formDelMatch[1])));
       if(req.method==='DELETE' && url.pathname==='/api/router/reset') {
         await readBody(req).catch(()=>({}));
         runtime.resetRouter();
@@ -491,10 +508,13 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
           if (decision.selectedId) {
             routingReceipt = decision;
             body.ultraplinian = true;
-            if (routerSettings.mode === 'auto_arena' && decision.arenaPair && decision.judgeId && !promptNeedsLiveTools(body.objective)) {
-              body.answerRace = { models: decision.arenaPair, judge: decision.judgeId };
-              body.providerIds = decision.waterfallIds.filter(id => isCatalogModel(id)).slice(0, 2);
-              if (!body.providerIds.length) body.providerIds = [decision.arenaPair[0]];
+            const raceContenders = decision.arenaModels || decision.arenaPair;
+            if (routerSettings.mode === 'auto_arena' && Array.isArray(raceContenders) && raceContenders.length >= 2 && decision.judgeId && !promptNeedsLiveTools(body.objective)) {
+              body.answerRace = { models: raceContenders, judge: decision.judgeId };
+              const leadIsCat = isCatalogModel(raceContenders[0]);
+              const compat = decision.waterfallIds.filter(id => isCatalogModel(id) === leadIsCat);
+              body.providerIds = leadIsCat ? compat.slice(0, 2) : compat.slice(0, 8);
+              if (!body.providerIds.length) body.providerIds = [raceContenders[0]];
             } else {
               // Ensure homogeneous route compatibility (catalog models stay with catalog models; connected providers stay with connected providers)
               const primaryIsCat = isCatalogModel(decision.selectedId);
@@ -512,9 +532,18 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
         const task=await createConversationTask(runtime,dataDir,body);
         if (workflowName) runtime.store.updateTask(task.id, current => { current.workflow = workflowName; return current; }, 'workflow.applied', { workflow: workflowName });
         if (routingReceipt) {
+          const metacognition = await runtime.resolveTaskMetacognition({
+            objective: body.objective,
+            decision: routingReceipt,
+            providerId: routingReceipt.selectedId,
+            effort: body.effort || 'medium',
+            workspaceKind: 'conversation',
+            attachments: body.attachments || []
+          }).catch(() => null);
           runtime.store.updateTask(task.id, current => {
             current.routing ||= {};
             current.routing.domain = routingReceipt.domain;
+            if (metacognition) current.routing.metacognition = metacognition;
             current.routing.ultraDecision = {
               mode: routingReceipt.mode,
               domain: routingReceipt.domain,
@@ -522,7 +551,8 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
               refusalRisk: routingReceipt.refusalRisk,
               selected: routingReceipt.selected,
               runnerUps: routingReceipt.ranked.slice(1, 4),
-              summary: routingReceipt.summary
+              summary: routingReceipt.summary,
+              ...(metacognition ? { metacognition } : {})
             };
             return current;
           }, 'router.selected', {
@@ -533,7 +563,8 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
             selectedId: routingReceipt.selectedId,
             selected: routingReceipt.selected,
             runnerUps: routingReceipt.ranked.slice(1, 4),
-            summary: routingReceipt.summary
+            summary: routingReceipt.summary,
+            ...(metacognition ? { metacognition } : {})
           });
         }
         return send(res,201,{task:publicTask(runtime.getTask(task.id),runtime)});
@@ -650,12 +681,33 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
           clearInterval(heartbeat);
           unsub();
           sseClients.delete(client);
+          let hasOther = false;
+          for (const c of sseClients) {
+            if (c.taskId === taskId) { hasOther = true; break; }
+          }
+          if (!hasOther) {
+            runtime.broker.browser.setScreencastWatching(taskId, false).catch(() => {});
+          }
         };
         sseClients.add(client);
         req.on('close', cleanup);
         res.on('close', cleanup);
         res.on('error', cleanup);
         return;
+      }
+      const conclaveMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/conclave(?:\/(steer))?$/);
+      if (conclaveMatch) {
+        const id = decodeURIComponent(conclaveMatch[1]);
+        const subAction = conclaveMatch[2] || '';
+        if (req.method === 'GET' && !subAction) {
+          return send(res, 200, runtime.getConclaveState(id));
+        }
+        if (req.method === 'POST' && subAction === 'steer') {
+          if (runtime.getTask(id).crewMember) throw Object.assign(new Error('Control crew workers through their parent conversation.'), { code: 'CREW_MEMBER', status: 400 });
+          const body = await readBody(req);
+          const result = await runtime.queueWorkerSteer(id, body.workerId || 'orchestrator', body.message || '');
+          return send(res, 200, { ...result, conclave: runtime.getConclaveState(id) });
+        }
       }
       const crewMatch=url.pathname.match(/^\/api\/tasks\/([^/]+)\/crew(?:\/(pause|cancel|resume|inspect|candidate|apply))?$/);
       if(crewMatch) {
@@ -683,6 +735,44 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
         res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'no-store' });
         res.end(shot.buffer);
         return;
+      }
+      const browserFrameMatch = req.method === 'GET' && url.pathname.match(/^\/api\/tasks\/([^/]+)\/browser\/frame$/);
+      if (browserFrameMatch) {
+        const taskId = decodeURIComponent(browserFrameMatch[1]);
+        runtime.getTask(taskId);
+        const frame = runtime.broker.browser.getLatestFrame(taskId);
+        if (!frame) return send(res, 404, { error: 'No live browser frame available for this task.' });
+        res.writeHead(200, { 'content-type': frame.mime || 'image/jpeg', 'cache-control': 'no-store' });
+        res.end(frame.buffer);
+        return;
+      }
+      const browserCtrlMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/browser\/(status|mode|screencast|close)$/);
+      if (browserCtrlMatch) {
+        const taskId = decodeURIComponent(browserCtrlMatch[1]);
+        const sub = browserCtrlMatch[2];
+        runtime.getTask(taskId);
+        if (req.method === 'GET' && sub === 'status') {
+          return send(res, 200, runtime.broker.browser.getStatus(taskId));
+        }
+        if (req.method === 'POST' && sub === 'mode') {
+          const body = await readBody(req);
+          if (typeof body.visibleWindow !== 'boolean') {
+            throw Object.assign(new Error('visibleWindow must be a boolean.'), { status: 400, code: 'INVALID_BROWSER_MODE' });
+          }
+          if (body.persist === true) runtime.updateBrowserSettings({ visibleWindow: body.visibleWindow });
+          const status = await runtime.broker.browser.setSessionMode(taskId, { visibleWindow: body.visibleWindow }, runtime.outboundOptions());
+          return send(res, 200, status);
+        }
+        if (req.method === 'POST' && sub === 'screencast') {
+          const body = await readBody(req);
+          const status = await runtime.broker.browser.setScreencastWatching(taskId, Boolean(body.active));
+          return send(res, 200, status);
+        }
+        if (req.method === 'POST' && sub === 'close') {
+          await readBody(req).catch(() => ({}));
+          await runtime.broker.browser.closeSession(taskId);
+          return send(res, 200, runtime.broker.browser.getStatus(taskId));
+        }
       }
       const match=url.pathname.match(/^\/api\/tasks\/([^/]+)(?:\/(run|pause|resume|cancel|accept|report-refusal|policy|providers|answer-race|message|export|patch|execution|checks|persona|effort|prompt|apply-preview|apply-source|inspect-apply|undo-apply|source-backup|hunk|generation|rewind|plan-mode|compact|checkpoints|permissions|approval|fork|transcript|commit|title))?$/);
       if(match) {
@@ -913,6 +1003,8 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
       staticFiles['/themes.js'] = ['themes.js','text/javascript'];
       staticFiles['/themes.css'] = ['themes.css','text/css'];
       staticFiles['/mermaid-lite.js'] = ['mermaid-lite.js','text/javascript'];
+      staticFiles['/conclave.js'] = ['conclave.js','text/javascript'];
+      staticFiles['/browser-live.js'] = ['browser-live.js','text/javascript'];
       staticFiles['/brand-wordmark.ttf'] = ['brand-wordmark.ttf', 'font/ttf'];
       if(req.method==='GET'&&staticFiles[url.pathname]) {
         const [filename,mime]=staticFiles[url.pathname],body=await fs.readFile(path.join(publicDir,filename));

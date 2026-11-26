@@ -14,7 +14,7 @@
     },
     {
       id: 'minimal',
-      name: 'Minimalist Noir',
+      name: 'Minimal',
       short: 'Minimal',
       emoji: '',
       base: 'dark',
@@ -24,8 +24,8 @@
     },
     {
       id: 'light',
-      name: 'Alabaster Light',
-      short: 'Light',
+      name: 'Alabaster',
+      short: 'Alabaster',
       emoji: '',
       base: 'light',
       animated: false,
@@ -34,7 +34,7 @@
     },
     {
       id: 'dragons',
-      name: 'Dragon Realm',
+      name: 'Dragons',
       short: 'Dragons',
       emoji: '',
       base: 'dark',
@@ -44,7 +44,7 @@
     },
     {
       id: 'psychedelic',
-      name: 'Psychedelic Melt',
+      name: 'Psychedelic',
       short: 'Psychedelic',
       emoji: '',
       base: 'dark',
@@ -54,7 +54,7 @@
     },
     {
       id: 'hacker',
-      name: 'Ultra Hacker',
+      name: 'Hacker',
       short: 'Hacker',
       emoji: '',
       base: 'dark',
@@ -64,7 +64,7 @@
     },
     {
       id: 'synthwave',
-      name: "Synthwave '84",
+      name: 'Synthwave',
       short: 'Synthwave',
       emoji: '',
       base: 'dark',
@@ -74,28 +74,28 @@
     },
     {
       id: 'volcano',
-      name: 'Plinian Vesuvius',
-      short: 'Vesuvius',
+      name: 'Vesuvian',
+      short: 'Vesuvian',
       emoji: '',
       base: 'dark',
       animated: true,
       badge: 'Live',
-      desc: 'Rising volcanic magma sparks & incandescent ash.'
+      desc: 'Mount Vesuvius caldera, flowing magma fissures & Plinian sparks.'
     },
     {
       id: 'ancient',
-      name: 'Ancient Greco-Roman',
+      name: 'Ancient',
       short: 'Ancient',
       emoji: '',
       base: 'light',
       animated: true,
       badge: 'Live',
-      desc: 'Carrara marble colonnade, gold leaf, Pompeian crimson & Pantheon sunbeams.'
+      desc: 'Carrara marble colonnade, gold leaf, Pompeian crimson & oculus sunbeams.'
     },
     {
       id: 'celestial',
-      name: 'Astral Observatory',
-      short: 'Astral',
+      name: 'Celestial',
+      short: 'Celestial',
       emoji: '',
       base: 'dark',
       animated: true,
@@ -147,7 +147,7 @@
     canvas.height = Math.round(height * dpr);
     if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     if (engine?.resize) engine.resize(width, height);
-    if (engine && rafId === null) engine.step(0.05, 1.2);
+    if (engine && rafId === null) engine.step(0.25, 1.2);
   }
 
   /* ── 1. Dragon Realm Engine: articulated winged dragons + fire breath + embers ── */
@@ -266,26 +266,42 @@
       ctx.closePath();
       ctx.fill();
 
-      // Front wing (articulated bat-wing with ribs)
-      const flapFront = wingCycle * 48 * s;
-      const tipX = shoulder.x - d.dir * 66 * s;
-      const tipY = shoulder.y - 34 * s + flapFront;
-      const elbowX = shoulder.x - d.dir * 22 * s;
-      const elbowY = shoulder.y - 54 * s + flapFront * 0.75;
-      const wingGrad = ctx.createLinearGradient(shoulder.x, shoulder.y, tipX, tipY);
-      wingGrad.addColorStop(0, `hsla(${d.hue}, 74%, 22%, 0.92)`);
-      wingGrad.addColorStop(1, `hsla(${d.hue + 18}, 92%, 42%, 0.68)`);
+      // Front wing (articulated multi-rib bat-wing with scalloped membrane)
+      const flapFront = wingCycle * 52 * s;
+      const shoulderX = shoulder.x;
+      const shoulderY = shoulder.y;
+      const wristX = shoulderX - d.dir * 26 * s;
+      const wristY = shoulderY - 56 * s + flapFront * 0.72;
+      const tip1X = shoulderX - d.dir * 78 * s;
+      const tip1Y = shoulderY - 38 * s + flapFront;
+      const tip2X = shoulderX - d.dir * 60 * s;
+      const tip2Y = shoulderY - 8 * s + flapFront * 0.65;
+      const tip3X = shoulderX - d.dir * 38 * s;
+      const tip3Y = shoulderY + 12 * s + flapFront * 0.35;
+      const wingGrad = ctx.createLinearGradient(shoulderX, shoulderY, tip1X, tip1Y);
+      wingGrad.addColorStop(0, `hsla(${d.hue}, 78%, 18%, 0.94)`);
+      wingGrad.addColorStop(0.6, `hsla(${d.hue + 14}, 88%, 34%, 0.82)`);
+      wingGrad.addColorStop(1, `hsla(${d.hue + 24}, 96%, 54%, 0.65)`);
       ctx.fillStyle = wingGrad;
-      ctx.strokeStyle = `hsla(${d.hue + 26}, 96%, 64%, 0.78)`;
-      ctx.lineWidth = 1.8 * s;
+      ctx.strokeStyle = `hsla(${d.hue + 26}, 98%, 66%, 0.85)`;
+      ctx.lineWidth = 1.7 * s;
       ctx.beginPath();
-      ctx.moveTo(shoulder.x, shoulder.y);
-      ctx.lineTo(elbowX, elbowY);
-      ctx.lineTo(tipX, tipY);
-      ctx.quadraticCurveTo(shoulder.x - d.dir * 46 * s, shoulder.y - 4 * s + flapFront * 0.45, shoulder.x - d.dir * 34 * s, shoulder.y + 8 * s + flapFront * 0.25);
-      ctx.quadraticCurveTo(shoulder.x - d.dir * 18 * s, shoulder.y + 2 * s, pts[5].x, pts[5].y);
+      ctx.moveTo(shoulderX, shoulderY);
+      ctx.quadraticCurveTo(shoulderX - d.dir * 10 * s, shoulderY - 34 * s + flapFront * 0.4, wristX, wristY);
+      ctx.lineTo(tip1X, tip1Y);
+      ctx.quadraticCurveTo(shoulderX - d.dir * 64 * s, shoulderY - 22 * s + flapFront * 0.8, tip2X, tip2Y);
+      ctx.quadraticCurveTo(shoulderX - d.dir * 46 * s, shoulderY - 2 * s + flapFront * 0.45, tip3X, tip3Y);
+      ctx.quadraticCurveTo(shoulderX - d.dir * 20 * s, shoulderY + 4 * s, pts[5].x, pts[5].y);
       ctx.closePath();
       ctx.fill();
+      ctx.stroke();
+
+      // Articulated finger ribs inside the wing membrane
+      ctx.strokeStyle = `hsla(${d.hue + 24}, 95%, 62%, 0.52)`;
+      ctx.lineWidth = 1.1 * s;
+      ctx.beginPath();
+      ctx.moveTo(wristX, wristY); ctx.lineTo(tip2X, tip2Y);
+      ctx.moveTo(wristX, wristY); ctx.lineTo(tip3X, tip3Y);
       ctx.stroke();
 
       // Head, snout, horns & molten eye
@@ -316,7 +332,19 @@
     }
 
     return {
-      resize() {},
+      resize() {
+        const minY = 70;
+        const maxY = Math.max(190, height - 110);
+        for (const d of dragons) {
+          d.baseY = Math.max(minY, Math.min(maxY, d.baseY));
+          d.y = d.baseY;
+          if (d.x > width + 240 * d.scale) d.x = Math.random() * width;
+        }
+        for (const e of embers) {
+          e.x = Math.random() * width;
+          e.y = Math.random() * height;
+        }
+      },
       step(dt, t) {
         const bg = ctx.createLinearGradient(0, 0, 0, height);
         bg.addColorStop(0, '#0a0507');
@@ -325,13 +353,42 @@
         ctx.fillStyle = bg;
         ctx.fillRect(0, 0, width, height);
 
-        // Ambient volcanic moon / glow
-        const glow = ctx.createRadialGradient(width * 0.72, height * 0.28, 12, width * 0.72, height * 0.28, Math.max(width, height) * 0.45);
-        glow.addColorStop(0, 'rgba(249, 115, 22, 0.2)');
-        glow.addColorStop(0.5, 'rgba(185, 28, 28, 0.08)');
+        // Blood-gold eclipsed moon & volcanic horizon glow
+        const moonX = width * 0.80;
+        const moonY = height * 0.22;
+        const moonR = Math.min(width, height) * 0.095;
+        const glow = ctx.createRadialGradient(moonX, moonY, moonR * 0.3, moonX, moonY, Math.max(width, height) * 0.42);
+        glow.addColorStop(0, 'rgba(251, 146, 60, 0.32)');
+        glow.addColorStop(0.35, 'rgba(185, 28, 28, 0.14)');
         glow.addColorStop(1, 'rgba(0, 0, 0, 0)');
         ctx.fillStyle = glow;
         ctx.fillRect(0, 0, width, height);
+
+        ctx.save();
+        const moonGrad = ctx.createRadialGradient(moonX - moonR * 0.25, moonY - moonR * 0.2, 4, moonX, moonY, moonR);
+        moonGrad.addColorStop(0, 'rgba(254, 215, 170, 0.55)');
+        moonGrad.addColorStop(0.6, 'rgba(234, 88, 12, 0.32)');
+        moonGrad.addColorStop(1, 'rgba(153, 27, 27, 0.08)');
+        ctx.fillStyle = moonGrad;
+        ctx.beginPath();
+        ctx.arc(moonX, moonY, moonR, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+
+        // Distant jagged obsidian dragon-crag peaks along lower horizon
+        ctx.save();
+        ctx.fillStyle = '#0e0507';
+        ctx.strokeStyle = 'rgba(249, 115, 22, 0.26)';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(0, height);
+        const crags = [[0, 0.88], [0.12, 0.78], [0.22, 0.85], [0.34, 0.72], [0.46, 0.84], [0.62, 0.76], [0.76, 0.67], [0.87, 0.79], [0.95, 0.73], [1, 0.83]];
+        for (const [px, py] of crags) ctx.lineTo(width * px, height * py);
+        ctx.lineTo(width, height);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
 
         // Rising embers
         for (const e of embers) {
@@ -393,10 +450,10 @@
     };
   }
 
-  /* ── 2. Psychedelic Melt Engine: domain-warped liquid oil projection + chromatic melt + sacred mandala ── */
+  /* ── 2. Psychedelic Melt Engine: silky liquid-light oil projector + iridescent metaballs + sacred mandala ── */
   function createPsychedelicEngine() {
-    const pw = 180;
-    const ph = 112;
+    const pw = 216;
+    const ph = 132;
     const off = document.createElement('canvas');
     off.width = pw;
     off.height = ph;
@@ -405,13 +462,13 @@
     const data = img.data;
 
     // Drifting liquid-mercury / oil-projector lava blobs that slowly melt downward
-    const blobs = Array.from({ length: 7 }, (_, i) => ({
-      x: (i + 0.5) / 7,
-      y: (i * 0.19) % 1,
-      rx: 0.11 + (i % 3) * 0.045,
-      ry: 0.14 + ((i + 1) % 3) * 0.055,
-      vy: 0.012 + (i % 4) * 0.005,
-      hueOff: i * 51,
+    const blobs = Array.from({ length: 8 }, (_, i) => ({
+      x: (i + 0.45) / 8,
+      y: (i * 0.17) % 1,
+      rx: 0.12 + (i % 3) * 0.05,
+      ry: 0.15 + ((i + 1) % 3) * 0.06,
+      vy: 0.011 + (i % 4) * 0.005,
+      hueOff: i * 47,
       phase: i * 1.17
     }));
 
@@ -419,40 +476,38 @@
       resize() {},
       step(dt, t) {
         let idx = 0;
-        const tt = t * 0.48;
-        const drip = t * 0.18; // gentle downward gravitational melt
+        const tt = t * 0.42;
+        const drip = t * 0.15;
         for (let y = 0; y < ph; y++) {
           const ny = y / ph;
-          const yw = (ny - 0.5) * 2.2;
+          const yw = (ny - 0.5) * 2.1;
           for (let x = 0; x < pw; x++) {
             const nx = x / pw;
-            const xw = (nx - 0.5) * 3.2;
+            const xw = (nx - 0.5) * 3.0;
 
-            // Stage 1 domain warp (organic oil-slick folding)
-            const qx = Math.sin(xw * 1.9 + tt * 0.9) + Math.cos(yw * 2.3 - drip * 1.4);
-            const qy = Math.cos(xw * 1.7 - tt * 0.7) + Math.sin(yw * 2.1 + tt * 0.6);
+            const qx = Math.sin(xw * 1.7 + tt * 0.85) + Math.cos(yw * 2.1 - drip * 1.2);
+            const qy = Math.cos(xw * 1.5 - tt * 0.65) + Math.sin(yw * 1.9 + tt * 0.55);
 
-            // Stage 2 recursive warp (liquid bismuth / lava-lamp ribbons)
-            const wx = xw + 0.55 * qx;
-            const wy = yw + 0.55 * qy - drip * 0.65;
+            const wx = xw + 0.52 * qx;
+            const wy = yw + 0.52 * qy - drip * 0.55;
             const r2 = wx * wx + wy * wy;
-            const swirl = Math.sin(Math.sqrt(r2 + 0.08) * 4.8 - tt * 1.35 + Math.atan2(wy, wx) * 2.0);
-            const fold = Math.sin(wx * 2.4 + Math.cos(wy * 2.8 + tt * 0.8)) * Math.cos(wy * 1.9 - Math.sin(wx * 2.1 - tt * 0.5));
-            const field = swirl * 0.62 + fold * 0.78 + 0.25 * Math.sin(qx - qy + tt);
+            const swirl = Math.sin(Math.sqrt(r2 + 0.12) * 3.8 - tt * 1.1 + Math.atan2(wy, wx) * 2.0);
+            const fold = Math.sin(wx * 2.0 + Math.cos(wy * 2.3 + tt * 0.7)) * Math.cos(wy * 1.7 - Math.sin(wx * 1.8 - tt * 0.45));
+            const field = swirl * 0.58 + fold * 0.72 + 0.22 * Math.sin(qx - qy + tt);
 
-            // Iridescent contour filaments (thin glowing oil-film ridges)
-            const contour = Math.pow(Math.max(0, 1 - Math.abs(Math.sin(field * 3.14159)) * 4.2), 2.2);
+            // Smooth silky liquid-light oil sheen (no pixelated hard threshold dots!)
+            const sheen = 0.5 + 0.5 * Math.cos(field * 2.4);
+            const sheenSmooth = sheen * sheen * (3 - 2 * sheen);
 
-            // Deep ultraviolet velvet valleys with electric iridescent crests (keeps UI ultra-legible)
-            const phase = field * 1.55 + tt * 0.35;
-            const crest = 0.38 + 0.62 * Math.pow(0.5 + 0.5 * Math.sin(field * 1.4), 1.35);
+            const phase = field * 1.45 + tt * 0.32;
+            const crest = 0.34 + 0.66 * Math.pow(0.5 + 0.5 * Math.sin(field * 1.35), 1.25);
             const baseR = (0.48 + 0.52 * Math.cos(phase + 0.0)) * crest;
-            const baseG = (0.34 + 0.56 * Math.cos(phase + 2.15)) * crest;
-            const baseB = (0.55 + 0.45 * Math.cos(phase + 4.05)) * crest;
+            const baseG = (0.36 + 0.54 * Math.cos(phase + 2.1)) * crest;
+            const baseB = (0.58 + 0.42 * Math.cos(phase + 4.0)) * crest;
 
-            const r = Math.min(255, Math.round(11 + baseR * 138 + contour * 120));
-            const g = Math.min(255, Math.round(5 + baseG * 102 + contour * 115));
-            const b = Math.min(255, Math.round(24 + baseB * 158 + contour * 110));
+            const r = Math.min(255, Math.round(10 + baseR * 136 + sheenSmooth * 46));
+            const g = Math.min(255, Math.round(6 + baseG * 108 + sheenSmooth * 38));
+            const b = Math.min(255, Math.round(22 + baseB * 158 + sheenSmooth * 54));
             data[idx++] = r;
             data[idx++] = g;
             data[idx++] = b;
@@ -475,8 +530,8 @@
           const hue = (t * 28 + b.hueOff) % 360;
           const hue2 = (hue + 95) % 360;
           const g = ctx.createRadialGradient(bx, by, rad * 0.05, bx, by, rad);
-          g.addColorStop(0, `hsla(${hue}, 100%, 66%, 0.24)`);
-          g.addColorStop(0.55, `hsla(${hue2}, 96%, 54%, 0.11)`);
+          g.addColorStop(0, `hsla(${hue}, 100%, 66%, 0.26)`);
+          g.addColorStop(0.55, `hsla(${hue2}, 96%, 54%, 0.12)`);
           g.addColorStop(1, 'rgba(0,0,0,0)');
           ctx.fillStyle = g;
           ctx.beginPath();
@@ -485,24 +540,24 @@
         }
         ctx.restore();
 
-        // Counter-rotating sacred-geometry lotus mandala & kaleidoscope ribbons
+        // Crisp breathing Flower-of-Life sacred geometry mandala
         ctx.save();
-        ctx.translate(width * 0.56, height * 0.49);
+        ctx.translate(width * 0.56, height * 0.48);
         ctx.globalCompositeOperation = 'screen';
-        const maxR = Math.hypot(width, height) * 0.44;
+        const maxR = Math.hypot(width, height) * 0.40;
         for (let layer = 0; layer < 2; layer++) {
           ctx.save();
-          ctx.rotate(t * (layer === 0 ? 0.09 : -0.065));
+          ctx.rotate(t * (layer === 0 ? 0.07 : -0.05));
           const petals = layer === 0 ? 8 : 12;
-          for (let ring = 0; ring < 4; ring++) {
-            const hue = (t * 42 + ring * 68 + layer * 130) % 360;
-            const r = maxR * (0.16 + ring * 0.17 + 0.028 * Math.sin(t * 0.9 + ring + layer));
-            ctx.strokeStyle = `hsla(${hue}, 98%, 68%, ${layer === 0 ? '0.16' : '0.11'})`;
-            ctx.lineWidth = layer === 0 ? 1.8 : 1.25;
+          for (let ring = 0; ring < 3; ring++) {
+            const hue = (t * 36 + ring * 78 + layer * 130) % 360;
+            const r = maxR * (0.20 + ring * 0.20 + 0.024 * Math.sin(t * 0.8 + ring + layer));
+            ctx.strokeStyle = `hsla(${hue}, 98%, 70%, ${layer === 0 ? '0.18' : '0.12'})`;
+            ctx.lineWidth = layer === 0 ? 1.6 : 1.1;
             ctx.beginPath();
             for (let s = 0; s <= 120; s++) {
               const a = (s / 120) * Math.PI * 2;
-              const mod = 1 + 0.16 * Math.sin(a * petals + t * 1.15 + ring) + 0.05 * Math.cos(a * (petals * 2) - t * 1.7);
+              const mod = 1 + 0.14 * Math.sin(a * petals + t * 0.9 + ring) + 0.04 * Math.cos(a * (petals * 2) - t * 1.4);
               const px = Math.cos(a) * r * mod;
               const py = Math.sin(a) * r * mod;
               if (s === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
@@ -513,22 +568,37 @@
           ctx.restore();
         }
         ctx.restore();
+
+        // Soft velvet center vignette so workspace text stays razor-crisp
+        const vig = ctx.createRadialGradient(width * 0.54, height * 0.50, Math.min(width, height) * 0.12, width * 0.54, height * 0.50, Math.max(width, height) * 0.65);
+        vig.addColorStop(0, 'rgba(9, 4, 20, 0.42)');
+        vig.addColorStop(0.55, 'rgba(9, 4, 20, 0.12)');
+        vig.addColorStop(1, 'rgba(6, 2, 14, 0.34)');
+        ctx.fillStyle = vig;
+        ctx.fillRect(0, 0, width, height);
       }
     };
   }
 
-  /* ── 3. Ultra Hacker Engine: Matrix katakana/hex rain ── */
+  /* ── 3. Ultra Hacker Engine: 2-depth parallax Matrix katakana/hex rain + CRT vignette ── */
   function createHackerEngine() {
     const glyphs = 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン0123456789ABCDEFG0DM0D3$#><';
     const fontSize = 15;
+    const farSize = 10;
     let cols = 0;
     let drops = [];
     let speeds = [];
+    let farCols = 0;
+    let farDrops = [];
+    let farSpeeds = [];
 
     function setup() {
       cols = Math.max(12, Math.ceil(width / fontSize));
       drops = Array.from({ length: cols }, () => Math.random() * (height / fontSize));
-      speeds = Array.from({ length: cols }, () => 7 + Math.random() * 14);
+      speeds = Array.from({ length: cols }, () => 7.5 + Math.random() * 14);
+      farCols = Math.max(18, Math.ceil(width / (farSize * 1.4)));
+      farDrops = Array.from({ length: farCols }, () => Math.random() * (height / farSize));
+      farSpeeds = Array.from({ length: farCols }, () => 3.5 + Math.random() * 5.5);
       ctx.fillStyle = '#020904';
       ctx.fillRect(0, 0, width, height);
     }
@@ -539,6 +609,26 @@
       step(dt) {
         ctx.fillStyle = 'rgba(2, 9, 4, 0.14)';
         ctx.fillRect(0, 0, width, height);
+
+        // Distant micro-glyph parallax layer
+        ctx.font = `500 ${farSize}px SFMono-Regular, Menlo, Consolas, monospace`;
+        for (let i = 0; i < farCols; i++) {
+          const prevRow = Math.floor(farDrops[i]);
+          farDrops[i] += farSpeeds[i] * dt;
+          const curRow = Math.floor(farDrops[i]);
+          if (curRow !== prevRow || dt > 0.2) {
+            const x = i * farSize * 1.4;
+            const y = curRow * farSize;
+            const ch = glyphs[Math.floor(Math.random() * glyphs.length)];
+            ctx.fillStyle = 'rgba(0, 175, 92, 0.34)';
+            ctx.fillText(ch, x, y);
+          }
+          if (farDrops[i] * farSize > height + 20 && Math.random() > 0.96) {
+            farDrops[i] = -Math.random() * 10;
+          }
+        }
+
+        // Crisp foreground phosphor streams
         ctx.font = `600 ${fontSize}px SFMono-Regular, Menlo, Consolas, monospace`;
         for (let i = 0; i < cols; i++) {
           const prevRow = Math.floor(drops[i]);
@@ -562,6 +652,14 @@
             drops[i] = -Math.random() * 8;
           }
         }
+
+        // Subtle CRT radial focus vignette keeping center UI crystal-clear
+        const vig = ctx.createRadialGradient(width * 0.54, height * 0.48, Math.min(width, height) * 0.14, width * 0.54, height * 0.48, Math.max(width, height) * 0.72);
+        vig.addColorStop(0, 'rgba(2, 10, 5, 0.08)');
+        vig.addColorStop(0.65, 'rgba(2, 9, 4, 0.02)');
+        vig.addColorStop(1, 'rgba(1, 5, 2, 0.22)');
+        ctx.fillStyle = vig;
+        ctx.fillRect(0, 0, width, height);
       }
     };
   }
@@ -599,31 +697,48 @@
           ctx.fill();
         }
 
-        // Sliced Outrun sun
-        const sunX = width * 0.56;
-        const sunR = Math.min(width, height) * 0.16;
-        const sunY = horizon - sunR * 0.35;
+        // Atmospheric Outrun sun corona (positioned high enough to crown clearly above the composer!)
+        const sunX = width * 0.60;
+        const sunR = Math.min(width, height) * 0.17;
+        const sunY = horizon - sunR * 1.18;
+        const sunHalo = ctx.createRadialGradient(sunX, sunY, sunR * 0.35, sunX, sunY, sunR * 2.5);
+        sunHalo.addColorStop(0, 'rgba(251, 113, 133, 0.38)');
+        sunHalo.addColorStop(0.5, 'rgba(192, 38, 211, 0.16)');
+        sunHalo.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        ctx.fillStyle = sunHalo;
+        ctx.fillRect(0, 0, width, horizon);
+
         ctx.save();
         ctx.beginPath();
         ctx.arc(sunX, sunY, sunR, 0, Math.PI * 2);
         ctx.clip();
         const sunGrad = ctx.createLinearGradient(sunX, sunY - sunR, sunX, sunY + sunR);
-        sunGrad.addColorStop(0, '#fde047');
-        sunGrad.addColorStop(0.45, '#fb7185');
+        sunGrad.addColorStop(0, '#fef08a');
+        sunGrad.addColorStop(0.42, '#fb7185');
         sunGrad.addColorStop(1, '#c026d3');
         ctx.fillStyle = sunGrad;
         ctx.fillRect(sunX - sunR, sunY - sunR, sunR * 2, sunR * 2);
         ctx.fillStyle = '#24093d';
         for (let i = 0; i < 6; i++) {
-          const cutY = sunY + sunR * (0.08 + i * 0.15) + ((t * 10) % 12) * 0.4;
-          ctx.fillRect(sunX - sunR, cutY, sunR * 2, 2 + i * 1.4);
+          const cutY = sunY + sunR * (0.04 + i * 0.15) + ((t * 10) % 12) * 0.35;
+          ctx.fillRect(sunX - sunR, cutY, sunR * 2, 1.8 + i * 1.35);
         }
         ctx.restore();
 
-        // Neon mountain range silhouette
-        ctx.fillStyle = '#120526';
-        ctx.strokeStyle = 'rgba(244, 63, 142, 0.72)';
-        ctx.lineWidth = 1.5;
+        // Far violet ridge + foreground neon wireframe mountain range
+        ctx.fillStyle = 'rgba(30, 8, 56, 0.72)';
+        ctx.beginPath();
+        ctx.moveTo(0, horizon);
+        const farPeaks = [0.06, 0.22, 0.36, 0.50, 0.68, 0.82, 0.94, 1.0];
+        const farH = [0.14, 0.08, 0.18, 0.09, 0.16, 0.20, 0.10, 0.05];
+        for (let i = 0; i < farPeaks.length; i++) ctx.lineTo(width * farPeaks[i], horizon - height * farH[i]);
+        ctx.lineTo(width, horizon);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.fillStyle = '#100422';
+        ctx.strokeStyle = 'rgba(244, 63, 142, 0.82)';
+        ctx.lineWidth = 1.6;
         ctx.beginPath();
         ctx.moveTo(0, horizon);
         const peaks = [0.08, 0.18, 0.29, 0.42, 0.56, 0.71, 0.84, 0.94, 1.0];
@@ -635,6 +750,18 @@
         ctx.closePath();
         ctx.fill();
         ctx.stroke();
+
+        // Cyan ridge wireframe facets on foreground peaks
+        ctx.strokeStyle = 'rgba(34, 211, 238, 0.32)';
+        ctx.lineWidth = 1;
+        for (let i = 0; i < peaks.length; i += 2) {
+          const px = width * peaks[i];
+          const py = horizon - height * heights[i];
+          ctx.beginPath();
+          ctx.moveTo(px, py);
+          ctx.lineTo(px + width * 0.035, horizon);
+          ctx.stroke();
+        }
 
         // Ground plane + 3D perspective laser grid
         const ground = ctx.createLinearGradient(0, horizon, 0, height);
@@ -703,7 +830,7 @@
     init();
 
     return {
-      resize() {},
+      resize() { init(); },
       step(dt, t) {
         const bg = ctx.createLinearGradient(0, 0, 0, height);
         bg.addColorStop(0, '#0d0706');
@@ -712,14 +839,84 @@
         ctx.fillStyle = bg;
         ctx.fillRect(0, 0, width, height);
 
-        // Pulsing magma caldera glow along bottom
-        const pulse = 0.24 + 0.08 * Math.sin(t * 1.8);
-        const caldera = ctx.createRadialGradient(width * 0.52, height * 1.05, 30, width * 0.52, height * 1.05, Math.max(width, height) * 0.65);
-        caldera.addColorStop(0, `rgba(255, 106, 43, ${pulse.toFixed(2)})`);
-        caldera.addColorStop(0.45, 'rgba(185, 48, 16, 0.14)');
+        // Pulsing magma caldera glow + backlit Plinian eruption plume
+        const pulse = 0.28 + 0.10 * Math.sin(t * 1.8);
+        const vx = width * 0.76;
+        const craterY = height * 0.62;
+        const caldera = ctx.createRadialGradient(vx, craterY, 16, vx, craterY, Math.max(width, height) * 0.56);
+        caldera.addColorStop(0, `rgba(255, 178, 66, ${(pulse + 0.12).toFixed(2)})`);
+        caldera.addColorStop(0.32, `rgba(255, 92, 36, ${pulse.toFixed(2)})`);
+        caldera.addColorStop(0.65, 'rgba(153, 27, 27, 0.14)');
         caldera.addColorStop(1, 'rgba(0, 0, 0, 0)');
         ctx.fillStyle = caldera;
         ctx.fillRect(0, 0, width, height);
+
+        // Rising backlit Plinian pine-tree ash crown above Vesuvius crater
+        ctx.save();
+        const plumeSway = Math.sin(t * 0.5) * 14;
+        const plumeGrad = ctx.createLinearGradient(vx, craterY - height * 0.46, vx, craterY + 12);
+        plumeGrad.addColorStop(0, 'rgba(42, 22, 26, 0.26)');
+        plumeGrad.addColorStop(0.55, 'rgba(124, 38, 36, 0.36)');
+        plumeGrad.addColorStop(1, 'rgba(255, 146, 56, 0.48)');
+        ctx.fillStyle = plumeGrad;
+        ctx.beginPath();
+        ctx.moveTo(vx - 34, craterY + 6);
+        ctx.bezierCurveTo(vx - 46, craterY - 88, vx - 150 + plumeSway, craterY - 135, vx - 120 + plumeSway, craterY - 210);
+        ctx.bezierCurveTo(vx - 70 + plumeSway, craterY - 280, vx + 80 + plumeSway, craterY - 280, vx + 135 + plumeSway, craterY - 205);
+        ctx.bezierCurveTo(vx + 165 + plumeSway, craterY - 132, vx + 48, craterY - 85, vx + 34, craterY + 6);
+        ctx.closePath();
+        ctx.fill();
+
+        // Occasional crackling volcanic lightning inside the ash plume
+        if (Math.sin(t * 2.7) > 0.91) {
+          ctx.strokeStyle = 'rgba(255, 244, 196, 0.82)';
+          ctx.lineWidth = 1.6;
+          ctx.beginPath();
+          ctx.moveTo(vx - 18 + plumeSway * 0.5, craterY - 195);
+          ctx.lineTo(vx - 34 + plumeSway * 0.4, craterY - 142);
+          ctx.lineTo(vx - 16 + plumeSway * 0.3, craterY - 135);
+          ctx.lineTo(vx - 38 + plumeSway * 0.2, craterY - 86);
+          ctx.stroke();
+        }
+        ctx.restore();
+
+        // Faceted dark basalt Mount Vesuvius silhouette + molten lava fissures
+        ctx.save();
+        ctx.fillStyle = '#120807';
+        ctx.beginPath();
+        ctx.moveTo(vx - width * 0.44, height);
+        ctx.lineTo(vx - 44, craterY);
+        ctx.lineTo(vx + 44, craterY);
+        ctx.lineTo(vx + width * 0.34, height);
+        ctx.closePath();
+        ctx.fill();
+
+        // Rim-lit caldera glow lip
+        ctx.strokeStyle = 'rgba(255, 168, 66, 0.85)';
+        ctx.lineWidth = 2.6;
+        ctx.beginPath();
+        ctx.moveTo(vx - 42, craterY + 1);
+        ctx.quadraticCurveTo(vx, craterY + 10, vx + 42, craterY + 1);
+        ctx.stroke();
+
+        // Glowing lava rivers snaking down the volcano flanks
+        const lavaGrad = ctx.createLinearGradient(vx, craterY, vx, height);
+        lavaGrad.addColorStop(0, 'rgba(255, 236, 153, 0.92)');
+        lavaGrad.addColorStop(0.4, 'rgba(255, 114, 42, 0.72)');
+        lavaGrad.addColorStop(1, 'rgba(185, 28, 28, 0.12)');
+        ctx.strokeStyle = lavaGrad;
+        ctx.lineWidth = 2.4;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(vx - 6, craterY + 4);
+        ctx.bezierCurveTo(vx - 24, craterY + 75, vx - 12, craterY + 145, vx - 68, height - 10);
+        ctx.stroke();
+        ctx.lineWidth = 1.7;
+        ctx.beginPath();
+        ctx.moveTo(vx + 10, craterY + 5);
+        ctx.bezierCurveTo(vx + 32, craterY + 82, vx + 22, craterY + 150, vx + 78, height - 12);
+        ctx.stroke();
+        ctx.restore();
 
         // Ash flakes
         ctx.fillStyle = 'rgba(200, 172, 154, 0.16)';
@@ -1154,7 +1351,7 @@
     if (!engine) return;
 
     // Always paint an immediate initial frame (even under prefers-reduced-motion or user pause!)
-    engine.step(0.05, 1.2);
+    engine.step(0.25, 1.2);
     document.documentElement.dataset.themeMotion = (reducedMotion.matches || motionPaused) ? 'paused' : 'live';
     if (reducedMotion.matches || motionPaused) return;
 
@@ -1325,6 +1522,7 @@
     matchByQuery(q) {
       const s = String(q || '').trim().toLowerCase();
       if (!s) return null;
+      if (['vesuvius', 'vesuvian', 'plinian', 'lava', 'magma', 'volcano'].includes(s)) return byId.get('volcano');
       if (['roman', 'greek', 'greco', 'greco-roman', 'marble', 'classical', 'rome', 'athens', 'spqr'].includes(s)) return byId.get('ancient');
       if (['astral', 'cosmos', 'cosmic', 'space', 'stars', 'galaxy', 'nebula', 'observatory', 'astrolabe'].includes(s)) return byId.get('celestial');
       return THEMES.find(t => t.id === s || t.short.toLowerCase() === s || t.name.toLowerCase().includes(s)) || null;

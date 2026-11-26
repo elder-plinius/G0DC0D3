@@ -71,7 +71,7 @@ const APP_MODE_STARTERS = Object.freeze({
   ],
 });
 let qolPrefs = (() => {
-  const defaults = { sendKey: 'enter', autoOpenPreview: true, expandThinking: false, pauseBackdrop: false };
+  const defaults = { sendKey: 'enter', autoOpenPreview: true, expandThinking: false, pauseBackdrop: false, completionChime: true };
   try {
     const raw = JSON.parse(localStorage.getItem('g0dc0d3.qol.v1') || '{}');
     if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
@@ -80,6 +80,7 @@ let qolPrefs = (() => {
         autoOpenPreview: raw.autoOpenPreview !== false,
         expandThinking: raw.expandThinking === true,
         pauseBackdrop: raw.pauseBackdrop === true,
+        completionChime: raw.completionChime !== false,
       };
     }
   } catch {}
@@ -92,11 +93,36 @@ function updateQolPrefs(patch = {}) {
     ...(patch.autoOpenPreview !== undefined ? { autoOpenPreview: Boolean(patch.autoOpenPreview) } : {}),
     ...(patch.expandThinking !== undefined ? { expandThinking: Boolean(patch.expandThinking) } : {}),
     ...(patch.pauseBackdrop !== undefined ? { pauseBackdrop: Boolean(patch.pauseBackdrop) } : {}),
+    ...(patch.completionChime !== undefined ? { completionChime: Boolean(patch.completionChime) } : {}),
   };
   try { localStorage.setItem('g0dc0d3.qol.v1', JSON.stringify(qolPrefs)); } catch {}
   syncComposerShortcutHints();
   window.G0DThemes?.setMotionPaused?.(qolPrefs.pauseBackdrop);
   return qolPrefs;
+}
+function playCompletionChime(kind = 'done', { force = false } = {}) {
+  if (!force && qolPrefs.completionChime === false) return;
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    const ctx = new AC();
+    const now = ctx.currentTime;
+    const notes = kind === 'approval' ? [523.25, 659.25] : [587.33, 880];
+    notes.forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, now + i * 0.11);
+      gain.gain.setValueAtTime(0.0001, now + i * 0.11);
+      gain.gain.exponentialRampToValueAtTime(0.06, now + i * 0.11 + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + i * 0.11 + 0.28);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now + i * 0.11);
+      osc.stop(now + i * 0.11 + 0.3);
+    });
+    setTimeout(() => { try { ctx.close(); } catch {} }, 650);
+  } catch {}
 }
 function syncComposerShortcutHints() {
   const input = $('#composer-input');
@@ -125,6 +151,7 @@ window.G0DQol = {
   update: updateQolPrefs,
   resetLayout: resetPanelLayout,
   clearRecentModels,
+  playChime: playCompletionChime,
 };
 
 let appMode = (() => {
@@ -450,7 +477,7 @@ function syncAdaptiveCompactUI() {
   const shell = $('#composer-shell');
   if (shell) {
     const w = shell.getBoundingClientRect().width;
-    const widthThreshold = appMode === 'godcode' ? 660 : 540;
+    const widthThreshold = appMode === 'godcode' ? 620 : 520;
     const manuallySquished = manualComposerHeight !== null && manualComposerHeight <= 72;
     const isCompact = (w > 0 && w < widthThreshold) || manuallySquished;
     const wasCompact = shell.classList.contains('composer-compact');
@@ -569,7 +596,7 @@ function renderComposer() {
   setText('#composer-project-label', task?.codeWorkspace ? task.codeWorkspace.repository : label || (task?.workspaceKind === 'conversation' ? 'Attach repository' : 'Add project'));
   const preferred = providerById(newConversationProviders()[0]);
   const race = task ? task.answerRace : RecoveryUI.preferences().answerRace;
-  setText('#composer-model-label', race ? '2 Venice writers' : task ? providerById(task.providerId)?.label || task.providerId || 'Model' : preferred?.label || 'Connect model');
+  setText('#composer-model-label', race ? `${race.models?.length || 2} arena writers` : task ? providerById(task.providerId)?.label || task.providerId || 'Model' : preferred?.label || 'Connect model');
   $('#composer-project').title = task?.workspaceKind === 'conversation' ? (task.codeWorkspace ? 'Open GodCode in this chat' : 'Attach a repository to this chat') : task ? 'Project locations and working copy' : 'Start a new task in a project copy';
   setVisible('#composer-permissions', true);
   const permRulesNow = task && Array.isArray(task.permissionRules)
@@ -580,7 +607,7 @@ function renderComposer() {
   const cmdSuffix = task ? (task.execution?.enabled ? (task.execution.network ? ' · Cmd+Net' : ' · Cmd') : '') : '';
   setText('#composer-permissions-label', `${shortPermLabel}${cmdSuffix}`);
   $('#composer-permissions').title = `Permission Gate: ${shortPermLabel} (Shift+Tab to cycle, click to configure)`;
-  $('#composer-model').title = race ? 'View the Venice writers and judge' : task ? 'Change model for this chat' : 'Choose or connect a model';
+  $('#composer-model').title = race ? 'View the Arena writers and judge' : task ? 'Change model for this chat' : 'Choose or connect a model';
   setVisible('#composer-connect', !task && Boolean(composerErrors.get(key)) && !preferred);
   renderRecoveryControl(task, loading || !online);
   renderPlanModeControl(task, loading || !online);
@@ -636,13 +663,14 @@ function renderRecoveryControl(task, loading = false) {
   $('#main-content').classList.toggle('ultra-active', ultraOn);
   setVisible('#composer-race', !task || task.workspaceKind === 'conversation');
   $('#composer-race').classList.toggle('race-enabled', ultraOn);
+  const arenaN = racing?.models?.length || state.router?.arenaSize || ultraRouterData?.settings?.arenaSize || 3;
   $('#composer-race').textContent = routerMode === 'auto_route' && !racing
-    ? 'ULTRA-PLINIAN · AUTO ⌄'
+    ? 'Ultra-Plinian · Auto ⌄'
     : routerMode === 'auto_arena' && !racing
-      ? 'ULTRA-PLINIAN · ARENA ⌄'
+      ? `Ultra-Plinian · Arena ${arenaN}× ⌄`
       : racing
-        ? 'ULTRA-PLINIAN · CUSTOM ⌄'
-        : 'ULTRA-PLINIAN ⌄';
+        ? `Ultra-Plinian · Custom ${arenaN}× ⌄`
+        : 'Ultra-Plinian ⌄';
   $('#composer-race').title = routerMode === 'auto_route' && !racing
     ? 'Ultra-Plinian Auto-Route · Click to switch mode'
     : ultraOn
@@ -1328,7 +1356,7 @@ function renderTaskMetaStrip(task) {
   if (!strip) return;
   if (!task) { setVisible('#task-meta-strip', false); strip.innerHTML = ''; return; }
   const provider = providerById(task.providerId);
-  const modelLabel = task.answerRace ? `${task.answerRace.models.length} Venice writers` : provider?.label || task.providerId || 'No model';
+  const modelLabel = task.answerRace ? `${task.answerRace.models.length} Arena writers` : provider?.label || task.providerId || 'No model';
   const tier = String(provider?.tier || 'standard').toLowerCase();
   const calls = Number(task.calls ?? 0);
   const maxCalls = Number(task.policy?.maxCalls ?? 0);
@@ -1655,6 +1683,59 @@ async function executeSlashCommand(raw) {
     openCreate();
     return { handled: true };
   }
+  if (cmd === '/forge') {
+    const promptText = arg.trim();
+    if (!promptText) {
+      toast('Usage: /forge <your prompt> — synthesizes a task-specific Megaprompt into the composer.');
+      return { handled: true };
+    }
+    toast('✦ Forging task-specific Megaprompt…');
+    try {
+      const forged = await api('/api/metacognition/forge', {
+        method: 'POST',
+        body: JSON.stringify({
+          objective: promptText,
+          providerId: task?.providerId || newConversationProviders()[0] || null,
+          effort: task?.effort || draftEffort || 'medium',
+          workspaceKind: task?.workspaceKind || (appMode === 'godcode' ? 'project' : 'conversation'),
+        }),
+      });
+      const input = $('#composer-input');
+      if (input && forged?.compiledBrief) {
+        input.value = `${promptText}\n\n${forged.compiledBrief}`;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.focus();
+      }
+      toast(`✦ Forged ${forged?.domainLabel || 'task'} Megaprompt (${forged?.tier === 'forged' ? `${forged.durationMs}ms` : '0ms smart'}) — review & press Enter.`);
+    } catch (error) {
+      toast(error.message || 'Could not forge Megaprompt.');
+    }
+    return { handled: true };
+  }
+  if (cmd === '/browser') {
+    clearInput();
+    const sub = (arg || '').trim().toLowerCase();
+    if (sub === 'window' || sub === 'visible' || sub === 'popout') {
+      window.G0DBrowserLive?.open();
+      window.G0DBrowserLive?.setWindowMode(true, { persist: false });
+    } else if (sub === 'headless' || sub === 'mirror') {
+      window.G0DBrowserLive?.open();
+      window.G0DBrowserLive?.setWindowMode(false, { persist: false });
+    } else if (sub === 'close' || sub === 'stop') {
+      window.G0DBrowserLive?.stopSession();
+    } else {
+      window.G0DBrowserLive?.toggle();
+    }
+    return { handled: true };
+  }
+  if (cmd === '/conclave' || cmd === '/swarm') {
+    clearInput();
+    if (arg && /^(demo|preview)$/i.test(arg.trim())) window.G0DConclave?.open({ demo: true });
+    else if (arg && /^(cards|timeline|stage|roster)$/i.test(arg.trim())) window.G0DConclave?.open({ lens: arg.trim().toLowerCase() });
+    else if (arg && /^(builder|forge)$/i.test(arg.trim())) { window.G0DConclave?.open({ lens: 'roster' }); window.G0DConclave?.openBuilder(null); }
+    else window.G0DConclave?.toggle();
+    return { handled: true };
+  }
   if (cmd === '/benchmark') {
     clearInput();
     openBenchmark();
@@ -1819,7 +1900,7 @@ async function submitMessage(event) {
     if (!arg) { window.G0DThemes?.togglePopover(true); return; }
     const hit = window.G0DThemes?.matchByQuery(arg);
     if (hit) window.G0DThemes.apply(hit.id, { persist: true, notify: true });
-    else toast(`Unknown theme "${arg}". Try: obsidian, minimal, light, dragons, psychedelic, hacker, synthwave, volcano, ancient, celestial.`);
+    else toast(`Unknown theme "${arg}". Try: obsidian, minimal, alabaster, dragons, psychedelic, hacker, synthwave, vesuvian, ancient, celestial.`);
     return;
   }
   if (['/settings','/models','/prompts','/help'].includes(message)) {
@@ -1928,7 +2009,7 @@ async function loadVeniceCatalog(force = false) {
   renderComposer();
 }
 function renderVeniceCatalog() {
-  const task = settingsTaskId ? selectedData?.task : null;
+  const task = typeof settingsTask === 'function' ? settingsTask() : (settingsTaskId ? selectedData?.task : null);
   renderRaceOptions(task);
   const saved = task ? taskProviders(task) : newConversationProviders();
   const primary = task?.providerId || saved[0];
@@ -2032,10 +2113,14 @@ function renderApiToggles() {
   const section = $('#api-toggles-section');
   if (!section) return;
   const profiles = Array.isArray(state.connectedApiProviders) ? state.connectedApiProviders : [];
-  section.hidden = profiles.length === 0;
-  if (!profiles.length) return;
-  const activeCount = profiles.filter(p => p.enabled !== false).length;
-  const rows = profiles.map(p => {
+  const liveCli = liveProviders().filter(p => ['codex', 'claude', 'gemini-cli', 'copilot-cli'].includes(p.kind));
+  const liveLocal = liveProviders().filter(p => p.tier === 'local' || String(p.id || '').startsWith('local:'));
+  section.hidden = profiles.length === 0 && liveCli.length === 0 && liveLocal.length === 0;
+  if (section.hidden) return;
+  const activeApiCount = profiles.filter(p => p.enabled !== false).length;
+  const totalCount = profiles.length + liveCli.length + (liveLocal.length ? 1 : 0);
+  const activeCount = activeApiCount + liveCli.length + (liveLocal.length ? 1 : 0);
+  const apiRows = profiles.map(p => {
     const enabled = p.enabled !== false;
     const busy = apiToggleBusy === p.provider;
     const count = Number(p.modelCount ?? p.models?.length ?? 0);
@@ -2058,11 +2143,25 @@ function renderApiToggles() {
         <span>${busy ? 'Saving…' : enabled ? 'Active' : 'Disabled'}</span>
       </button>
     </div>`;
-  }).join('');
+  });
+  const cliRows = liveCli.map(p => `<div class="api-toggle-row">
+    <div class="api-toggle-info">
+      <span class="api-toggle-title"><span class="svc-dot svc-connected" aria-hidden="true"></span>${escapeHTML(p.label || p.id)}</span>
+      <span class="api-toggle-meta">CLI subscription · active</span>
+    </div>
+    <button type="button" class="button button-quiet svc-action-btn" data-disconnect-cli-quick="${escapeHTML(p.id)}" ${connectionBusy ? 'disabled' : ''}>Disconnect</button>
+  </div>`);
+  const localRows = liveLocal.length ? [`<div class="api-toggle-row">
+    <div class="api-toggle-info">
+      <span class="api-toggle-title"><span class="svc-dot svc-connected" aria-hidden="true"></span>Local Models</span>
+      <span class="api-toggle-meta">${liveLocal.length} on-device ${liveLocal.length === 1 ? 'model' : 'models'} (${escapeHTML(liveLocal.map(p => p.model || p.label).slice(0, 2).join(', '))})</span>
+    </div>
+    <span class="svc-status-pill svc-connected">Local</span>
+  </div>`] : [];
   section.innerHTML = `<div class="settings-card-head">
-    <h4>Active API Providers</h4>
-    <p>${activeCount} of ${profiles.length} connected API${profiles.length === 1 ? '' : 's'} enabled. Turn any API off to hide its models from the picker &amp; routing without deleting your saved key.</p>
-  </div><div class="api-toggles-list">${rows}</div>`;
+    <h4>Active Providers &amp; APIs</h4>
+    <p>${activeCount} of ${totalCount} connected provider${totalCount === 1 ? '' : 's'} active. Toggle any API off to hide its models from the picker &amp; routing without deleting your saved key.</p>
+  </div><div class="api-toggles-list">${[...apiRows, ...cliRows, ...localRows].join('')}</div>`;
 }
 
 async function toggleApiProvider(provider, enabled) {
@@ -2206,18 +2305,20 @@ function updateHeaderServicesBadge() {
   const label = $('#header-services-label');
   if (!dot || !label) return;
   const summary = servicesData?.summary;
+  const liveCount = liveProviders().length;
   if (!summary) {
-    const liveCount = (state.providers || []).filter(p => p.kind !== 'scripted' && p.available).length;
-    label.textContent = liveCount ? `Services · ${liveCount}` : 'Services';
-    dot.className = `svc-dot ${liveCount ? 'svc-connected' : 'svc-muted'}`;
+    label.textContent = liveCount ? `AI · ${liveCount}` : 'Connect AI';
+    dot.className = `svc-dot ${liveCount ? 'svc-connected' : 'svc-signin'}`;
+    $('#header-services-btn')?.setAttribute('title', liveCount ? `${liveCount} active AI model${liveCount === 1 ? '' : 's'} connected` : 'Connect an AI API key, CLI login, or local model');
     return;
   }
-  const count = summary.connectedTotal || 0;
-  const parts = [`${count} connected`];
+  const aiCount = Number(summary.connectedAiCount || 0);
+  const parts = [`${aiCount} AI provider${aiCount === 1 ? '' : 's'} active`];
+  if (summary.connectedDevtools) parts.push(`${summary.connectedDevtools} dev tool${summary.connectedDevtools === 1 ? '' : 's'}`);
   if (summary.githubAuthenticated && summary.githubAccount) parts.push(`gh @${summary.githubAccount}`);
-  label.textContent = `Services · ${count}`;
-  $('#header-services-btn')?.setAttribute('title', `Connected coding & AI services (${parts.join(' · ')})`);
-  dot.className = `svc-dot ${count > 0 ? 'svc-connected' : 'svc-muted'}`;
+  label.textContent = aiCount > 0 ? `AI · ${aiCount}` : 'Connect AI';
+  $('#header-services-btn')?.setAttribute('title', `Connected AI & dev services (${parts.join(' · ')})`);
+  dot.className = `svc-dot ${aiCount > 0 ? 'svc-connected' : 'svc-signin'}`;
 }
 
 async function loadServices(force = false) {
@@ -2574,8 +2675,8 @@ function renderUltraRouterSection() {
   const modeCards = [
     ['off', 'Off', 'Use your manually selected model & waterfall.'],
     ['auto_route', 'Auto-Route (Best Model)', 'Picks the highest-scoring endpoint per task domain & routes away from refusals.'],
-    ['auto_arena', 'Auto-Arena (Top-2 + Judge)', 'Races the top 2 domain contenders & trains your personal Elo from the judge.'],
-    ['manual_arena', 'Manual Arena', 'Use custom fixed Venice writers below.']
+    ['auto_arena', 'Auto-Arena (2–4 Models + Judge)', 'Races your top 2–4 distinct model families & trains your personal Elo from the blind judge.'],
+    ['manual_arena', 'Manual Arena', 'Race any 2–4 connected models & judge below.']
   ];
   const domainTabs = domains.map(d => `<button type="button" class="ultra-domain-tab ${d.id === activeDom ? 'active' : ''}" data-router-domain="${escapeHTML(d.id)}" title="${escapeHTML(d.description)}">${escapeHTML(d.shortLabel)}</button>`).join('');
   const boardHtml = activeRows.length
@@ -2585,6 +2686,12 @@ function renderUltraRouterSection() {
       }).join('')}</ol>`
     : '<p class="field-help">Connect a provider or Venice catalog to populate live domain leaderboards.</p>';
   const customJson = JSON.stringify(settings.customBenchmarks || {}, null, 2);
+  const metacogMode = settings.metacognition || 'smart';
+  const metacogModes = [
+    ['off', 'Off', 'Send your raw prompt without metacognitive scaffolding.'],
+    ['smart', 'Smart Framing (0ms)', 'Instant domain × model-family framing, 100% cache-safe (Recommended).'],
+    ['auto_forge', 'Auto-Forge (LLM)', 'Smart framing + live LLM Megaprompt & Arena Judge rubric on complex Turn-1 tasks.']
+  ];
   container.innerHTML = `
     <div class="ultra-router-head">
       <div>
@@ -2595,6 +2702,15 @@ function renderUltraRouterSection() {
     </div>
     <div class="ultra-router-modes" role="radiogroup" aria-label="Ultra-Plinian router mode">
       ${modeCards.map(([id, title, desc]) => `<button type="button" class="ultra-mode-btn ${settings.mode === id ? 'active' : ''}" data-router-mode="${id}" ${ultraRouterBusy ? 'disabled' : ''}><strong>${title}</strong><span>${desc}</span></button>`).join('')}
+    </div>
+    <div class="ultra-metacog-block">
+      <div class="ultra-metacog-head">
+        <strong>✦ Task Metacognition &amp; Megaprompting</strong>
+        <span class="field-help">Calibrates task protocols &amp; Arena judge rubrics to the routed model family (or run <code>/forge &lt;prompt&gt;</code> anytime).</span>
+      </div>
+      <div class="ultra-metacog-modes" role="radiogroup" aria-label="Task metacognition mode">
+        ${metacogModes.map(([id, title, desc]) => `<button type="button" class="ultra-metacog-btn ${metacogMode === id ? 'active' : ''}" data-router-metacog="${id}" ${ultraRouterBusy ? 'disabled' : ''}><strong>${title}</strong><span>${desc}</span></button>`).join('')}
+      </div>
     </div>
     <div class="ultra-router-weights">
       <label class="ultra-weight-field"><span>Capability weight · <strong>${Math.round(w.quality * 100)}%</strong></span><input type="range" min="10" max="90" step="5" value="${Math.round(w.quality * 100)}" data-router-weight="quality"></label>
@@ -3262,12 +3378,12 @@ function conversationWork(events, openDetails) {
 function renderTimeline(events, total, task) {
   const panel = $('#panel-timeline');
   const openDetails = new Set($$('details[open][data-disclosure]', panel).map((element) => element.dataset.disclosure));
-  const expandedCodeBlocks = new Set();
+  const codeBlockStates = new Map();
   panel.querySelectorAll('.message[data-message]').forEach(msgEl => {
     const mKey = msgEl.dataset.message;
     msgEl.querySelectorAll('.message-code-block').forEach((blk, idx) => {
-      if (!blk.classList.contains('is-collapsed') && blk.querySelector('[data-collapse-code]')) {
-        expandedCodeBlocks.add(`${mKey}::${idx}`);
+      if (blk.querySelector('[data-collapse-code]')) {
+        codeBlockStates.set(`${mKey}::${idx}`, blk.classList.contains('is-collapsed'));
       }
     });
   });
@@ -3335,7 +3451,9 @@ function renderTimeline(events, total, task) {
       const rKey = `router-${event.id ?? event.seq}`;
       const riskPct = Math.round((rd.refusalRisk || 0) * 100);
       const runners = Array.isArray(rd.runnerUps) ? rd.runnerUps : [];
-      messages.push(`<details class="router-receipt" data-disclosure="${escapeHTML(rKey)}" ${openDetails.has(rKey) ? 'open' : ''}><summary><span class="router-receipt-badge">✦ Ultra-Plinian · ${escapeHTML(rd.domainLabel || rd.domain || 'auto')}</span><span class="router-receipt-summary">${escapeHTML(sel.label || rd.selectedId)}</span><span>Bench ${escapeHTML(sel.benchmarkPrior)} · Elo ${escapeHTML(sel.userElo)} · Comp ${escapeHTML(sel.compliance)}%${riskPct >= 40 ? ` · Risk ${riskPct}%` : ''}</span></summary><div class="router-receipt-body">${[sel, ...runners].map((r, idx) => `<div class="router-receipt-row"><strong>#${idx + 1} ${escapeHTML(r.label || r.id)}</strong><span>Score ${escapeHTML(r.totalScore)} · Bench ${escapeHTML(r.benchmarkPrior)} · Elo ${escapeHTML(r.userElo)} · Comp ${escapeHTML(r.compliance)}%</span></div>`).join('')}</div></details>`);
+      const mc = rd.metacognition;
+      const mcHtml = mc ? `<div class="router-receipt-metacog"><div class="router-receipt-metacog-head"><strong>${escapeHTML(mc.title || '✦ Metacognition Brief')}</strong><span>${escapeHTML(`${mc.tier === 'forged' ? 'LLM Forged' : '0ms Smart'} · ${mc.modelFamily || 'auto'}`)}</span></div>${mc.intentLock ? `<p class="router-receipt-metacog-intent">${escapeHTML(mc.intentLock)}</p>` : ''}${Array.isArray(mc.rubric) && mc.rubric.length ? `<ul class="router-receipt-metacog-rubric">${mc.rubric.slice(0, 4).map(r => `<li>${escapeHTML(r)}</li>`).join('')}</ul>` : ''}</div>` : '';
+      messages.push(`<details class="router-receipt" data-disclosure="${escapeHTML(rKey)}" ${openDetails.has(rKey) ? 'open' : ''}><summary><span class="router-receipt-badge">✦ Ultra-Plinian · ${escapeHTML(rd.domainLabel || rd.domain || 'auto')}${mc ? ` · ${mc.tier === 'forged' ? 'Forged' : 'Framed'}` : ''}</span><span class="router-receipt-summary">${escapeHTML(sel.label || rd.selectedId)}</span><span>Bench ${escapeHTML(sel.benchmarkPrior)} · Elo ${escapeHTML(sel.userElo)} · Comp ${escapeHTML(sel.compliance)}%${riskPct >= 40 ? ` · Risk ${riskPct}%` : ''}</span></summary><div class="router-receipt-body">${[sel, ...runners].map((r, idx) => `<div class="router-receipt-row"><strong>#${idx + 1} ${escapeHTML(r.label || r.id)}</strong><span>Score ${escapeHTML(r.totalScore)} · Bench ${escapeHTML(r.benchmarkPrior)} · Elo ${escapeHTML(r.userElo)} · Comp ${escapeHTML(r.compliance)}%</span></div>`).join('')}${mcHtml}</div></details>`);
     } else if (event.type === 'subagent.completed' && event.data?.ok && event.data?.summary) {
       flush();
       const sa = event.data;
@@ -3361,7 +3479,7 @@ function renderTimeline(events, total, task) {
     const recent = [...events].reverse().find(e => ['model.request', 'tool.started', 'evaluation.started', 'routing.auto_continued'].includes(e.type));
     const activeProvLabel = providerById(task.providerId)?.label || task.providerId || '';
     const phase = task.answerRace
-      ? (events.findLast(e => e.type === 'race.dispatched')?.data.stage === 'grade' ? 'Grading parallel drafts' : 'Drafting with 2 Venice writers')
+      ? (events.findLast(e => e.type === 'race.dispatched')?.data.stage === 'grade' ? 'Grading parallel drafts' : `Drafting with ${task.answerRace.models?.length || 2} Arena writers`)
       : recent?.type === 'routing.auto_continued'
         ? 'Continuing output'
         : task.status === 'verifying'
@@ -3406,14 +3524,18 @@ function renderTimeline(events, total, task) {
     messages.push(`<div class="report-refusal-bar">${showKeepRolling ? `<button type="button" class="button button-primary report-refusal-btn" data-continue-output="${escapeHTML(task.id)}" title="Continue seamlessly from where the output stopped">Keep rolling →</button>` : ''}${replyProv ? `<button type="button" class="button button-quiet report-refusal-btn" data-model-pref="pin" data-pref-id="${escapeHTML(replyProv)}" title="Pin ${escapeHTML(replyLabel)} higher in your waterfall">★ Prefer</button><button type="button" class="button button-quiet report-refusal-btn" data-model-pref="demote" data-pref-id="${escapeHTML(replyProv)}" title="Demote ${escapeHTML(replyLabel)} lower in your waterfall">⊘ Demote</button>` : ''}<button type="button" class="button button-quiet report-refusal-btn" data-report-refusal="${escapeHTML(task.id)}" title="Flag the last reply as a missed refusal to trigger G0DM0D3 retry/switch and train local refusal detection">↻ Missed refusal? Retry / Switch</button></div>`);
   }
   panel.innerHTML = `<div class="conversation">${messages.join('')}</div>`;
-  if (expandedCodeBlocks.size) {
+  if (codeBlockStates.size) {
     panel.querySelectorAll('.message[data-message]').forEach(msgEl => {
       const mKey = msgEl.dataset.message;
       msgEl.querySelectorAll('.message-code-block').forEach((blk, idx) => {
-        if (expandedCodeBlocks.has(`${mKey}::${idx}`)) {
-          blk.classList.remove('is-collapsed');
-          const btn = blk.querySelector('[data-collapse-code]');
-          if (btn) { btn.setAttribute('aria-expanded', 'true'); btn.textContent = 'Collapse'; }
+        const key = `${mKey}::${idx}`;
+        if (!codeBlockStates.has(key)) return;
+        const shouldCollapse = codeBlockStates.get(key);
+        blk.classList.toggle('is-collapsed', shouldCollapse);
+        const btn = blk.querySelector('[data-collapse-code]');
+        if (btn) {
+          btn.setAttribute('aria-expanded', String(!shouldCollapse));
+          btn.textContent = shouldCollapse ? 'Expand' : 'Collapse';
         }
       });
     });
@@ -4442,6 +4564,8 @@ async function openLivePreview({ taskId, entry, html, files, title, artifactKey,
     if (requestedTaskId && selectedId !== requestedTaskId) return;
 
     window.closeChatCode?.();
+    if (window.G0DBrowserLive?.isOpen?.()) window.G0DBrowserLive.close();
+    if (window.G0DConclave?.isOpen?.()) window.G0DConclave.close();
     if (typeof setInspector === 'function') setInspector(false);
     if (artifactDockState.onMessage) window.removeEventListener('message', artifactDockState.onMessage);
     if (artifactDockState.onKey) window.removeEventListener('keydown', artifactDockState.onKey);
@@ -4816,6 +4940,8 @@ function openAgentBrowserDock(view) {
   if (!dock || !view) return;
   artifactOpenSeq += 1;
   window.closeChatCode?.();
+  if (window.G0DBrowserLive?.isOpen?.()) window.G0DBrowserLive.close();
+  if (window.G0DConclave?.isOpen?.()) window.G0DConclave.close();
   setInspector(false);
   initArtifactSplitter();
   if (artifactDockState.onMessage) window.removeEventListener('message', artifactDockState.onMessage);
@@ -4895,6 +5021,8 @@ function syncArtifactDockForTask(data, taskChanged) {
   if (browserView) {
     lastDetectedArtifact = browserView;
     renderTaskMetaStrip(task);
+    // When G0DBrowserLive is loaded, avoid opening the legacy static screenshot dock on top of Live Browser Mirror!
+    if (window.G0DBrowserLive) return;
     if (artifactDockState.open && artifactDockState.key === browserView.artifactKey) return;
     if (artifactDismissedKeys.has(browserView.artifactKey)) return;
     openAgentBrowserDock(browserView);
@@ -5066,6 +5194,11 @@ function renderCommands() {
     ] : [
       { kind: 'action', title: 'Toggle Plan Mode', detail: draftPlanMode ? 'Start next chat in Build Mode' : 'Start next chat in read-only Plan Mode', keywords: 'plan build /plan /build', run: () => togglePlanMode(null) },
     ]),
+    { kind: 'action', title: 'Forge Task Megaprompt (/forge)', detail: 'Synthesize a model-calibrated Megaprompt & acceptance rubric in the composer', keywords: 'forge megaprompt metaprompt metacognition ultra /forge', run: () => { const c = $('#composer-input'); if (c) { c.value = c.value.trim() ? `/forge ${c.value.trim()}` : '/forge '; c.focus(); } } },
+    { kind: 'action', title: 'Forge Conclave Agent (Stats Builder)', detail: 'Build a custom specialist with live benchmark radar stats from any API or CLI harness', keywords: 'conclave agent builder stats radar roster codex claude hermes grok antigravity', run: () => { window.G0DConclave?.open({ lens: 'roster' }); window.G0DConclave?.openBuilder(null); } },
+    { kind: 'action', title: 'Open Live Browser Mirror (/browser)', detail: 'Watch your agent navigate, click, and test apps live or pop out a real Chromium window', keywords: 'browser live watch screencast window headless non-headless chrome /browser', run: () => window.G0DBrowserLive?.open() },
+    { kind: 'action', title: 'Toggle Visible Browser Window', detail: 'Switch the contained agent browser between headless mirror and a real visible Chromium window', keywords: 'browser window visible non-headless popout chrome watch', run: () => { window.G0DBrowserLive?.open(); window.G0DBrowserLive?.toggleWindowMode(); } },
+    { kind: 'action', title: 'Open The Conclave (Multi-Agent Stage)', detail: 'Visualize parallel subagents, Diff Races, and Arena councils (/conclave)', keywords: 'conclave swarm multi agent subagent crew arena council stage /conclave /swarm', run: () => window.G0DConclave?.open() },
     { kind: 'action', title: 'Open Models & Subscriptions', detail: 'CLI logins, API keys, and local models', keywords: 'claude codex gemini copilot ollama key provider /model', run: () => openSettings('models') },
     ...(window.G0DThemes ? window.G0DThemes.list().map(t => ({
       kind: 'action',
@@ -5207,6 +5340,10 @@ function renderSelected(data, force = false) {
   if (!task || task.id !== selectedId) return;
   const previous = selectedData?.task;
   if (previous?.id === task.id && (Number(task.version) < Number(previous.version) || (Number(task.version) === Number(previous.version) && Number(task.eventSeq) < Number(previous.eventSeq)))) return;
+  if (previous?.id === task.id) {
+    if (ACTIVE.has(previous.status) && task.status === 'completed') playCompletionChime('done');
+    else if (!previous.pendingApproval && task.pendingApproval) playCompletionChime('approval');
+  }
   selectedData = data;
   if (isCodingWorkspaceTask(task) && appMode !== 'godcode') {
     applyAppMode('godcode', { persist: false, notify: false, switchView: false });
@@ -5222,6 +5359,8 @@ function renderSelected(data, force = false) {
   setVisible('#welcome-links', false);
   setVisible('#task-workspace', true);
   manageStream(task);
+  window.G0DConclave?.syncTask(task);
+  window.G0DBrowserLive?.syncTask(task);
   const signature = JSON.stringify(data);
   if (!force && signature === detailSignature) return;
   const oldTaskId = $('#selected-id').dataset.fullId;
@@ -5368,7 +5507,7 @@ function updateLiveStreamSlot() {
 }
 
 function manageStream(task) {
-  const shouldStream = task && ACTIVE.has(task.status);
+  const shouldStream = task && (ACTIVE.has(task.status) || window.G0DBrowserLive?.isOpen?.());
   if (shouldStream && streamTaskId !== task.id) {
     disconnectStream();
     streamTaskId = task.id;
@@ -5424,7 +5563,13 @@ function manageStream(task) {
               setTimeout(refresh, 350);
             }
           } else if (delta.type === 'permission.requested' || delta.type === 'todos.updated') {
+            window.G0DConclave?.ingestStreamEvent(delta);
             setTimeout(refresh, 150);
+          } else if (delta.type === 'browser.frame' || delta.type === 'browser.activity' || delta.type === 'browser.status' || delta.type === 'browser.closed') {
+            window.G0DBrowserLive?.ingestStreamEvent(delta);
+          } else if (delta.type === 'subagent.started' || delta.type === 'subagent.progress' || delta.type === 'subagent.completed' || delta.type === 'conclave.update' || delta.type === 'conclave.steered' || delta.type === 'race.dispatched' || delta.type === 'race.result' || delta.type === 'race.completed') {
+            window.G0DConclave?.ingestStreamEvent(delta);
+            if (delta.type === 'subagent.completed' || delta.type === 'race.completed') setTimeout(refresh, 250);
           }
         } catch {}
       };
@@ -5446,6 +5591,7 @@ function disconnectStream() {
   const slot = $('#stream-slot');
   if (slot) slot.innerHTML = '';
 }
+window.syncActiveTaskStream = () => manageStream(selectedData?.task || null);
 
 function renderEmpty() {
   setVisible('#initial-loading', false);
@@ -6224,6 +6370,8 @@ $('#crew-review-dialog').addEventListener('close', () => { crewReview = null; ($
 
 $('#command-open')?.addEventListener('click', openCommands);
 $('#header-command-open')?.addEventListener('click', openCommands);
+$('#conclave-toggle-btn')?.addEventListener('click', () => window.G0DConclave?.toggle());
+$('#browser-toggle-btn')?.addEventListener('click', () => window.G0DBrowserLive?.toggle());
 $('#command-palette-dialog')?.addEventListener('close', () => { if (commandReturnFocus?.isConnected && !commandReturnFocus.closest('[inert]')) commandReturnFocus.focus({ preventScroll: true }); });
 $('#palette-input')?.addEventListener('input', () => { commandIndex = 0; renderCommands(); });
 $('#palette-input')?.addEventListener('keydown', event => {
@@ -6568,8 +6716,8 @@ $('#plan-keep-refining')?.addEventListener('click',()=>{
   $('#composer-input')?.focus();
 });
 $('#composer-ultra').addEventListener('click',()=>toggleUltra(selectedData?.task || null));
-$('#composer-recovery-settings').addEventListener('click',()=>openSettings('general'));
-$('#inspector-recovery-settings').addEventListener('click',()=>openSettings('general'));
+$('#composer-recovery-settings').addEventListener('click',()=>openSettings('recovery'));
+$('#inspector-recovery-settings').addEventListener('click',()=>openSettings('recovery'));
 $('#composer-model').addEventListener('click', openModels);
 $('#composer-options-toggle')?.addEventListener('click', (event) => {
   event.stopPropagation();
@@ -6627,56 +6775,81 @@ async function applyUltraCustomArena(answerRace, targetTask = undefined) {
   if (typeof renderRaceOptions === 'function') renderRaceOptions(task);
 }
 
+function availableArenaModels() {
+  const seen = new Set();
+  const out = [];
+  for (const m of (veniceCatalog?.models || [])) {
+    if (!m?.id || seen.has(m.id)) continue;
+    seen.add(m.id);
+    out.push(m);
+  }
+  for (const p of liveProviders()) {
+    if (!p?.id || seen.has(p.id) || p.kind !== 'http') continue;
+    seen.add(p.id);
+    out.push(p);
+  }
+  return out;
+}
+
 function renderUltraPopover() {
   const pop = $('#ultra-popover');
   if (!pop || pop.classList.contains('hidden')) return;
   const task = selectedData?.task?.workspaceKind === 'conversation' ? selectedData.task : null;
   const mode = activeUltraMode(task);
   const racing = task ? task.answerRace : RecoveryUI.preferences().answerRace;
+  const routerCfg = ultraRouterData?.settings || state.router || {};
+  const arenaSize = [2, 3, 4].includes(Number(routerCfg.arenaSize)) ? Number(routerCfg.arenaSize) : 3;
+  const metaMode = routerCfg.metacognition || 'smart';
+  const arenaModels = availableArenaModels();
+  const totalLiveModels = new Set([...liveProviders().map(p => p.id), ...(veniceCatalog?.models || []).map(m => m.id)]).size;
+  const hasMultipleModels = totalLiveModels >= 2 || arenaModels.length >= 2;
+  const arenaActive = mode === 'auto_arena' || mode === 'manual_arena';
+
   const modes = [
-    ['off', 'Off', 'Direct model & waterfall'],
-    ['auto_route', 'Auto-Route', 'Best model per domain'],
-    ['auto_arena', 'Auto-Arena', 'Top-2 race + blind judge'],
-    ['manual_arena', 'Custom Arena', 'Pick 2 Venice writers + judge'],
+    ['off', 'Off', 'Direct model & fallback waterfall', false],
+    ['auto_route', 'Auto-Route', hasMultipleModels ? 'Best model per prompt + local Elo' : 'Single model active (add 2+ to route)', false],
+    ['auto_arena', 'Arena Race', hasMultipleModels ? `Race ${arenaSize} models blindly + judge` : 'Needs 2+ connected models', !hasMultipleModels],
   ];
-  const models = veniceCatalog?.models || [];
-  let customHtml = '';
-  if (mode === 'manual_arena') {
-    if (!veniceCatalog?.connected || !models.length) {
-      customHtml = `<div class="ultra-pop-custom"><p class="ultra-pop-note">Connect a Venice API key in Settings → Models to pick custom arena writers.</p><button type="button" class="button button-secondary" data-ultra-open-settings="models">Connect Venice →</button></div>`;
-    } else {
-      const preferred = task?.providerId || newConversationProviders()[0];
-      const defFirst = models.some(m => m.id === preferred) ? preferred : RecoveryUI.recommendedBackup(models, null);
-      const defSecond = RecoveryUI.recommendedBackup(models, defFirst);
-      const defJudge = models.find(m => m.id === 'venice-catalog:z-ai-glm-5-3-flash')?.id || defSecond || defFirst;
-      const curFirst = racing?.models?.[0] || defFirst || '';
-      const curSecond = racing?.models?.[1] || defSecond || '';
-      const curJudge = racing?.judge || defJudge || '';
-      const optsFor = selected => models.map(m => {
-        const label = m.label === m.model ? m.model : `${m.label} · ${m.model}`;
-        return `<option value="${escapeHTML(m.id)}"${m.id === selected ? ' selected' : ''}>${escapeHTML(label)}</option>`;
-      }).join('');
-      const sameWarn = curFirst && curFirst === curSecond ? '<p class="ultra-pop-error">Choose two different writers.</p>' : '';
-      customHtml = `<div class="ultra-pop-custom">
-        <label class="ultra-pop-field"><span>Writer A</span><select id="ultra-pop-first" data-ultra-custom-select>${optsFor(curFirst)}</select></label>
-        <label class="ultra-pop-field"><span>Writer B</span><select id="ultra-pop-second" data-ultra-custom-select>${optsFor(curSecond)}</select></label>
-        <label class="ultra-pop-field"><span>Judge</span><select id="ultra-pop-judge" data-ultra-custom-select>${optsFor(curJudge)}</select></label>
-        ${sameWarn}
-      </div>`;
-    }
-  }
-  const statusTag = mode === 'off' ? 'Off' : mode === 'auto_route' ? 'Auto-Route active' : mode === 'auto_arena' ? 'Auto-Arena active' : 'Custom Arena active';
+
+  const sizeSection = hasMultipleModels ? `
+    <div class="ultra-pop-seg-row" aria-label="Arena contender count">
+      <span class="ultra-pop-seg-label">Contenders</span>
+      <div class="ultra-pop-seg-pills">
+        ${[2, 3, 4].map(n => `<button type="button" class="ultra-pop-pill${mode === 'auto_arena' && arenaSize === n ? ' active' : ''}" data-ultra-arena-size="${n}" ${ultraRouterBusy || (n > Math.max(2, totalLiveModels)) ? 'disabled' : ''}>${n}×</button>`).join('')}
+      </div>
+    </div>` : '';
+
+  const customLineupBanner = mode === 'manual_arena' && racing?.models?.length ? `
+    <div class="ultra-pop-custom-pill">
+      <span>Custom lineup · <strong>${racing.models.length} writers</strong> + Judge</span>
+      <button type="button" class="button button-quiet" data-ultra-open-settings="arena">Edit</button>
+    </div>` : '';
+
+  const metaSection = `
+    <div class="ultra-pop-seg-row" aria-label="Metacognition mode">
+      <span class="ultra-pop-seg-label">Metacognition</span>
+      <div class="ultra-pop-seg-pills">
+        ${[['off', 'Off'], ['smart', 'Smart'], ['auto_forge', 'Auto-Forge']].map(([id, lbl]) => `<button type="button" class="ultra-pop-pill${metaMode === id ? ' active' : ''}" data-ultra-meta-mode="${id}" ${ultraRouterBusy ? 'disabled' : ''}>${lbl}</button>`).join('')}
+      </div>
+    </div>`;
+
+  const statusTag = mode === 'off' ? 'Off' : mode === 'auto_route' ? 'Auto-Route active' : mode === 'manual_arena' ? `Custom ${racing?.models?.length || 2}× Arena` : `Auto-Arena ${arenaSize}×`;
   pop.innerHTML = `
     <div class="ultra-popover-head">
-      <div><strong>ULTRA-PLINIAN</strong><small>${escapeHTML(statusTag)}</small></div>
+      <div><strong>Ultra-Plinian</strong><small>${escapeHTML(statusTag)}</small></div>
       <button type="button" class="icon-button" data-close-ultra-popover aria-label="Close Ultra-Plinian menu">×</button>
     </div>
     <div class="ultra-popover-modes" role="radiogroup" aria-label="Ultra-Plinian mode">
-      ${modes.map(([id, title, desc]) => `<button type="button" class="ultra-pop-card${mode === id ? ' active' : ''}" role="radio" aria-checked="${mode === id}" data-ultra-pop-mode="${id}" ${ultraRouterBusy ? 'disabled' : ''}><strong>${title}</strong><span>${desc}</span></button>`).join('')}
+      ${modes.map(([id, title, desc, unavailable]) => {
+        const isSelected = id === 'auto_arena' ? arenaActive : mode === id;
+        return `<button type="button" class="ultra-pop-card${isSelected ? ' active' : ''}" role="radio" aria-checked="${isSelected}" data-ultra-pop-mode="${id}" ${ultraRouterBusy || unavailable ? 'disabled' : ''}><strong>${title}</strong><span>${desc}</span></button>`;
+      }).join('')}
     </div>
-    ${customHtml}
+    ${sizeSection}
+    ${customLineupBanner}
+    ${metaSection}
     <div class="ultra-popover-foot">
-      <button type="button" class="button button-quiet ultra-pop-advanced" data-ultra-open-settings="router">Router weights &amp; Elo ↗</button>
+      <button type="button" class="button button-secondary ultra-pop-customize" data-ultra-open-settings="arena">⚙ Customize Arena &amp; Routing…</button>
       <span class="ultra-pop-status">${escapeHTML(task ? 'This chat' : 'Default')}</span>
     </div>`;
   positionUltraPopover();
@@ -6707,52 +6880,48 @@ $('#ultra-popover')?.addEventListener('click', async event => {
   const openSettingsBtn = event.target.closest('[data-ultra-open-settings]');
   if (openSettingsBtn) {
     closeUltraPopover();
-    await openSettings('models');
-    const target = openSettingsBtn.dataset.ultraOpenSettings === 'router' ? $('#ultra-router-section') : $('#api-key-setup');
+    await openSettings('models', { subtab: 'routing' });
+    const raceEl = $('#race-options');
+    const target = (openSettingsBtn.dataset.ultraOpenSettings === 'arena' && raceEl && !raceEl.hidden)
+      ? raceEl
+      : $('#ultra-router-section');
     target?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    return;
+  }
+  const sizeBtn = event.target.closest('[data-ultra-arena-size]');
+  if (sizeBtn) {
+    const n = Number(sizeBtn.dataset.ultraArenaSize);
+    if ([2, 3, 4].includes(n)) {
+      try {
+        await applyUltraCustomArena(null);
+        await updateUltraRouter({ mode: 'auto_arena', arenaSize: n }, `Ultra-Plinian Arena set to ${n} contenders.`);
+      } catch (err) {
+        toast(err.message || 'Could not update Arena size.');
+      }
+      renderUltraPopover();
+    }
+    return;
+  }
+  const metaBtn = event.target.closest('[data-ultra-meta-mode]');
+  if (metaBtn) {
+    const m = metaBtn.dataset.ultraMetaMode;
+    try {
+      await updateUltraRouter({ metacognition: m }, `Metacognition set to ${m === 'auto_forge' ? 'Auto-Forge' : m === 'smart' ? 'Smart' : 'Off'}.`);
+    } catch (err) {
+      toast(err.message || 'Could not update Metacognition.');
+    }
+    renderUltraPopover();
     return;
   }
   const modeBtn = event.target.closest('[data-ultra-pop-mode]');
   if (!modeBtn) return;
   const mode = modeBtn.dataset.ultraPopMode;
   try {
-    if (mode === 'manual_arena') {
-      if (!veniceCatalog?.models?.length) await loadVeniceCatalog();
-      const models = veniceCatalog?.models || [];
-      await updateUltraRouter({ mode: 'manual_arena' }, 'Ultra-Plinian Custom Arena selected.');
-      if (models.length >= 2) {
-        const task = selectedData?.task?.workspaceKind === 'conversation' ? selectedData.task : null;
-        const preferred = task?.providerId || newConversationProviders()[0];
-        const first = models.some(m => m.id === preferred) ? preferred : RecoveryUI.recommendedBackup(models, null);
-        const second = RecoveryUI.recommendedBackup(models, first) || models.find(m => m.id !== first)?.id;
-        const judge = models.find(m => m.id === 'venice-catalog:z-ai-glm-5-3-flash')?.id || second || first;
-        if (first && second && first !== second && judge) {
-          await applyUltraCustomArena({ models: [first, second], judge });
-        }
-      }
-    } else {
-      await applyUltraCustomArena(null);
-      const label = mode === 'off' ? 'Off' : mode === 'auto_route' ? 'Auto-Route' : 'Auto-Arena';
-      await updateUltraRouter({ mode }, `Ultra-Plinian set to ${label}.`);
-    }
+    await applyUltraCustomArena(null);
+    const label = mode === 'off' ? 'Off' : mode === 'auto_route' ? 'Auto-Route' : 'Arena Race';
+    await updateUltraRouter({ mode }, `Ultra-Plinian set to ${label}.`);
   } catch (err) {
     toast(err.message || 'Could not update Ultra-Plinian mode.');
-  }
-  renderUltraPopover();
-});
-
-$('#ultra-popover')?.addEventListener('change', async event => {
-  if (!event.target.matches('[data-ultra-custom-select]')) return;
-  const a = $('#ultra-pop-first')?.value;
-  const b = $('#ultra-pop-second')?.value;
-  const j = $('#ultra-pop-judge')?.value;
-  if (!a || !b || !j) { renderUltraPopover(); return; }
-  if (a === b) { toast('Choose two different writers.'); renderUltraPopover(); return; }
-  try {
-    await applyUltraCustomArena({ models: [a, b], judge: j });
-    toast('Updated Ultra-Plinian writers.');
-  } catch (err) {
-    toast(err.message || 'Could not update arena writers.');
   }
   renderUltraPopover();
 });
@@ -6865,6 +7034,11 @@ $('#api-toggles-section')?.addEventListener('click', event => {
   const toggleBtn = event.target.closest('[data-toggle-api-provider]');
   if (toggleBtn) {
     void toggleApiProvider(toggleBtn.dataset.toggleApiProvider, toggleBtn.dataset.toggleEnabled === 'true');
+    return;
+  }
+  const discCli = event.target.closest('[data-disconnect-cli-quick]');
+  if (discCli && typeof disconnectCli === 'function') {
+    void disconnectCli(discCli.dataset.disconnectCliQuick);
   }
 });
 $('#connected-services-hub')?.addEventListener('click', event => {
@@ -6977,6 +7151,12 @@ $('#ultra-router-section')?.addEventListener('click', event => {
     updateUltraRouter({ mode }, `Ultra-Plinian mode set to ${mode.replace(/_/g, ' ')}.`).then(() => {
       if (typeof renderRaceOptions === 'function') renderRaceOptions(settingsTask());
     });
+    return;
+  }
+  const metaBtn = event.target.closest('[data-router-metacog]');
+  if (metaBtn) {
+    const metacognition = metaBtn.dataset.routerMetacog;
+    updateUltraRouter({ metacognition }, `Task metacognition set to ${metacognition.replace(/_/g, ' ')}.`);
     return;
   }
   const domBtn = event.target.closest('[data-router-domain]');
@@ -7161,7 +7341,7 @@ $('#sidebar-backdrop').addEventListener('click', () => {
   else setSidebar(false);
 });
 document.addEventListener('keydown', (event) => {
-  const openModalDialog = event.target.closest('dialog[open]:not(#code-dock dialog)') || $$('dialog[open]:not(#code-dock dialog)').at(-1);
+  const openModalDialog = event.target?.closest?.('dialog[open]:not(#code-dock dialog)') || $$('dialog[open]:not(#code-dock dialog)').at(-1);
   if (openModalDialog && event.key === 'Escape' && !event.isComposing) {
     event.preventDefault();
     openModalDialog.close();
@@ -7394,8 +7574,12 @@ window.toast = toast;
     { cmd: '/help', hint: 'Show available slash commands & shortcuts' },
     { cmd: '/ultra', hint: 'Toggle Ultra-Plinian mode' },
     { cmd: '/fixtures', hint: 'Browse test fixtures' },
-    { cmd: '/theme', hint: 'Switch UI theme (/theme ancient | celestial | dragons | psychedelic | hacker | minimal | synthwave | volcano)' },
+    { cmd: '/theme', hint: 'Switch UI theme (/theme obsidian | minimal | alabaster | dragons | psychedelic | hacker | synthwave | vesuvian | ancient | celestial)' },
     { cmd: '/settings', hint: 'Open settings' },
+    { cmd: '/forge', hint: 'Forge a task-specific Megaprompt & rubric into the composer (/forge <prompt>)' },
+    { cmd: '/browser', hint: 'Open Live Browser mirror (/browser window | headless | close)' },
+    { cmd: '/conclave', hint: 'Open The Conclave live multi-agent council & arena stage' },
+    { cmd: '/swarm', hint: 'Open The Conclave multi-agent swarm visualizer' },
     { cmd: '/benchmark', hint: 'Run offline harness diagnostics' },
     { cmd: '/clear', hint: 'Start a new conversation' },
   ];
@@ -7729,7 +7913,7 @@ function renderModelPicker() {
   pickerModels = matched.slice(0, maxVisible);
   const lock = modelSelectionLock(task);
   setText('#model-picker-scope', task ? 'This chat' : 'New chats');
-  setText('#model-picker-count', pickerLoading ? 'Loading…' : `${totalMatches} models`);
+  setText('#model-picker-count', pickerLoading ? 'Loading…' : `${totalMatches} ${totalMatches === 1 ? 'model' : 'models'}`);
   const race = task ? task.answerRace : RecoveryUI.preferences().answerRace;
   setText('#model-picker-note', lock || (race ? 'Ultra-Plinian is on. This selects the model used when comparison is off.' : task ? 'Select a model for your next message.' : 'Select the default for new chats.'));
   const rowsHtml = pickerModels.map((p,i) => {

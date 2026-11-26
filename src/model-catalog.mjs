@@ -319,7 +319,7 @@ export const MODEL_CATALOG = Object.freeze([
     coding: 84, reasoning: 84, size: 'large', speed: 'fast', tokPerSec: 95,
     contextWindow: 65536, maxOutput: 16384,
     pricing: { inputPer1M: 0.5, outputPer1M: 2.0, cachedInputPer1M: null },
-    capabilities: { tools: true, reasoning: false, vision: false, openWeight: true },
+    capabilities: { tools: false, reasoning: false, vision: false, openWeight: true },
     tags: ['open-weight', 'fast', 'zdr-native']
   },
   {

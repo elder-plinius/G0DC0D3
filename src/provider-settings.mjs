@@ -28,7 +28,7 @@ const profiles = {
   },
   anthropic: { label: 'Anthropic', protocol: 'anthropic', endpoint: 'https://api.anthropic.com/v1', apiKeyEnv: 'ANTHROPIC_API_KEY', defaults: ['claude-sonnet-4-6', 'claude-opus-4-6'] },
   openai: { label: 'OpenAI', protocol: 'openai-responses', endpoint: 'https://api.openai.com/v1', apiKeyEnv: 'OPENAI_API_KEY', defaults: ['gpt-5.4', 'o3'] },
-  gemini: { label: 'Gemini API', protocol: 'openai-chat', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai', apiKeyEnv: 'GEMINI_API_KEY', defaults: ['gemini-2.5-pro', 'gemini-2.5-flash'] },
+  gemini: { label: 'Gemini API', protocol: 'openai-chat', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai', apiKeyEnv: 'GEMINI_API_KEY', defaults: ['gemini-4-neon', 'gemini-3-pro', 'gemini-2.5-pro', 'gemini-2.5-flash'] },
   nous: { label: 'Nous Portal', protocol: 'openai-chat', endpoint: 'https://inference-api.nousresearch.com/v1', apiKeyEnv: 'NOUS_API_KEY', defaults: ['Hermes-4-405B', 'Hermes-4-70B'] },
 };
 
@@ -149,7 +149,9 @@ export async function createProviderSettings(providers, keychain, { dataDir } = 
   function matchesProfile(item, provider) {
     const profile = profiles[provider];
     if (!profile || !item || item.closed) return false;
-    return item.baseUrl === profile.endpoint && item.protocol === (profile.protocol || 'openai-chat');
+    const expectedProto = profile.protocol || 'openai-chat';
+    if (item.protocol && item.protocol !== expectedProto) return false;
+    return item.baseUrl === profile.endpoint || String(item.id || '').startsWith(provider + ':');
   }
 
   function applyProfileEnabledState(provider) {

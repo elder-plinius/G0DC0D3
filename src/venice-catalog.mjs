@@ -29,8 +29,8 @@ export function createVeniceCatalog(providers, fetchCatalog = fetch, privacySett
         const supportsReasoning = Boolean(spec.capabilities?.supportsReasoning);
         const supportsFunctionCalling = Boolean(spec.capabilities?.supportsFunctionCalling);
         const modelMetadata = { constraints, fetchedAt:new Date().toISOString(),
-          ...(supportsReasoning ? { supportsReasoning: true } : {}),
-          ...(supportsFunctionCalling ? { supportsFunctionCalling: true } : {}),
+          supportsReasoning: Boolean(supportsReasoning),
+          supportsFunctionCalling: Boolean(supportsFunctionCalling),
           ...(Number.isInteger(spec.availableContextTokens) && spec.availableContextTokens > 0 ? { contextWindow: spec.availableContextTokens } : {}),
           ...(Number.isInteger(spec.maxCompletionTokens) && spec.maxCompletionTokens > 0 ? {maxCompletionTokens:spec.maxCompletionTokens} : {}) };
         next.set(id, { id, model: entry.id, label: String(spec.name || entry.id).slice(0, 200), limit, supportsReasoning, supportsFunctionCalling, modelMetadata });

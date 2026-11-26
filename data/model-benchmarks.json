@@ -136,7 +136,7 @@
     {
       "id": "gpt-5.3-codex",
       "family": "GPT-5 Codex",
-      "match": "(?:openai[-_.]?)?gpt[-_.]?5(?:[._-]?[23])?[-_.]?codex|\\bcodex[-_.]?1\\b",
+      "match": "(?:openai[-_.]?)?gpt[-_.]?5(?:[._-]?[23456])?[-_.]?codex|\\bcodex[-_.]?1\\b",
       "compliance": 66,
       "speed": 82,
       "costIndex": 68,

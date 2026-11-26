@@ -8,6 +8,8 @@ import { promises as fs, constants as fsConstants } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Store } from './store.mjs';
 import { Broker, snapshotWorkspace, sha256, taskTools, conversationWithoutChecks, bindVerification, stableJson, evaluateBounded, scopedPath, READ_ONLY_TOOLS } from './broker.mjs';
+import { BrowserPool, DEFAULT_BROWSER_SETTINGS, normalizeBrowserSettings, findChromiumBinary } from './browser-env.mjs';
+import { validateTool } from './tool-schema.mjs';
 import { diagnoseIncident, detectRefusal, rankCandidates, providerIdentity, candidateEligibility, requestProfile, providerTier } from './routing.mjs';
 import { learningContext, inferModelFamily, bestStrategyForFamily, extractDeclineSignature } from './learning.mjs';
 import {
@@ -31,10 +33,31 @@ import {
   DEFAULT_ROUTER_SETTINGS,
   normalizeRouterSettings,
   loadBenchmarkMatrix,
+  matchBenchmarkEntry,
   classifyPromptDomain,
   routeUltraPlinian,
   buildDomainLeaderboards
 } from './ultra-router.mjs';
+import {
+  buildDomainMetacognition,
+  detectModelFamily,
+  forgeTaskMegaprompt,
+  normalizeMetacognitionMode,
+  shouldAutoForge
+} from './metacognition.mjs';
+import {
+  AGENT_ARCHETYPES,
+  buildStarterRoster,
+  computeAgentStats,
+  computeXpLevel,
+  detectExternalHarnesses,
+  estimateWorkerTelemetry,
+  EXTERNAL_HARNESSES,
+  normalizeFormation,
+  normalizeRosterAgent,
+  slugifyAgent,
+  STARTER_FORMATIONS
+} from './conclave-roster.mjs';
 import { validateExecution, validateChecks } from './runner.mjs';
 import { SourceChanges } from './source-changes.mjs';
 import { CrewController } from './crew.mjs';
@@ -654,14 +677,22 @@ export class Runtime {
       return { status: 'unknown', snapshotHash: (await taskSnapshot(task.workspace)).snapshotHash, checks: [{ name: 'acceptance', status: 'unknown', detail: 'No independent evaluator configured.' }] };
     };
     this.memory = new MemoryStore(this.store);
-    this.broker = new Broker({ store: this.store, evaluator: this.evaluator, faultInjector, memory: this.memory });
+    this._streamSubs = new Map();
+    const browserPool = new BrowserPool({
+      getSettings: () => this.getBrowserSettings(),
+      onEvent: (evt) => {
+        if (evt?.taskId) this._emitStream(evt.taskId, evt);
+      }
+    });
+    this.broker = new Broker({ store: this.store, evaluator: this.evaluator, faultInjector, memory: this.memory, browser: browserPool });
     this.runs = new Map();
     this.closed = false;
     this.sourceChanges = new SourceChanges(this);
     for (const task of this.store.listTasks()) if (active.has(task.status)) this.store.updateTask(task.id, current => { current.status = 'paused'; current.epoch += 1; current.blocker = { code: 'RESTART_RECONCILIATION', message: 'Interrupted runtime. Resume will reconcile pending operations.' }; return current; }, 'task.restarted', { previousStatus: task.status });
     this.crew = new CrewController(this);
     this.outboundAudit = new OutboundAuditLog({ maxEntries: 100 });
-    this._streamSubs = new Map();
+    this.activeSubagents = new Map();
+    this._workerSteers = new Map();
   }
   subscribeStream(taskId, callback) {
     if (!this._streamSubs.has(taskId)) this._streamSubs.set(taskId, new Set());
@@ -671,6 +702,396 @@ export class Runtime {
   _emitStream(taskId, event) {
     const subs = this._streamSubs.get(taskId);
     if (subs) for (const cb of subs) try { cb(event); } catch {}
+  }
+  async queueWorkerSteer(taskId, workerId, message) {
+    const cleanWorkerId = typeof workerId === 'string' ? workerId.trim().slice(0, 128) : '';
+    if (!cleanWorkerId) throw fault('INVALID_MESSAGE', 'Worker identifier is required.');
+    const text = String(message || '').trim().slice(0, 2000);
+    if (!text) throw fault('INVALID_MESSAGE', 'Steer message cannot be empty.');
+    const task = this.getTask(taskId);
+    const activeMap = this.activeSubagents.get(taskId);
+    if (activeMap?.has(cleanWorkerId)) {
+      const key = `${taskId}:${cleanWorkerId}`;
+      const next = [...(this._workerSteers.get(key) || []), text].slice(-6);
+      this._workerSteers.set(key, next);
+      this._emitStream(taskId, { type: 'conclave.steered', workerId: cleanWorkerId, message: text, target: 'subagent' });
+      return { ok: true, target: 'subagent', workerId: cleanWorkerId, queued: next.length };
+    }
+    const crew = this.crew?.record(taskId);
+    if (crew && Object.values(crew.members || {}).includes(cleanWorkerId)) {
+      const roleEntry = Object.entries(crew.members || {}).find(([, wid]) => wid === cleanWorkerId);
+      const crewRole = roleEntry?.[0] || 'worker';
+      if (crewRole === 'verifier') {
+        throw fault('INVALID_STEER', 'Independent verifier checks cannot be steered mid-run.');
+      }
+      // Record crew steer out-of-band without mutating pendingMessages (which would invalidate contractVersion)
+      this.store.appendEvent(taskId, 'conclave.steered', { workerId: cleanWorkerId, role: crewRole, message: text, target: 'crew_worker' });
+      this._emitStream(taskId, { type: 'conclave.steered', workerId: cleanWorkerId, role: crewRole, message: text, target: 'crew_worker' });
+      return { ok: true, target: 'crew_worker', workerId: cleanWorkerId, queued: 1 };
+    }
+    if (active.has(task.status)) {
+      const res = await this.submitMessage(task.id, `[Conclave steer → ${cleanWorkerId}] ${text}`, undefined, 'steer');
+      this._emitStream(taskId, { type: 'conclave.steered', workerId: cleanWorkerId, message: text, target: 'orchestrator' });
+      return { ok: true, target: 'orchestrator', workerId: cleanWorkerId, queued: res.task?.pendingMessages?.length || 1 };
+    }
+    this.store.appendEvent(taskId, 'conclave.steered', { workerId: cleanWorkerId, message: text, target: 'note' });
+    this._emitStream(taskId, { type: 'conclave.steered', workerId: cleanWorkerId, message: text, target: 'note' });
+    return { ok: true, target: 'note', workerId: cleanWorkerId, queued: 1 };
+  }
+  drainWorkerSteer(taskId, workerId) {
+    const key = `${taskId}:${workerId}`;
+    const list = this._workerSteers.get(key);
+    if (!list?.length) return [];
+    this._workerSteers.delete(key);
+    return list;
+  }
+  async _executeAgentSpawn(id, epoch, call, signal) {
+    validateTool('agent.spawn', call.args || {});
+    const workerId = String(call.id || `sub-${Date.now().toString(36)}`);
+    const role = String(call.args?.role || 'explore').trim() || 'explore';
+    const promptPreview = String(call.args?.prompt || '').slice(0, 400);
+    const startedAt = new Date().toISOString();
+    let activeMap = this.activeSubagents.get(id);
+    if (!activeMap) { activeMap = new Map(); this.activeSubagents.set(id, activeMap); }
+    const initialState = {
+      workerId, callId: call.id, kind: 'subagent', role, prompt: promptPreview,
+      status: 'thinking', providerId: null, modelLabel: null, tool: '', target: '',
+      files: [], tools: [], streamTail: '', calls: 0, startedAt, durationMs: 0
+    };
+    activeMap.set(workerId, initialState);
+    this.store.appendEvent(id, 'subagent.started', { workerId, callId: call.id, role, prompt: promptPreview, startedAt });
+    this._emitStream(id, { type: 'subagent.started', worker: initialState });
+    let finished = false;
+    try {
+      const result = await runSpecialistSubagent({
+        runtime: this,
+        parentTask: this.getTask(id),
+        role,
+        prompt: call.args?.prompt || '',
+        modelHint: call.args?.model,
+        workerId,
+        signal,
+        onProgress: (prog) => {
+          if (finished) return;
+          const merged = { ...initialState, ...prog, kind: 'subagent', callId: call.id, prompt: promptPreview };
+          activeMap.set(workerId, merged);
+          this._emitStream(id, { type: 'subagent.progress', worker: merged });
+        }
+      });
+      const opId = `${id}:${call.id}`;
+      const nowIso = new Date().toISOString();
+      this.store.putOperation({
+        id: opId, taskId: id, callId: call.id, name: call.name, args: call.args,
+        argsHash: sha256(stableJson(call.args || {})), epoch,
+        status: result?.ok ? 'succeeded' : 'failed', result, createdAt: nowIso, updatedAt: nowIso
+      }, 'tool.completed', { operationId: opId, name: call.name, status: result?.ok ? 'succeeded' : 'failed', result });
+      this.store.appendEvent(id, 'subagent.completed', { workerId, callId: call.id, ...result });
+      this.recordConclaveAgentRun(result?.role || role, { ok: Boolean(result?.ok), durationMs: result?.durationMs || 0 });
+      this._emitStream(id, { type: 'subagent.completed', worker: { ...initialState, ...result, status: result?.ok ? 'completed' : 'failed' } });
+      return result;
+    } finally {
+      finished = true;
+      activeMap.delete(workerId);
+      if (activeMap.size === 0) this.activeSubagents.delete(id);
+      this._workerSteers.delete(`${id}:${workerId}`);
+    }
+  }
+  getConclaveState(taskId) {
+    const task = this.getTask(taskId);
+    const events = this.store.getRecentEvents(taskId, 300);
+    const workersById = new Map();
+    const failovers = [];
+    const raceEvents = [];
+    const providerLabel = (pid) => {
+      if (!pid) return null;
+      const p = this.providers.get(pid) || this.catalog?.get?.(pid);
+      return p?.label || p?.model || pid;
+    };
+
+    for (const ev of events) {
+      const d = ev.data || {};
+      if (ev.type === 'subagent.started') {
+        const wId = d.workerId || d.callId || `sa-${ev.seq}`;
+        workersById.set(wId, {
+          workerId: wId, callId: d.callId || wId, kind: 'subagent',
+          role: d.role || 'explore', prompt: d.prompt || '',
+          status: 'thinking', providerId: null, modelLabel: null,
+          tool: '', target: '', files: [], tools: [], streamTail: '',
+          summary: '', calls: 0, startedAt: d.startedAt || ev.time, endedAt: null, durationMs: 0
+        });
+      } else if (ev.type === 'subagent.completed') {
+        const wId = d.workerId || d.callId || `sa-${ev.seq}`;
+        const prev = workersById.get(wId) || { workerId: wId, kind: 'subagent', role: d.role || 'explore', startedAt: d.startedAt || ev.time };
+        workersById.set(wId, {
+          ...prev,
+          role: d.role || prev.role || 'explore',
+          status: d.ok ? 'completed' : 'failed',
+          providerId: d.providerId || prev.providerId,
+          modelLabel: d.modelLabel || providerLabel(d.providerId) || prev.modelLabel,
+          files: Array.isArray(d.files) ? d.files : (prev.files || []),
+          tools: Array.isArray(d.tools) ? d.tools : (prev.tools || []),
+          calls: d.calls || prev.calls || 1,
+          summary: d.summary || d.error?.message || '',
+          streamTail: String(d.summary || d.error?.message || '').slice(-360),
+          startedAt: d.startedAt || prev.startedAt,
+          endedAt: d.endedAt || ev.time,
+          durationMs: d.durationMs || 0
+        });
+      } else if (ev.type === 'model.switched' || ev.type === 'routing.reframe_retry') {
+        failovers.push({
+          type: ev.type, at: ev.time,
+          from: d.from || d.providerId || null,
+          to: d.to || d.providerId || null,
+          reason: d.reason || d.level || 'GODMODƎ recovery'
+        });
+      } else if (ev.type === 'race.dispatched' || ev.type === 'race.result' || (ev.type === 'model.response' && d.scorecard)) {
+        raceEvents.push(ev);
+      }
+    }
+
+    // Overlay live in-flight subagents
+    const liveSubs = this.activeSubagents.get(taskId);
+    if (liveSubs) {
+      for (const [wId, live] of liveSubs.entries()) {
+        workersById.set(wId, { ...live, modelLabel: live.modelLabel || providerLabel(live.providerId) });
+      }
+    }
+
+    // Merge Coding Crew workers if present
+    const crewSummary = this.crew?.summary(taskId) || null;
+    if (crewSummary?.workers?.length) {
+      for (const cw of crewSummary.workers) {
+        const wTask = cw.taskId ? this.store.getTask(cw.taskId) : null;
+        const wEvents = cw.taskId ? this.store.getRecentEvents(cw.taskId, 40) : [];
+        const filesSet = new Set();
+        let lastTool = '';
+        for (const we of wEvents) {
+          if (we.type === 'tool.started' || we.type === 'tool.completed') {
+            if (we.data?.name) lastTool = we.data.name;
+            if (we.data?.path) filesSet.add(we.data.path);
+            if (we.data?.result?.path) filesSet.add(we.data.result.path);
+          }
+        }
+        const statusMap = { running: 'streaming', verifying: 'tool', recovering: 'recovering', completed: 'completed', failed: 'failed', cancelled: 'failed', paused: 'paused', queued: 'thinking' };
+        const wId = cw.taskId || `crew-${cw.role}`;
+        workersById.set(wId, {
+          workerId: wId, kind: 'crew', role: cw.role,
+          prompt: `${cw.role} phase (${crewSummary.phase})`,
+          status: statusMap[cw.status] || (cw.status === 'pending' ? 'queued' : cw.status),
+          providerId: cw.providerId,
+          modelLabel: providerLabel(cw.providerId) || (cw.role === 'verifier' ? 'Independent Checks' : 'Pending'),
+          tool: lastTool, target: '', files: [...filesSet].slice(0, 12), tools: lastTool ? [lastTool] : [],
+          streamTail: cw.summary || '', summary: cw.summary || '',
+          calls: cw.calls || 0,
+          startedAt: wTask?.createdAt || null,
+          endedAt: wTask?.completedAt || null,
+          durationMs: wTask?.createdAt ? ((wTask.completedAt ? Date.parse(wTask.completedAt) : Date.now()) - Date.parse(wTask.createdAt)) : 0
+        });
+      }
+    }
+
+    // Build Arena Race telemetry if answerRace configured or race events occurred
+    let arena = null;
+    if (task.answerRace || raceEvents.length) {
+      const latestDispatch = [...raceEvents].reverse().find(e => e.type === 'race.dispatched' && e.data?.stage === 'draft');
+      const raceId = latestDispatch?.data?.raceId || null;
+      const relevantResults = raceEvents.filter(e => e.type === 'race.result' && (!raceId || e.data?.raceId === raceId));
+      const latestScorecard = [...raceEvents].reverse().find(e => e.type === 'model.response' && e.data?.scorecard && (!raceId || e.data.scorecard.raceId === raceId))?.data?.scorecard || null;
+      const contenderIds = latestDispatch?.data?.models || task.answerRace?.models || [];
+      const judgeId = latestScorecard?.judgeId || task.answerRace?.judge || null;
+      const contenders = contenderIds.map((pid, idx) => {
+        const resEv = relevantResults.find(e => e.data?.stage === 'draft' && e.data?.providerId === pid);
+        const grade = latestScorecard?.grades?.find(g => g.providerId === pid) || null;
+        return {
+          slot: ['A', 'B', 'C', 'D'][idx] || String(idx + 1),
+          providerId: pid,
+          label: providerLabel(pid) || pid,
+          status: resEv ? (resEv.data.status === 'done' ? 'completed' : resEv.data.status) : (active.has(task.status) ? 'streaming' : 'queued'),
+          durationMs: resEv?.data?.durationMs || grade?.durationMs || 0,
+          grade,
+          isWinner: Boolean(latestScorecard?.winnerId && latestScorecard.winnerId === pid)
+        };
+      });
+      const judgeResult = relevantResults.find(e => e.data?.stage === 'grade');
+      const judgeDispatched = raceEvents.some(e => e.type === 'race.dispatched' && e.data?.stage === 'grade' && (!raceId || e.data?.raceId === raceId));
+      arena = {
+        raceId,
+        status: latestScorecard ? 'completed' : judgeDispatched ? 'grading' : (latestDispatch && active.has(task.status) ? 'drafting' : 'ready'),
+        contenders,
+        judge: judgeId ? {
+          providerId: judgeId,
+          label: providerLabel(judgeId) || judgeId,
+          status: latestScorecard ? 'completed' : judgeResult ? judgeResult.data.status : (judgeDispatched ? 'grading' : 'waiting')
+        } : null,
+        winnerId: latestScorecard?.winnerId || null,
+        note: latestScorecard?.note || null
+      };
+    }
+
+    const workers = [...workersById.values()];
+    const matrix = loadBenchmarkMatrix(this.getRouterSettings().customBenchmarks || {});
+    let totalTokens = 0;
+    let totalCostUsd = 0;
+    for (const w of workers) {
+      const prov = w.providerId ? (this.providers.get(w.providerId) || this.catalog?.get?.(w.providerId) || { id: w.providerId, model: w.providerId }) : null;
+      const bench = prov ? matchBenchmarkEntry(prov, matrix) : null;
+      const tel = estimateWorkerTelemetry({
+        prompt: w.prompt || '',
+        summary: w.summary || w.streamTail || '',
+        calls: w.calls || 0,
+        providerId: w.providerId || '',
+        costIndex: bench?.costIndex ?? 70
+      });
+      w.approxTokens = tel.approxTokens;
+      w.estimatedCostUsd = tel.estimatedCostUsd;
+      w.isMvp = false;
+      totalTokens += tel.approxTokens;
+      totalCostUsd += tel.estimatedCostUsd;
+    }
+
+    const fileOwners = new Map();
+    for (const w of workers) {
+      for (const f of (w.files || [])) {
+        if (!fileOwners.has(f)) fileOwners.set(f, []);
+        fileOwners.get(f).push({ workerId: w.workerId, role: w.role });
+      }
+    }
+    const fileConflicts = [...fileOwners.entries()]
+      .filter(([, owners]) => owners.length > 1)
+      .map(([file, owners]) => ({ file, owners }));
+
+    // Surface Worktree Code Diff Race on the Conclave Stage if this task has a worktree build!
+    let worktreeRace = null;
+    try {
+      const wtApi = this.worktrees;
+      if (wtApi) {
+        const wtId = task.codeWorkspace?.id || wtApi.list?.().find(p => p.chatId === taskId)?.id || null;
+        if (wtId) {
+          const proj = wtApi.get?.(wtId);
+          if (proj?.candidates?.length) {
+            const building = Boolean(wtApi.jobs?.get?.(wtId)?.building);
+            const appliedId = proj.review?.applied || null;
+            const candidates = proj.candidates.map((c, idx) => {
+              let additions = 0;
+              let deletions = 0;
+              if (typeof c.patch === 'string' && c.patch) {
+                let inHunk = false;
+                for (const line of c.patch.split('\n')) {
+                  if (line.startsWith('@@ ')) { inHunk = true; continue; }
+                  if (line.startsWith('diff --git ') || line.startsWith('+++ ') || line.startsWith('--- ')) { inHunk = false; continue; }
+                  if (!inHunk) continue;
+                  if (line.startsWith('+')) additions += 1;
+                  else if (line.startsWith('-')) deletions += 1;
+                }
+              }
+              const status = appliedId === c.id ? 'applied' : c.patch ? 'ready' : c.error ? 'failed' : building ? 'building' : 'queued';
+              return {
+                slot: ['A', 'B', 'C', 'D'][idx] || String(idx + 1),
+                id: c.id,
+                providerId: c.providerId,
+                label: c.provider || providerLabel(c.providerId) || c.providerId,
+                status,
+                elapsedMs: c.elapsedMs || 0,
+                files: Array.isArray(c.paths) ? c.paths : [],
+                additions,
+                deletions,
+                error: c.error || null
+              };
+            });
+            worktreeRace = {
+              worktreeId: proj.id,
+              repository: proj.repository ? proj.repository.split('/').pop() : 'workspace',
+              branch: proj.branch || '',
+              objective: proj.review?.objective || '',
+              building,
+              appliedCandidateId: appliedId,
+              lastCheck: proj.lastCheck ? {
+                command: proj.lastCheck.command,
+                exitCode: proj.lastCheck.exitCode,
+                ok: proj.lastCheck.exitCode === 0 && !proj.lastCheck.timedOut && !proj.lastCheck.cancelled
+              } : null,
+              candidates
+            };
+          }
+        }
+      }
+    } catch {}
+
+    const mode = (arena && (arena.status === 'drafting' || arena.status === 'grading' || (workers.length === 0 && arena.status === 'completed')))
+      ? 'arena'
+      : crewSummary && ['preparing', 'running', 'verifying', 'ready', 'paused', 'applied'].includes(crewSummary.status)
+        ? 'crew'
+        : workers.length > 0
+          ? 'swarm'
+          : worktreeRace?.candidates?.length
+            ? 'diff_race'
+            : 'standby';
+
+    const arenaContenders = arena?.contenders || [];
+    const arenaActive = arenaContenders.filter(c => ['streaming', 'queued', 'drafting'].includes(c.status)).length + (arena?.judge?.status === 'grading' ? 1 : 0);
+    const arenaDone = arenaContenders.filter(c => c.status === 'completed').length + (arena?.judge?.status === 'completed' ? 1 : 0);
+    const diffActive = (worktreeRace?.candidates || []).filter(c => c.status === 'building' || c.status === 'queued').length;
+    const diffDone = (worktreeRace?.candidates || []).filter(c => c.status === 'ready' || c.status === 'applied').length;
+    const activeCount = mode === 'arena'
+      ? arenaActive
+      : mode === 'diff_race'
+        ? diffActive
+        : workers.filter(w => ['thinking', 'streaming', 'tool', 'recovering'].includes(w.status)).length;
+    const completedCount = mode === 'arena'
+      ? arenaDone
+      : mode === 'diff_race'
+        ? diffDone
+        : workers.filter(w => w.status === 'completed').length;
+    const failedCount = mode === 'arena'
+      ? arenaContenders.filter(c => ['failed', 'declined'].includes(c.status)).length
+      : mode === 'diff_race'
+        ? (worktreeRace?.candidates || []).filter(c => c.status === 'failed').length
+        : workers.filter(w => w.status === 'failed').length;
+
+    // Crown ★ MVP on completed multi-worker swarms (highest signal + fastest delivery)
+    if (workers.length >= 2 && activeCount === 0) {
+      const doneWorkers = workers.filter(w => w.status === 'completed');
+      if (doneWorkers.length >= 2) {
+        const mvpScore = (w) => (w.files?.length || 0) * 16 + (w.tools?.length || 0) * 6 + Math.min(45, (w.summary || '').length / 24) - (w.durationMs || 0) / 1400;
+        const best = [...doneWorkers].sort((a, b) => mvpScore(b) - mvpScore(a))[0];
+        if (best) best.isMvp = true;
+      }
+    }
+
+    return {
+      taskId: task.id,
+      title: task.title,
+      status: task.status,
+      mode,
+      orchestrator: {
+        providerId: task.providerId,
+        modelLabel: providerLabel(task.providerId) || 'Orchestrator',
+        status: task.status,
+        calls: task.calls || 0,
+        maxCalls: task.policy?.maxCalls || 250,
+        recoveries: task.recoveries || 0
+      },
+      workers,
+      crew: crewSummary,
+      arena,
+      worktreeRace,
+      failovers: failovers.slice(-8),
+      fileConflicts,
+      pendingApproval: task.pendingApproval || null,
+      stats: {
+        totalWorkers: mode === 'arena'
+          ? (arenaContenders.length + (arena?.judge ? 1 : 0))
+          : mode === 'diff_race'
+            ? (worktreeRace?.candidates?.length || 0)
+            : workers.length,
+        activeWorkers: activeCount,
+        completedWorkers: completedCount,
+        failedWorkers: failedCount,
+        totalCalls: task.calls || 0,
+        totalTokens,
+        totalCostUsd: Number(totalCostUsd.toFixed(5))
+      }
+    };
   }
   selectedProvider(id, workspaceKind) {
     return this.providers.get(id) ?? (workspaceKind === 'conversation' ? this.catalog?.get(id) : undefined);
@@ -711,7 +1132,7 @@ export class Runtime {
     } else if (input.crewContract !== undefined) throw fault('INVALID_CREW_MEMBER', 'Crew contracts require a registered worker.');
     if (typeof input.objective !== 'string' || !input.objective.trim() || input.objective.length > messageCharLimit(input.objective, 30000)) throw fault('INVALID_TASK', 'An objective of 1–30000 characters is required.');
     if (input.workspaceKind !== undefined && input.workspaceKind !== 'conversation') throw fault('INVALID_TASK', 'Unknown workspace kind.');
-    const answerRace = validateAnswerRace(input.answerRace,this.catalog,input.workspaceKind);
+    const answerRace = validateAnswerRace(input.answerRace,this.catalog,input.workspaceKind,this.providers);
     const providerIds = input.providers || [...this.providers.keys()];
     this.validateCatalogRoute(providerIds, input.workspaceKind);
     if (!Array.isArray(providerIds) || !providerIds.length || providerIds.some(id => typeof id !== 'string' || !this.selectedProvider(id, input.workspaceKind))) throw fault('INVALID_PROVIDER', 'Select at least one configured provider.');
@@ -963,6 +1384,18 @@ export class Runtime {
         if (cause.code === 'CREW_BUDGET' || cause.code === 'CALL_BUDGET') return this._status(id, epoch, 'paused_budget', { code: cause.code, message: cause.message });
         throw cause;
       }
+      // Closed-loop visual observation: when the previous turn captured a browser.screenshot,
+      // attach the live PNG in memory (never bloated into SQLite) so vision-capable models like Gemini 4 Neon see it directly.
+      const lastReqIdx = (context.history || []).findLastIndex(e => e.type === 'model.request');
+      const sinceLastReq = lastReqIdx >= 0 ? context.history.slice(lastReqIdx + 1) : (context.history || []);
+      const tookBrowserShot = sinceLastReq.some(e => e.type === 'tool.completed' && e.data?.name === 'browser.screenshot' && e.data?.status !== 'failed');
+      if (tookBrowserShot && typeof this.broker?.browser?.getLatestScreenshot === 'function') {
+        const shot = this.broker.browser.getLatestScreenshot(id);
+        if (shot?.buffer && shot.buffer.byteLength > 0 && shot.buffer.byteLength <= 2 * 1024 * 1024) {
+          const mediaType = shot.mimeType || 'image/png';
+          context.visualObservations = [{ dataUrl: `data:${mediaType};base64,${shot.buffer.toString('base64')}`, mediaType }];
+        }
+      }
       let response;
       this._emitStream(id, { type: 'turn_start', providerId: task.providerId, call: task.calls });
       const onDelta = delta => {
@@ -1207,6 +1640,40 @@ export class Runtime {
             idx = runEnd;
             continue;
           }
+          // Dispatch contiguous agent.spawn calls concurrently (up to 4 in parallel) for true multi-agent swarm fan-out!
+          let spawnEnd = idx;
+          while (spawnEnd < response.calls.length && spawnEnd - idx < 4 && response.calls[spawnEnd]?.name === 'agent.spawn') spawnEnd += 1;
+          let canSpawnBatch = spawnEnd - idx >= 2;
+          if (canSpawnBatch) {
+            const hooks = await discoverHooks(liveTask);
+            if (hooks.PreToolUse.length || hooks.PostToolUse.length) canSpawnBatch = false;
+          }
+          if (canSpawnBatch) {
+            const spawnBatch = response.calls.slice(idx, spawnEnd);
+            for (const c of spawnBatch) {
+              if (evaluatePermission(effectiveRules, c.name, c.args).action !== 'allow') { canSpawnBatch = false; break; }
+            }
+            if (canSpawnBatch) {
+              try {
+                for (const call of spawnBatch) this._emitStream(id, { type: 'tool.start', name: call.name, callId: call.id, args: streamArgsFor(call) });
+                const results = await Promise.all(spawnBatch.map(call => this._executeAgentSpawn(id, epoch, call, controller.signal)));
+                for (let j = 0; j < spawnBatch.length; j++) {
+                  const call = spawnBatch[j], result = results[j];
+                  this._emitStream(id, { type: 'tool.completed', name: call.name, callId: call.id, ok: result?.ok ?? false });
+                  this._recordToolCallSig(id, call, sha256(stableJson([call.name, call.args || {}])), false);
+                  if (result?.ok === false && !failure) failure = result.error;
+                  else trackResult(call, result);
+                }
+                if (failure) break;
+              } catch (cause) {
+                if (!this._current(id, epoch, controller.signal)) break;
+                failure = { code: cause.code || 'TOOL_ERROR', message: cause.message };
+                break;
+              }
+              idx = spawnEnd;
+              continue;
+            }
+          }
           const call = response.calls[idx++];
           const permTask = this.getTask(id);
           const permRules = this._effectivePermissionRules(permTask);
@@ -1313,23 +1780,7 @@ export class Runtime {
             this._emitStream(id, { type: 'tool.start', name: call.name, callId: call.id, args: streamArgsFor(call) });
             let result;
             if (call.name === 'agent.spawn') {
-              this.store.appendEvent(id, 'subagent.started', { callId: call.id, role: call.args?.role || 'explore', prompt: String(call.args?.prompt || '').slice(0, 400) });
-              result = await runSpecialistSubagent({
-                runtime: this,
-                parentTask: this.getTask(id),
-                role: call.args?.role || 'explore',
-                prompt: call.args?.prompt || '',
-                modelHint: call.args?.model,
-                signal: controller.signal
-              });
-              const opId = `${id}:${call.id}`;
-              const nowIso = new Date().toISOString();
-              this.store.putOperation({
-                id: opId, taskId: id, callId: call.id, name: call.name, args: call.args,
-                argsHash: sha256(stableJson(call.args || {})), epoch,
-                status: result?.ok ? 'succeeded' : 'failed', result, createdAt: nowIso, updatedAt: nowIso
-              }, 'tool.completed', { operationId: opId, name: call.name, status: result?.ok ? 'succeeded' : 'failed', result });
-              this.store.appendEvent(id, 'subagent.completed', { callId: call.id, ...result });
+              result = await this._executeAgentSpawn(id, epoch, call, controller.signal);
             } else {
               const onOutput = call.name === 'process.run'
                 ? (stream, text) => this._emitStream(id, { type: 'command.chunk', callId: call.id, command: String(call.args?.command || '').slice(0, 200), stream, text })
@@ -2550,6 +3001,23 @@ export class Runtime {
     const learning = this.store.setModelPreference(providerId, signal, domain);
     return { modelPreferences: learning.modelPreferences || {}, domainElo: learning.domainElo || {} };
   }
+  getBrowserSettings() {
+    const stored = this.store.getLocalState('browser_settings', DEFAULT_BROWSER_SETTINGS);
+    return normalizeBrowserSettings(stored, DEFAULT_BROWSER_SETTINGS);
+  }
+  updateBrowserSettings(patch = {}) {
+    const next = normalizeBrowserSettings(patch, this.getBrowserSettings());
+    this.store.setLocalState('browser_settings', next);
+    if (!next.liveMirror) {
+      this.broker?.browser?.stopAllScreencasts?.().catch(() => {});
+    }
+    return next;
+  }
+  async getBrowserInfo() {
+    const settings = this.getBrowserSettings();
+    const binary = await findChromiumBinary().catch(() => null);
+    return { settings, chromiumAvailable: Boolean(binary) };
+  }
   getRouterSettings() {
     const stored = this.store.getLocalState('router_settings', DEFAULT_ROUTER_SETTINGS);
     try { return normalizeRouterSettings(stored || DEFAULT_ROUTER_SETTINGS); }
@@ -2574,7 +3042,7 @@ export class Runtime {
       if (!p || p.kind === 'scripted' || p.available === false || p.closed) continue;
       if (!checkProviderPrivacyAllowed(p, privacy).allowed) continue;
       seen.add(p.id);
-      candidates.push({ id: p.id, label: p.label, model: p.model, kind: p.kind, tier: p.tier, baseUrl: p.baseUrl, supportsFunctionCalling: p.modelMetadata ? Boolean(p.modelMetadata.supportsFunctionCalling) : true, available: true });
+      candidates.push({ id: p.id, label: p.label, model: p.model, kind: p.kind, tier: p.tier, baseUrl: p.baseUrl, supportsFunctionCalling: p.modelMetadata?.supportsFunctionCalling !== undefined ? Boolean(p.modelMetadata.supportsFunctionCalling) : true, available: true });
     }
     if (workspaceKind === 'conversation' && this.catalog) {
       const catList = await this.catalog.list().catch(() => null);
@@ -2601,6 +3069,228 @@ export class Runtime {
       learning: this.getLearning(),
       settings: activeSettings
     });
+  }
+  async resolveTaskMetacognition({ objective = '', decision = null, providerId = null, effort = 'medium', workspaceKind = 'conversation', files = [], attachments = [], modeOverride = null, signal = null } = {}) {
+    const routerSettings = this.getRouterSettings();
+    const mode = normalizeMetacognitionMode(modeOverride ?? routerSettings.metacognition ?? 'smart');
+    if (mode === 'off') return null;
+    const text = String(objective || '').trim();
+    if (!text) return null;
+    const cls = decision?.domain
+      ? { primaryDomain: decision.domain, secondaryDomain: decision.secondaryDomain || null, refusalRisk: decision.refusalRisk || 0 }
+      : classifyPromptDomain(text, { files, attachments });
+    const privacy = this.getPrivacy().settings;
+    const isEligibleArchitect = (p) => Boolean(p && p.kind !== 'scripted' && p.available !== false && !p.closed && (typeof p.draft === 'function' || typeof p.turn === 'function') && checkProviderPrivacyAllowed(p, privacy).allowed);
+    const rawTarget = providerId ? (this.providers.get(providerId) || this.catalog?.get?.(providerId) || null) : null;
+    const targetProvider = isEligibleArchitect(rawTarget) ? rawTarget : null;
+    const modelFamily = detectModelFamily(rawTarget || providerId || '');
+    if (shouldAutoForge({ objective: text, domain: cls.primaryDomain, effort, isFirstTurn: true, mode })) {
+      const overseer = this._resolveOverseer?.();
+      const architect = (isEligibleArchitect(overseer?.provider) ? overseer.provider : null)
+        || targetProvider
+        || [...this.providers.values()].find(isEligibleArchitect)
+        || null;
+      return forgeTaskMegaprompt({
+        objective: text,
+        domain: cls.primaryDomain,
+        modelFamily,
+        targetProvider: rawTarget,
+        architectProvider: architect,
+        effort,
+        workspaceKind,
+        files,
+        attachments,
+        signal,
+        outbound: this.outboundOptions()
+      });
+    }
+    return buildDomainMetacognition({
+      domain: cls.primaryDomain,
+      secondaryDomain: cls.secondaryDomain,
+      refusalRisk: cls.refusalRisk,
+      modelFamily,
+      effort,
+      workspaceKind,
+      providerLabel: rawTarget?.label || providerId || null
+    });
+  }
+  async forgeMetapromptPreview({ objective = '', domain = null, providerId = null, effort = 'medium', workspaceKind = 'conversation' } = {}) {
+    const text = String(objective || '').trim();
+    if (!text) throw fault('INVALID_MESSAGE', 'Provide a prompt to forge.');
+    if (domain !== null && domain !== undefined && domain !== '' && !ROUTER_DOMAINS.some(d => d.id === domain)) {
+      throw fault('INVALID_DOMAIN', `Unknown domain: ${String(domain).slice(0, 64)}`);
+    }
+    const privacy = this.getPrivacy().settings;
+    const isEligibleArchitect = (p) => Boolean(p && p.kind !== 'scripted' && p.available !== false && !p.closed && (typeof p.draft === 'function' || typeof p.turn === 'function') && checkProviderPrivacyAllowed(p, privacy).allowed);
+    const rawTarget = providerId ? (this.providers.get(providerId) || this.catalog?.get?.(providerId) || null) : null;
+    const targetProvider = isEligibleArchitect(rawTarget) ? rawTarget : null;
+    const overseer = this._resolveOverseer?.();
+    const architect = (isEligibleArchitect(overseer?.provider) ? overseer.provider : null)
+      || targetProvider
+      || [...this.providers.values()].find(isEligibleArchitect)
+      || null;
+    return forgeTaskMegaprompt({
+      objective: text,
+      domain: domain || null,
+      modelFamily: detectModelFamily(rawTarget || architect || ''),
+      targetProvider: rawTarget,
+      architectProvider: architect,
+      effort,
+      workspaceKind,
+      outbound: this.outboundOptions()
+    });
+  }
+  async getConclaveRoster() {
+    const candidates = await this.listRoutableCandidates('conversation');
+    const harnesses = await detectExternalHarnesses({ providers: this.providers, catalog: this.catalog });
+    const routerSettings = this.getRouterSettings();
+    const matrix = loadBenchmarkMatrix(routerSettings.customBenchmarks || {});
+    const learning = this.getLearning();
+    const byId = new Map(candidates.map(c => [c.id, c]));
+    const harnessById = new Map(harnesses.map(h => [h.id, h]));
+
+    const savedRaw = this.store.getLocalState('conclave_roster', []);
+    const savedList = Array.isArray(savedRaw) ? savedRaw : [];
+    const xpMap = this.store.getLocalState('conclave_agent_xp', {});
+    const starters = buildStarterRoster(candidates, harnesses);
+    const mergedMap = new Map();
+    for (const s of starters) mergedMap.set(s.slug, s);
+    for (const custom of savedList) {
+      if (!custom?.slug) continue;
+      mergedMap.set(custom.slug, { ...mergedMap.get(custom.slug), ...custom, custom: true });
+    }
+
+    const enrichAgent = (ag) => {
+      const h = ag.harnessId ? harnessById.get(ag.harnessId) : null;
+      const resolvedProvId = ag.providerId || h?.providerId || null;
+      const cand = resolvedProvId ? (byId.get(resolvedProvId) || this.providers.get(resolvedProvId) || this.catalog?.get?.(resolvedProvId) || null) : null;
+      const stats = computeAgentStats({
+        candidate: cand,
+        harnessId: ag.harnessId,
+        primarySpecialty: ag.primarySpecialty,
+        secondarySpecialty: ag.secondarySpecialty,
+        matrix,
+        learning
+      });
+      const xp = computeXpLevel(xpMap?.[ag.slug] || null);
+      const engineLabel = cand?.label || (h ? h.name : ag.harnessCommand ? `CLI · ${ag.harnessCommand}` : 'Auto-Route Best Fit');
+      const ready = Boolean(cand) || Boolean(h && (h.status === 'connected' || h.status === 'installed')) || Boolean(!ag.providerId && !ag.harnessId && candidates.length > 0);
+      return { ...ag, resolvedProviderId: resolvedProvId, engineLabel, ready, stats, xp };
+    };
+
+    const engines = candidates.slice(0, 60).map(c => ({
+      id: c.id,
+      label: c.label,
+      model: c.model,
+      kind: c.kind,
+      tier: c.tier || 'standard',
+      stats: computeAgentStats({ candidate: c, matrix, learning })
+    }));
+
+    return {
+      agents: [...mergedMap.values()].map(enrichAgent),
+      formations: this.getConclaveFormations(),
+      harnesses,
+      engines,
+      archetypes: AGENT_ARCHETYPES,
+      domains: ROUTER_DOMAINS
+    };
+  }
+  recordConclaveAgentRun(rawSlug, { ok = true, durationMs = 0, mvp = false } = {}) {
+    try {
+      const slug = slugifyAgent(rawSlug || 'explore');
+      const map = { ...(this.store.getLocalState('conclave_agent_xp', {}) || {}) };
+      const cur = map[slug] || { runs: 0, wins: 0, mvps: 0, xp: 0, avgMs: 0, lastRunAt: null };
+      const runs = (Number(cur.runs) || 0) + 1;
+      const wins = (Number(cur.wins) || 0) + (ok ? 1 : 0);
+      const mvps = (Number(cur.mvps) || 0) + (mvp ? 1 : 0);
+      const xpGain = (ok ? 25 : 5) + (mvp ? 20 : 0);
+      const prevAvg = Number(cur.avgMs) || 0;
+      const dur = Math.max(0, Number(durationMs) || 0);
+      const avgMs = prevAvg > 0 && dur > 0 ? Math.round((prevAvg * (runs - 1) + dur) / runs) : (dur || prevAvg);
+      map[slug] = { runs, wins, mvps, xp: (Number(cur.xp) || 0) + xpGain, avgMs, lastRunAt: new Date().toISOString() };
+      this.store.setLocalState('conclave_agent_xp', map);
+      return computeXpLevel(map[slug]);
+    } catch {
+      return computeXpLevel(null);
+    }
+  }
+  getConclaveFormations() {
+    const savedRaw = this.store.getLocalState('conclave_formations', []);
+    const saved = Array.isArray(savedRaw) ? savedRaw : [];
+    const merged = new Map();
+    for (const f of STARTER_FORMATIONS) merged.set(f.id, { ...f });
+    for (const f of saved) {
+      if (!f?.id) continue;
+      merged.set(f.id, { ...merged.get(f.id), ...f, custom: true });
+    }
+    return [...merged.values()];
+  }
+  saveConclaveFormation(payload = {}) {
+    const savedRaw = this.store.getLocalState('conclave_formations', []);
+    const list = Array.isArray(savedRaw) ? [...savedRaw] : [];
+    const targetId = slugifyAgent(payload.id || payload.name);
+    const idx = list.findIndex(f => f?.id === targetId);
+    const normalized = normalizeFormation(payload, idx >= 0 ? list[idx] : null);
+    if (idx >= 0) list[idx] = normalized;
+    else list.push(normalized);
+    this.store.setLocalState('conclave_formations', list.slice(0, 24));
+    return { ok: true, formation: normalized, formations: this.getConclaveFormations() };
+  }
+  deleteConclaveFormation(rawId) {
+    const id = slugifyAgent(rawId);
+    const savedRaw = this.store.getLocalState('conclave_formations', []);
+    const list = Array.isArray(savedRaw) ? savedRaw : [];
+    const next = list.filter(f => f?.id !== id);
+    this.store.setLocalState('conclave_formations', next);
+    return { ok: true, deleted: next.length !== list.length, id, formations: this.getConclaveFormations() };
+  }
+  async saveConclaveAgent(payload = {}) {
+    const savedRaw = this.store.getLocalState('conclave_roster', []);
+    const list = Array.isArray(savedRaw) ? [...savedRaw] : [];
+    const targetSlug = slugifyAgent(payload.slug || payload.name);
+    const existingIdx = list.findIndex(a => a?.slug === targetSlug);
+    const normalized = normalizeRosterAgent(payload, existingIdx >= 0 ? list[existingIdx] : null);
+    if (existingIdx >= 0) list[existingIdx] = normalized;
+    else list.push(normalized);
+    this.store.setLocalState('conclave_roster', list.slice(0, 48));
+    const roster = await this.getConclaveRoster();
+    const saved = roster.agents.find(a => a.slug === normalized.slug) || normalized;
+    return { ok: true, agent: saved, roster };
+  }
+  async deleteConclaveAgent(rawSlug) {
+    const slug = slugifyAgent(rawSlug);
+    const savedRaw = this.store.getLocalState('conclave_roster', []);
+    const list = Array.isArray(savedRaw) ? savedRaw : [];
+    const next = list.filter(a => a?.slug !== slug);
+    this.store.setLocalState('conclave_roster', next);
+    const roster = await this.getConclaveRoster();
+    return { ok: true, deleted: next.length !== list.length, slug, roster };
+  }
+  async previewConclaveStats({ providerId = null, harnessId = null, primarySpecialty = 'swe_coding', secondarySpecialty = 'math_reasoning' } = {}) {
+    const candidates = await this.listRoutableCandidates('conversation');
+    const routerSettings = this.getRouterSettings();
+    const matrix = loadBenchmarkMatrix(routerSettings.customBenchmarks || {});
+    const learning = this.getLearning();
+    let cand = providerId ? (candidates.find(c => c.id === providerId) || this.providers.get(providerId) || this.catalog?.get?.(providerId) || null) : null;
+    if (!cand && harnessId) {
+      const h = EXTERNAL_HARNESSES.find(x => x.id === harnessId);
+      if (h) {
+        cand = candidates.find(c => (h.providerPrefix && c.id.startsWith(h.providerPrefix)) || (h.providerRegex && h.providerRegex.test(`${c.id} ${c.model || ''} ${c.label || ''}`))) || h.benchmarkProbe;
+      }
+    }
+    const stats = computeAgentStats({ candidate: cand, harnessId, primarySpecialty, secondarySpecialty, matrix, learning });
+    // Also suggest the strongest connected engine for these specialties!
+    let bestEngine = null;
+    if (candidates.length) {
+      const ranked = candidates.map(c => ({
+        id: c.id,
+        label: c.label,
+        overall: computeAgentStats({ candidate: c, primarySpecialty, secondarySpecialty, matrix, learning }).overall
+      })).sort((a, b) => b.overall - a.overall);
+      bestEngine = ranked[0] || null;
+    }
+    return { stats, bestEngine };
   }
   async getRouterState() {
     const settings = this.getRouterSettings();
@@ -2796,7 +3486,10 @@ export class Runtime {
     }
     const result = this.store.purgeTask(id);
     this._streamSubs.delete(id);
-    await this.broker.browser.closeSession(id).catch(() => {});
+    for (const key of [...this._workerSteers.keys()]) {
+      if (key.startsWith(`${id}:`)) this._workerSteers.delete(key);
+    }
+    await this.broker.browser.closeSession(id, { resetPreferences: true }).catch(() => {});
     // Only delete workspaces created inside this runtime's managed workspaces directory.
     let managedRoot = resolve(this.store.dataDir, 'workspaces') + sep;
     try { managedRoot = (await fs.realpath(resolve(this.store.dataDir, 'workspaces'))) + sep; } catch {}
@@ -3416,7 +4109,7 @@ export class Runtime {
   setAnswerRace(id, value) {
     const task=this._assertOwnerSettingsIdle(id);
     if (task.workspaceKind !== 'conversation') throw fault('INVALID_TASK','Ultra-Plinian compares written answers in a chat.');
-    const answerRace=validateAnswerRace(value,this.catalog,task.workspaceKind);
+    const answerRace=validateAnswerRace(value,this.catalog,task.workspaceKind,this.providers);
     for (const id of answerRace?.models || []) parametersFor(this.selectedProvider(id, task.workspaceKind), task.generation);
     return this.store.updateTask(id,current=>{current.answerRace=answerRace;return current;},'race.configured',{answerRace});
   }

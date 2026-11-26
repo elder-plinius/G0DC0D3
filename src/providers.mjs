@@ -4,6 +4,7 @@ import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { TOOLS } from './broker.mjs';
+import { resolveCatalogEntry } from './model-catalog.mjs';
 import { classifyProviderFailure } from './outcomes.mjs';
 import { compilePrompt, compileInstructions, compileTaskContext, buildToolPlaybook, effortInstructions, PROMPT_VERSION, PERSONAS, resolvePersona } from './prompts.mjs';
 import { applyMessageInjections, buildCatalogSystemPrompt, stitchPrefillIntoText } from './prompt-transparency.mjs';
@@ -65,8 +66,38 @@ function normalizeCalls(calls, aliases, tools = canonicalTools) {
     const id=call.id||randomUUID();
     if(typeof id!=='string'||id.length>200||seen.has(id))throw Object.assign(new Error('Tool call identifiers must be unique strings of at most 200 characters'),{code:'tool_protocol'});
     seen.add(id);
-    return {id,name,args};
+    const rawExtra = call.extra_content && typeof call.extra_content === 'object' ? call.extra_content
+      : call.extraContent && typeof call.extraContent === 'object' ? call.extraContent : null;
+    const rawSig = typeof call.thoughtSignature === 'string' && call.thoughtSignature ? call.thoughtSignature
+      : typeof call.thought_signature === 'string' && call.thought_signature ? call.thought_signature
+        : typeof rawExtra?.google?.thought_signature === 'string' && rawExtra.google.thought_signature ? rawExtra.google.thought_signature : null;
+    const thoughtSignature = rawSig ? rawSig.slice(0, 8192) : null;
+    const extraContent = thoughtSignature ? { google: { thought_signature: thoughtSignature } } : null;
+    return {
+      id,
+      name,
+      args,
+      ...(extraContent ? { extra_content: extraContent } : {}),
+      ...(thoughtSignature ? { thoughtSignature } : {}),
+    };
   });
+}
+
+function sanitizeSchemaForGemini(schema) {
+  if (!schema || typeof schema !== 'object') return schema;
+  if (Array.isArray(schema)) return schema.map(sanitizeSchemaForGemini);
+  const out = {};
+  for (const [k, v] of Object.entries(schema)) {
+    if (k === 'additionalProperties' || k === '$schema') continue;
+    if (k === 'type' && Array.isArray(v)) {
+      const nonNull = v.find(t => t !== 'null') || 'string';
+      out.type = nonNull;
+      if (v.includes('null')) out.nullable = true;
+      continue;
+    }
+    out[k] = sanitizeSchemaForGemini(v);
+  }
+  return out;
 }
 
 /**
@@ -214,6 +245,10 @@ export function catalogMessages(context, { enableTools = false, aliases = null }
       systemContent += `\n\n[Compacted Session Memory — folded prior turns through seq ${ws.compactedBeforeSeq || 0}; continue seamlessly without repeating finished work]\n${handoff.join('\n')}`;
     }
   }
+  const metaBrief = context.task?.routing?.metacognition?.compiledBrief;
+  if (typeof metaBrief === 'string' && metaBrief.trim() && !context.task?.fixtureId) {
+    systemContent += `\n\n${metaBrief.trim().slice(0, 2400)}`;
+  }
   const messages = [{ role: 'system', content: systemContent }, { role: 'user', content: context.task.objective }];
   // Persisted follow-ups survive compaction. Ledger order resolves turns
   // sharing a millisecond, including an edited message after a rewind.
@@ -257,7 +292,9 @@ export function catalogMessages(context, { enableTools = false, aliases = null }
           function: {
             name: aliases?.forward.get(c.name) || c.name.replace(/[^a-zA-Z0-9_-]/g, '__'),
             arguments: JSON.stringify(c.args || {})
-          }
+          },
+          ...(c.extra_content ? { extra_content: c.extra_content }
+            : c.thoughtSignature ? { extra_content: { google: { thought_signature: c.thoughtSignature } } } : {}),
         }));
         const toolResponses = calls.map(c => ({
           role: 'tool',
@@ -385,6 +422,15 @@ export class HttpProvider {
     const resolvedTier = inferProviderTier({ id, baseUrl, model, tier });
     if(credential!==undefined)httpCredentials.set(this,credential);
     Object.assign(this,{id,label:label||id,protocol,model,apiKeyEnv,headers,timeoutMs,tier:resolvedTier});
+    const catalogSpec = resolveCatalogEntry({ id, model, baseUrl: endpoint.href });
+    this.modelMetadata = {
+      contextWindow: catalogSpec?.contextWindow || 128000,
+      maxOutput: catalogSpec?.maxOutput || maxOutputTokensCeiling,
+      supportsReasoning: Boolean(catalogSpec?.capabilities?.reasoning),
+      supportsVision: catalogSpec?.capabilities?.vision !== false,
+      supportsFunctionCalling: catalogSpec?.capabilities?.tools !== false,
+      pricing: catalogSpec?.pricing || null,
+    };
     Object.defineProperty(this, 'baseUrl', { value: endpoint.href.replace(/\/$/, ''), enumerable: true });
     Object.defineProperties(this,{maxOutputTokens:{value:maxOutputTokens,enumerable:true},maxOutputTokensCeiling:{value:maxOutputTokensCeiling,enumerable:true}});
     this.kind='http'; this.available=credential!==undefined||!apiKeyEnv||Boolean(process.env[apiKeyEnv]);
@@ -408,6 +454,92 @@ export class HttpProvider {
       maxOutputTokens: this.maxOutputTokens,
       maxOutputTokensCeiling: this.maxOutputTokensCeiling,
     });
+  }
+  async draft(messages, signal, draftLimit = 4096, parameters = {}, opts = {}) {
+    const bound = Math.min(this.maxOutputTokensCeiling || draftLimit, draftLimit);
+    if (this.protocol === 'openai-chat') {
+      return this.plainChat(
+        { id: this.id, label: this.label, model: this.model, protocol: this.protocol, baseUrl: this.baseUrl, tier: this.tier, maxOutputTokens: bound, maxOutputTokensCeiling: this.maxOutputTokensCeiling },
+        messages,
+        signal,
+        { ...parameters, max_tokens: Math.min(parameters?.max_tokens ?? bound, bound) },
+        opts
+      );
+    }
+    const privacy = opts.privacy || DEFAULT_PRIVACY_SETTINGS;
+    const gate = checkProviderPrivacyAllowed(this, privacy);
+    if (!gate.allowed) {
+      opts.onOutbound?.({ providerId: this.id, host: extractHost(this.baseUrl), protocol: this.protocol, zdrClass: gate.posture.zdrClass, zdrFlags: [], secretsRedacted: 0, blocked: true, reason: gate.code });
+      return { type: 'error', code: gate.code, message: gate.reason };
+    }
+    const key = httpCredentials.has(this) ? httpCredentials.get(this) : (this.apiKeyEnv ? process.env[this.apiKeyEnv] : undefined);
+    if (this.apiKeyEnv && !key) return { type: 'error', code: 'PROVIDER_UNAVAILABLE', message: `Missing ${this.apiKeyEnv}.` };
+    const shouldRedact = privacy.redactOutboundSecrets !== false && (!gate.posture.localOnly || gate.posture.skipSecretRedaction === false);
+    const secretList = shouldRedact ? (opts.extraSecrets || environmentSecrets()) : [];
+    let secretsRedacted = 0;
+    const cleanText = (txt) => {
+      if (!shouldRedact || typeof txt !== 'string') return String(txt || '');
+      const c = redactOutboundText(txt, secretList);
+      secretsRedacted += c.count;
+      return c.text;
+    };
+    const list = Array.isArray(messages) ? messages : [];
+    const sys = cleanText(list.filter(m => m?.role === 'system').map(m => typeof m.content === 'string' ? m.content : '').filter(Boolean).join('\n\n'));
+    const rest = list.filter(m => m?.role !== 'system').map(m => ({
+      role: m?.role === 'assistant' ? 'assistant' : 'user',
+      content: cleanText(typeof m?.content === 'string' ? m.content : JSON.stringify(m?.content || ''))
+    }));
+    if (!rest.length) rest.push({ role: 'user', content: 'Continue.' });
+    const reqTimeout = AbortSignal.timeout(Number.isFinite(opts.turnTimeoutMs) && opts.turnTimeoutMs > 0 ? Math.max(this.timeoutMs, opts.turnTimeoutMs) : this.timeoutMs);
+    const reqSignal = (signal && typeof signal === 'object' && 'aborted' in signal) ? AbortSignal.any([signal, reqTimeout]) : reqTimeout;
+
+    if (this.protocol === 'anthropic') {
+      const headers = { 'content-type': 'application/json', 'anthropic-version': '2023-06-01', ...this.headers };
+      if (key) headers['x-api-key'] = key;
+      const body = { model: this.model, max_tokens: bound, ...(sys ? { system: sys } : {}), messages: rest };
+      const { zdrFlags } = applyZdrRequestPolicy(this, body, privacy);
+      opts.onOutbound?.({ providerId: this.id, host: extractHost(this.baseUrl), protocol: this.protocol, zdrClass: gate.posture.zdrClass, zdrFlags, secretsRedacted, blocked: false });
+      const res = await fetch(this.baseUrl + '/messages', { method: 'POST', redirect: 'error', signal: reqSignal, headers, body: JSON.stringify(body) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return { type: 'error', code: res.status === 429 ? 'RATE_LIMIT' : 'PROVIDER_ERROR', httpStatus: res.status, message: data?.error?.message || `Anthropic HTTP ${res.status}` };
+      const text = (data.content || []).filter(b => b?.type === 'text').map(b => b.text).join('').trim();
+      const finish = data.stop_reason === 'max_tokens' ? 'length' : data.stop_reason === 'refusal' ? 'refusal' : 'done';
+      return { type: 'message', text, finish, usage: data.usage || undefined };
+    }
+
+    if (this.protocol === 'openai-responses') {
+      const headers = { 'content-type': 'application/json', ...this.headers };
+      if (key) headers.authorization = 'Bearer ' + key;
+      const body = {
+        model: this.model,
+        max_output_tokens: bound,
+        ...(sys ? { instructions: sys } : {}),
+        input: rest.map(m => ({ role: m.role, content: m.content }))
+      };
+      const { zdrFlags } = applyZdrRequestPolicy(this, body, privacy);
+      opts.onOutbound?.({ providerId: this.id, host: extractHost(this.baseUrl), protocol: this.protocol, zdrClass: gate.posture.zdrClass, zdrFlags, secretsRedacted, blocked: false });
+      const res = await fetch(this.baseUrl + '/responses', { method: 'POST', redirect: 'error', signal: reqSignal, headers, body: JSON.stringify(body) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return { type: 'error', code: res.status === 429 ? 'RATE_LIMIT' : 'PROVIDER_ERROR', httpStatus: res.status, message: data?.error?.message || `OpenAI Responses HTTP ${res.status}` };
+      const text = (typeof data.output_text === 'string' && data.output_text)
+        || (data.output || []).flatMap(item => item?.content || []).filter(c => c?.type === 'output_text' || c?.type === 'text').map(c => c.text).join('').trim();
+      const finish = data.incomplete_details?.reason === 'max_output_tokens' ? 'length' : 'done';
+      return { type: 'message', text, finish, usage: data.usage || undefined };
+    }
+
+    return { type: 'error', code: 'UNSUPPORTED_PROTOCOL', message: `Drafting is not supported for protocol ${this.protocol}.` };
+  }
+  continueDraft(messages, partialText, signal, draftLimit = 8192, parameters = {}, opts = {}) {
+    if (this.protocol !== 'openai-chat') return this.draft([...(messages || []), { role: 'assistant', content: partialText }, { role: 'user', content: AUTO_CONTINUE_PROMPT }], signal, draftLimit, parameters, opts);
+    const boosted = Math.min(this.maxOutputTokensCeiling || 32768, Math.max(draftLimit, 24576));
+    const contMessages = [...messages, { role: 'assistant', content: partialText }, { role: 'user', content: AUTO_CONTINUE_PROMPT }];
+    return this.plainChat(
+      { id: this.id, label: this.label, model: this.model, protocol: this.protocol, baseUrl: this.baseUrl, tier: this.tier, maxOutputTokens: boosted, maxOutputTokensCeiling: this.maxOutputTokensCeiling },
+      contMessages,
+      signal,
+      { ...parameters, max_tokens: Math.min(parameters?.max_tokens ?? boosted, boosted) },
+      opts
+    );
   }
   catalogChoice({ id, label, model, limit, supportsReasoning = false, supportsFunctionCalling = false, modelMetadata }) {
     const reasoningFloor = supportsReasoning ? Math.max(this.maxOutputTokens, 16384) : this.maxOutputTokens;
@@ -498,27 +630,46 @@ export class HttpProvider {
     let secretsRedacted = 0;
     const shouldRedact = privacy.redactOutboundSecrets !== false && (!gate.posture.localOnly || gate.posture.skipSecretRedaction === false);
     const secretList = shouldRedact ? (opts.extraSecrets || environmentSecrets()) : [];
-    const outgoingMessages = shouldRedact
-      ? messages.map(m => {
-          if (typeof m?.content === 'string') {
-            const cleaned = redactOutboundText(m.content, secretList);
-            secretsRedacted += cleaned.count;
-            return cleaned.count ? { ...m, content: cleaned.text } : m;
+    const isGeminiModel = /gemini/i.test(choice.model || choice.id || '');
+    const outgoingMessages = messages.map(m => {
+      let next = m;
+      if (Array.isArray(next?.tool_calls)) {
+        const mappedCalls = next.tool_calls.map(tc => {
+          let c = tc;
+          if (!isGeminiModel && c?.extra_content) {
+            const { extra_content: _drop, ...restCall } = c;
+            c = restCall;
           }
-          if (Array.isArray(m?.content)) {
-            let changed = false;
-            const nextParts = m.content.map(part => {
-              if (part && part.type === 'text' && typeof part.text === 'string') {
-                const cleaned = redactOutboundText(part.text, secretList);
-                if (cleaned.count) { secretsRedacted += cleaned.count; changed = true; return { ...part, text: cleaned.text }; }
-              }
-              return part;
-            });
-            return changed ? { ...m, content: nextParts } : m;
+          if (shouldRedact && c?.function?.arguments) {
+            const cleaned = redactOutboundText(String(c.function.arguments), secretList);
+            if (cleaned.count) {
+              secretsRedacted += cleaned.count;
+              c = { ...c, function: { ...c.function, arguments: cleaned.text } };
+            }
           }
-          return m;
-        })
-      : messages;
+          return c;
+        });
+        next = { ...next, tool_calls: mappedCalls };
+      }
+      if (!shouldRedact) return next;
+      if (typeof next?.content === 'string') {
+        const cleaned = redactOutboundText(next.content, secretList);
+        secretsRedacted += cleaned.count;
+        return cleaned.count ? { ...next, content: cleaned.text } : next;
+      }
+      if (Array.isArray(next?.content)) {
+        let changed = false;
+        const nextParts = next.content.map(part => {
+          if (part && part.type === 'text' && typeof part.text === 'string') {
+            const cleaned = redactOutboundText(part.text, secretList);
+            if (cleaned.count) { secretsRedacted += cleaned.count; changed = true; return { ...part, text: cleaned.text }; }
+          }
+          return part;
+        });
+        return changed ? { ...next, content: nextParts } : next;
+      }
+      return next;
+    });
     const activeTools = Array.isArray(opts.tools) && opts.tools.length ? opts.tools : null;
     const aliases = activeTools ? (opts.aliases || toolAliases(activeTools)) : null;
     const wantsStream = typeof opts.onDelta === 'function';
@@ -529,14 +680,21 @@ export class HttpProvider {
       ...parameters,
       ...(opts.reasoningEffort ? { reasoning_effort: opts.reasoningEffort } : {}),
       ...(activeTools ? {
-        tools: activeTools.map(t => ({ type: 'function', function: { name: aliases.forward.get(t.name), description: t.description, parameters: t.parameters } }))
+        tools: activeTools.map(t => ({
+          type: 'function',
+          function: {
+            name: aliases.forward.get(t.name),
+            description: t.description,
+            parameters: isGeminiModel ? sanitizeSchemaForGemini(t.parameters) : t.parameters
+          }
+        }))
       } : {}),
       ...(wantsStream ? { stream: true, stream_options: { include_usage: true } } : {})
     };
     const { zdrFlags } = applyZdrRequestPolicy(choice, body, privacy);
     opts.onOutbound?.({ providerId: choice.id, host: extractHost(choice.baseUrl), protocol: choice.protocol, zdrClass: gate.posture.zdrClass, zdrFlags, secretsRedacted, blocked: false });
     const reqTimeout = AbortSignal.timeout(Number.isFinite(opts.turnTimeoutMs) && opts.turnTimeoutMs > 0 ? Math.max(this.timeoutMs, opts.turnTimeoutMs) : this.timeoutMs);
-    const reqSignal = signal ? AbortSignal.any([signal, reqTimeout]) : reqTimeout;
+    const reqSignal = (signal && typeof signal === 'object' && 'aborted' in signal) ? AbortSignal.any([signal, reqTimeout]) : reqTimeout;
     let res = await fetch(this.baseUrl + '/chat/completions', {
       method: 'POST', redirect: 'error', signal: reqSignal, headers,
       body: JSON.stringify(body),
@@ -639,6 +797,12 @@ export class HttpProvider {
             if (!toolAccum.has(idx)) toolAccum.set(idx, { id: '', function: { name: '', arguments: '' } });
             const acc = toolAccum.get(idx);
             if (tc.id && !acc.id) acc.id = tc.id;
+            if (tc.extra_content?.google?.thought_signature) {
+              acc.extra_content = { google: { thought_signature: String(tc.extra_content.google.thought_signature).slice(0, 8192) } };
+            }
+            if (typeof tc.thought_signature === 'string' && tc.thought_signature) {
+              acc.thought_signature = tc.thought_signature.slice(0, 8192);
+            }
             if (tc.function?.name) acc.function.name += tc.function.name;
             if (tc.function?.arguments != null) {
               acc.function.arguments += typeof tc.function.arguments === 'string'
@@ -706,7 +870,13 @@ export class HttpProvider {
         : '';
     const cleanThinking = rawThinking ? (key ? rawThinking.split(key).join('[redacted credential]') : rawThinking) : '';
     const rawToolCalls = toolsActiveForParse && !declined && answer?.finish_reason !== 'length' && Array.isArray(answer?.message?.tool_calls)
-      ? answer.message.tool_calls.map(tc => ({ id: tc?.id, name: tc?.function?.name, arguments: tc?.function?.arguments }))
+      ? answer.message.tool_calls.map(tc => ({
+        id: tc?.id,
+        name: tc?.function?.name,
+        arguments: tc?.function?.arguments,
+        ...(tc?.extra_content ? { extra_content: tc.extra_content } : {}),
+        ...(tc?.thought_signature ? { thought_signature: tc.thought_signature } : {}),
+      }))
       : [];
     if (rawToolCalls.length > 0) {
       try {
@@ -810,7 +980,11 @@ export class HttpProvider {
     const headers={'content-type':'application/json',...this.headers};
     const key=httpCredentials.get(this)??(this.apiKeyEnv?process.env[this.apiKeyEnv]:null);
     let endpoint,body;
-    const attachments = context.task?.attachments;
+    const userAttachments = Array.isArray(context.task?.attachments) ? context.task.attachments : [];
+    const visualObs = this.modelMetadata?.supportsVision !== false && Array.isArray(context.visualObservations) ? context.visualObservations : [];
+    const attachments = visualObs.length ? [...userAttachments, ...visualObs] : userAttachments;
+    const isGeminiWire = /generativelanguage\.googleapis\.com/i.test(this.baseUrl) || /gemini/i.test(String(this.model || ''));
+    const toolParamsForWire = params => (isGeminiWire ? sanitizeSchemaForGemini(params) : params);
     const transparency = context.task?.fixtureId ? null : (context.transparency || null);
     let prefillMeta = null;
     const isFixtureTask = Boolean(context.task?.fixtureId);
@@ -837,11 +1011,11 @@ export class HttpProvider {
       const priorCompliance = isFixtureTask ? getComplianceC(context.task?.recoveries) : [];
       const injectedC = applyMessageInjections([{role:'system',content:instructions},...priorCompliance,{role:'user',content:formatUserContent('openai-chat', prompt, attachments)}], transparency, { allowAssistantPrefill: true });
       prefillMeta = injectedC.rawPrefill ? injectedC : null;
-      body={model:this.model,messages:redactInjected(injectedC.messages),max_tokens:maxOutputTokens,...(tools.length?{tools:tools.map(t=>({type:'function',function:{name:aliases.forward.get(t.name),description:t.description,parameters:t.parameters}}))}:{})};
+      body={model:this.model,messages:redactInjected(injectedC.messages),max_tokens:maxOutputTokens,...(tools.length?{tools:tools.map(t=>({type:'function',function:{name:aliases.forward.get(t.name),description:t.description,parameters:toolParamsForWire(t.parameters)}}))}:{})};
     }
     Object.assign(body,generation);
     const taskEffort = String(context.task?.effort || 'medium').toLowerCase();
-    const isReasoningModel = Boolean(this.modelMetadata?.supportsReasoning) || /\b(?:o1|o3|o4|gpt-5|gpt-6|deepseek-r1|qwq|thinking|reasoning)\b/i.test(String(this.model || ''));
+    const isReasoningModel = Boolean(this.modelMetadata?.supportsReasoning) || /(?:o1|o3|o4|gpt-5|gpt-6|gemini[-_.]?(?:2\.5|3|4)|deepseek-r1|qwq|thinking|reasoning)/i.test(String(this.model || ''));
     if (isReasoningModel && taskEffort !== 'medium') {
       const baseApiEffort = taskEffort === 'fast' ? 'low' : 'high';
       const apiEffort = profile.reasoningCap === 'low' ? 'low' : profile.reasoningCap === 'medium' ? null : baseApiEffort;
@@ -1091,6 +1265,12 @@ export class HttpProvider {
             if(!toolCallAccum.has(tcIdx))toolCallAccum.set(tcIdx,{id:'',name:'',arguments:''});
             const a=toolCallAccum.get(tcIdx);
             if(tc.id&&!a.id)a.id=tc.id;
+            if (tc.extra_content?.google?.thought_signature) {
+              a.extra_content = { google: { thought_signature: String(tc.extra_content.google.thought_signature).slice(0, 8192) } };
+            }
+            if (typeof tc.thought_signature === 'string' && tc.thought_signature) {
+              a.thought_signature = tc.thought_signature.slice(0, 8192);
+            }
             if(tc.function?.name)a.name+=tc.function.name;
             if(tc.function?.arguments!=null)a.arguments+=typeof tc.function.arguments==='string'?tc.function.arguments:JSON.stringify(tc.function.arguments);
           }
@@ -1112,7 +1292,11 @@ export class HttpProvider {
         if(!finishReason&&!refusal) {
           return {type:'error',code:'provider_incomplete',message:'Streaming response ended before a finish reason arrived; no tool calls were executed.',retryable:true,usage:usage||null,model:modelId,...formatThinking(thinking)};
         }
-        calls=[...toolCallAccum.entries()].sort((a,b)=>a[0]-b[0]).map(([,tc])=>({id:tc.id,name:tc.name,arguments:tc.arguments}));
+        calls=[...toolCallAccum.entries()].sort((a,b)=>a[0]-b[0]).map(([,tc])=>({
+          id:tc.id,name:tc.name,arguments:tc.arguments,
+          ...(tc.extra_content?{extra_content:tc.extra_content}:{}),
+          ...(tc.thought_signature?{thought_signature:tc.thought_signature}:{}),
+        }));
         refusal||=finishReason==='content_filter';
         incomplete=outputLimited=finishReason==='length';
       }
@@ -1173,7 +1357,12 @@ export class HttpProvider {
       if(rawThinking)thinking=appendThinking(thinking,rawThinking);
       refusal=Boolean(m.refusal)||choice.finish_reason==='content_filter';if(m.refusal)text+=m.refusal;
       incomplete=outputLimited=choice.finish_reason==='length';
-      calls=(m.tool_calls||[]).map(c=>({id:c.id,...c.function}));
+      calls=(m.tool_calls||[]).map(c=>({
+        id:c.id,
+        ...c.function,
+        ...(c.extra_content?{extra_content:c.extra_content}:{}),
+        ...(c.thought_signature?{thought_signature:c.thought_signature}:{}),
+      }));
     }
     const meta={usage:data.usage||null,model:data.model||this.model,...formatThinking(thinking)};
     // A refusal or truncated tool batch must never accidentally execute partial tool calls.
