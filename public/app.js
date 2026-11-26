@@ -607,7 +607,7 @@ function renderComposer() {
   const cmdSuffix = task ? (task.execution?.enabled ? (task.execution.network ? ' · Cmd+Net' : ' · Cmd') : '') : '';
   setText('#composer-permissions-label', `${shortPermLabel}${cmdSuffix}`);
   $('#composer-permissions').title = `Permission Gate: ${shortPermLabel} (Shift+Tab to cycle, click to configure)`;
-  $('#composer-model').title = race ? 'View the Venice writers and judge' : task ? 'Change model for this chat' : 'Choose or connect a model';
+  $('#composer-model').title = race ? 'View the Arena writers and judge' : task ? 'Change model for this chat' : 'Choose or connect a model';
   setVisible('#composer-connect', !task && Boolean(composerErrors.get(key)) && !preferred);
   renderRecoveryControl(task, loading || !online);
   renderPlanModeControl(task, loading || !online);
@@ -1355,7 +1355,7 @@ function renderTaskMetaStrip(task) {
   if (!strip) return;
   if (!task) { setVisible('#task-meta-strip', false); strip.innerHTML = ''; return; }
   const provider = providerById(task.providerId);
-  const modelLabel = task.answerRace ? `${task.answerRace.models.length} Venice writers` : provider?.label || task.providerId || 'No model';
+  const modelLabel = task.answerRace ? `${task.answerRace.models.length} Arena writers` : provider?.label || task.providerId || 'No model';
   const tier = String(provider?.tier || 'standard').toLowerCase();
   const calls = Number(task.calls ?? 0);
   const maxCalls = Number(task.policy?.maxCalls ?? 0);
@@ -3415,7 +3415,7 @@ function renderTimeline(events, total, task) {
     const recent = [...events].reverse().find(e => ['model.request', 'tool.started', 'evaluation.started', 'routing.auto_continued'].includes(e.type));
     const activeProvLabel = providerById(task.providerId)?.label || task.providerId || '';
     const phase = task.answerRace
-      ? (events.findLast(e => e.type === 'race.dispatched')?.data.stage === 'grade' ? 'Grading parallel drafts' : 'Drafting with 2 Venice writers')
+      ? (events.findLast(e => e.type === 'race.dispatched')?.data.stage === 'grade' ? 'Grading parallel drafts' : 'Drafting with 2 Arena writers')
       : recent?.type === 'routing.auto_continued'
         ? 'Continuing output'
         : task.status === 'verifying'
@@ -7253,7 +7253,7 @@ $('#sidebar-backdrop').addEventListener('click', () => {
   else setSidebar(false);
 });
 document.addEventListener('keydown', (event) => {
-  const openModalDialog = event.target.closest('dialog[open]:not(#code-dock dialog)') || $$('dialog[open]:not(#code-dock dialog)').at(-1);
+  const openModalDialog = event.target?.closest?.('dialog[open]:not(#code-dock dialog)') || $$('dialog[open]:not(#code-dock dialog)').at(-1);
   if (openModalDialog && event.key === 'Escape' && !event.isComposing) {
     event.preventDefault();
     openModalDialog.close();

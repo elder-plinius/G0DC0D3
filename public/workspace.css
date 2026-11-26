@@ -5513,7 +5513,7 @@ body.pantheon-open .details-button > span { display: none; }
   height: 100dvh;
   grid-column: 3;
   grid-row: 1 / -1;
-  background: var(--surface);
+  background: var(--bg, #121315);
   border-left: 1px solid var(--line);
   overflow: hidden;
   z-index: 25;
@@ -5533,6 +5533,29 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   border-radius: 16px;
   box-shadow: 0 28px 80px rgba(0, 0, 0, .52);
   z-index: 80;
+}
+@media (max-width: 1080px) {
+  body.pantheon-open .app-shell,
+  body.pantheon-open.sidebar-collapsed .app-shell {
+    grid-template-columns: var(--sidebar-width, 250px) minmax(0, 1fr);
+  }
+  body.pantheon-open.sidebar-collapsed .app-shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  body.pantheon-open .pantheon-dock,
+  body.pantheon-open.sidebar-collapsed .pantheon-dock {
+    position: fixed;
+    inset: 12px;
+    width: auto;
+    min-width: 0;
+    height: auto;
+    grid-column: auto;
+    grid-row: auto;
+    border: 1px solid var(--line-strong, var(--line));
+    border-radius: 14px;
+    box-shadow: 0 24px 68px rgba(0, 0, 0, .52);
+    z-index: 75;
+  }
 }
 .pantheon-header {
   display: flex;
@@ -5596,8 +5619,8 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   color: var(--violet);
 }
 .pantheon-mode-pill.mode-crew {
-  border-color: color-mix(in srgb, var(--sage) 50%, var(--line));
-  color: var(--sage);
+  border-color: color-mix(in srgb, var(--ok, #34d399) 50%, var(--line));
+  color: var(--ok, #34d399);
 }
 .pantheon-mode-pill.mode-arena {
   border-color: rgba(245, 158, 11, .5);
@@ -5845,8 +5868,8 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   background: var(--panel-soft);
   color: var(--text-secondary);
 }
-.pantheon-status-pill.tone-violet { color: var(--violet); background: color-mix(in srgb, var(--violet) 14%, transparent); }
-.pantheon-status-pill.tone-sage   { color: var(--sage); background: color-mix(in srgb, var(--sage) 14%, transparent); }
+.pantheon-status-pill.tone-violet { color: var(--violet, #a78bfa); background: color-mix(in srgb, var(--violet, #a78bfa) 14%, transparent); }
+.pantheon-status-pill.tone-sage   { color: var(--ok, #34d399); background: color-mix(in srgb, var(--ok, #34d399) 14%, transparent); }
 .pantheon-status-pill.tone-amber  { color: #f59e0b; background: rgba(245, 158, 11, .14); }
 .pantheon-status-pill.tone-gold   { color: #fbbf24; background: rgba(251, 191, 36, .16); }
 .pantheon-status-pill.tone-coral  { color: #f87171; background: rgba(248, 113, 113, .14); }

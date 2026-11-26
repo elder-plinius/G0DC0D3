@@ -902,9 +902,6 @@ export class Runtime {
       .filter(([, owners]) => owners.length > 1)
       .map(([file, owners]) => ({ file, owners }));
 
-    const activeCount = workers.filter(w => ['thinking', 'streaming', 'tool', 'recovering'].includes(w.status)).length;
-    const completedCount = workers.filter(w => w.status === 'completed').length;
-    const failedCount = workers.filter(w => w.status === 'failed').length;
     const mode = (arena && (arena.status === 'drafting' || arena.status === 'grading' || (workers.length === 0 && arena.status === 'completed')))
       ? 'arena'
       : crewSummary && ['preparing', 'running', 'verifying', 'ready', 'paused', 'applied'].includes(crewSummary.status)
@@ -912,6 +909,17 @@ export class Runtime {
         : workers.length > 0
           ? 'swarm'
           : 'standby';
+
+    const arenaContenders = arena?.contenders || [];
+    const arenaActive = arenaContenders.filter(c => ['streaming', 'queued', 'drafting'].includes(c.status)).length + (arena?.judge?.status === 'grading' ? 1 : 0);
+    const arenaDone = arenaContenders.filter(c => c.status === 'completed').length + (arena?.judge?.status === 'completed' ? 1 : 0);
+    const activeCount = mode === 'arena'
+      ? arenaActive
+      : workers.filter(w => ['thinking', 'streaming', 'tool', 'recovering'].includes(w.status)).length;
+    const completedCount = mode === 'arena'
+      ? arenaDone
+      : workers.filter(w => w.status === 'completed').length;
+    const failedCount = workers.filter(w => w.status === 'failed').length;
 
     return {
       taskId: task.id,

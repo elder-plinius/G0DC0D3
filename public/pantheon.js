@@ -274,9 +274,10 @@
       const res = await fetch(`/api/tasks/${encodeURIComponent(currentTaskId)}/approval`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-g0d-request': '1' },
-        body: JSON.stringify({ approvalId: data.pendingApproval.id, decision }),
+        body: JSON.stringify({ decision, resume: true }),
       });
       if (!res.ok) throw new Error('Approval action failed.');
+      if (typeof window.toast === 'function') window.toast(decision === 'deny' ? 'Denied — resuming with feedback.' : 'Allowed once — resuming.');
       await loadSnapshot(currentTaskId);
       if (typeof window.refresh === 'function') window.refresh();
     } catch (err) {
@@ -906,9 +907,10 @@
       const glyph = wk.ghost ? '◌' : st.tone === 'sage' ? '✓' : st.tone === 'coral' ? '!' : st.tone === 'gold' ? '⚡' : st.tone === 'amber' ? '⌁' : '✦';
       ctx.fillText(glyph, pos.x, pos.y - 4);
 
+      const roleTxt = String(wk.role || 'agent').toUpperCase().slice(0, 11);
       ctx.fillStyle = pal.text;
-      ctx.font = '600 9px ui-monospace, SFMono-Regular, monospace';
-      ctx.fillText(String(wk.role || 'agent').toUpperCase().slice(0, 9), pos.x, pos.y + 10);
+      ctx.font = roleTxt.length >= 9 ? '600 8px ui-monospace, SFMono-Regular, monospace' : '600 9px ui-monospace, SFMono-Regular, monospace';
+      ctx.fillText(roleTxt, pos.x, pos.y + 10);
 
       // Caption pill beneath node
       const caption = wk.ghost
@@ -1107,11 +1109,18 @@
       ctx.fill();
       ctx.globalAlpha = 1;
 
-      ctx.fillStyle = pal.isLight ? '#ffffff' : '#0c0d10';
-      ctx.font = '700 10px ui-monospace, SFMono-Regular, monospace';
-      ctx.textAlign = 'left';
       const barTxt = `${st.label} · ${fmtMs(wk.durationMs || (e - s))}`;
-      if (bw > 74) ctx.fillText(barTxt, x1 + 8, y + 21);
+      if (bw > 74) {
+        ctx.fillStyle = pal.isLight ? '#ffffff' : '#0c0d10';
+        ctx.font = '700 10px ui-monospace, SFMono-Regular, monospace';
+        ctx.textAlign = 'left';
+        ctx.fillText(barTxt, x1 + 8, y + 21);
+      } else {
+        ctx.fillStyle = pal.muted;
+        ctx.font = '600 10px ui-monospace, SFMono-Regular, monospace';
+        ctx.textAlign = 'left';
+        ctx.fillText(barTxt, x1 + bw + 8, y + 21);
+      }
     });
   }
 

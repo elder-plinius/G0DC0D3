@@ -1480,7 +1480,8 @@ $('#qol-clear-recent')?.addEventListener('click', () => {
 $('#settings-global-search')?.addEventListener('input', event => {
   renderSettingsSearchResults(event.target.value);
 });
-$('#settings-dialog').addEventListener('keydown', event => {
+window.addEventListener('keydown', event => {
+  if (!$('#settings-dialog')?.open) return;
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') {
     event.preventDefault();
     const s = $('#settings-global-search');
