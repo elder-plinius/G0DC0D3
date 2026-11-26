@@ -8,6 +8,7 @@ const SETTINGS_ICONS = {
   recovery: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 7.5A6 6 0 1 0 16 11"/><path d="M15.5 3.5v4h-4"/></svg>',
   memory: '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6.5"/><circle cx="10" cy="10" r="2.5"/><path d="M10 3.5v2M10 14.5v2"/></svg>',
   prompts: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 5.5h12M4 10h8M4 14.5h10"/><circle cx="15.5" cy="10" r="1.5"/></svg>',
+  schedules: '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6.8"/><path d="M10 6.2V10l2.8 1.8"/></svg>',
   tools: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="m10 2.5 6 2.8v4.8c0 3.8-2.6 6.3-6 7.4-3.4-1.1-6-3.6-6-7.4V5.3z"/></svg>',
   privacy: '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="4.5" y="9" width="11" height="8" rx="2"/><path d="M7 9V6.5a3 3 0 0 1 6 0V9"/></svg>',
   system: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6.5 7 3.5 10l3 3M13.5 7l3 3-3 3M11.2 5l-2.4 10"/></svg>',
@@ -33,6 +34,7 @@ const SETTINGS_GROUPS = [
     tabs: [
       { id: 'memory', label: 'Instructions & Memory', hint: 'Rules, facts & /skills' },
       { id: 'prompts', label: 'Prompt Commands', hint: 'Saved !chat shortcuts' },
+      { id: 'schedules', label: 'Schedules & Crons', hint: 'Recurring & timed jobs', badgeId: 'settings-badge-schedules' },
     ],
   },
   {
@@ -319,6 +321,111 @@ document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" clas
       </div>
     </section>
 
+    <section id="settings-pane-schedules" role="tabpanel" aria-labelledby="settings-tab-schedules" hidden>
+      <header class="settings-pane-head">
+        <h3>Schedules &amp; Cron Jobs</h3>
+        <p>Run recurring or one-shot <strong>GODMODƎ</strong> prompts and <strong>GODCODƎ</strong> repository sweeps automatically in your local timezone. Unattended jobs default to the <strong>Safe</strong> permission gate and honor active Privacy / Lockdown rules.</p>
+      </header>
+      <div class="settings-card">
+        <div class="settings-card-head">
+          <div>
+            <h4 id="sched-form-heading">New scheduled job</h4>
+            <p class="field-help">Standard 5-field cron (<code>min hour dom month dow</code>), shorthand (<code>@daily</code>, <code>@hourly</code>, <code>@weekdays</code>), or one-shot timestamp.</p>
+          </div>
+          <span class="meta-chip" id="sched-count-chip">0 active</span>
+        </div>
+        <form id="sched-form" class="sched-form" autocomplete="off">
+          <input type="hidden" id="sched-edit-id" value="">
+          <div class="sched-form-grid">
+            <label class="sched-field">
+              <span>Job name</span>
+              <input id="sched-name" type="text" required maxlength="120" placeholder="Morning Security &amp; Dependency Digest">
+            </label>
+            <label class="sched-field">
+              <span>Surface</span>
+              <select id="sched-mode">
+                <option value="godmode">GODMODƎ Chat</option>
+                <option value="godcode">GODCODƎ Repository</option>
+              </select>
+            </label>
+          </div>
+          <label class="sched-field hidden" id="sched-source-wrap">
+            <span>Repository path (GODCODƎ)</span>
+            <input id="sched-source-path" type="text" maxlength="1024" placeholder="/path/to/local/git/repo" spellcheck="false">
+          </label>
+          <label class="sched-field">
+            <span>Prompt / Objective</span>
+            <textarea id="sched-prompt" rows="3" required maxlength="16000" placeholder="Summarize open TODOs, run test suite, and report any regressions."></textarea>
+          </label>
+          <div class="sched-form-grid">
+            <label class="sched-field">
+              <span>Schedule type</span>
+              <select id="sched-kind">
+                <option value="cron">Recurring (Cron)</option>
+                <option value="once">One-shot (Date &amp; Time)</option>
+              </select>
+            </label>
+            <label class="sched-field" id="sched-expr-wrap">
+              <span>Cron expression</span>
+              <input id="sched-expression" type="text" value="0 9 * * 1-5" maxlength="120" spellcheck="false" placeholder="0 9 * * 1-5">
+            </label>
+            <label class="sched-field hidden" id="sched-runat-wrap">
+              <span>Run at (local time)</span>
+              <input id="sched-runat" type="datetime-local">
+            </label>
+          </div>
+          <div class="sched-presets" id="sched-presets" aria-label="Schedule presets">
+            <button type="button" class="button button-quiet sched-preset-btn" data-cron-preset="*/15 * * * *">Every 15m</button>
+            <button type="button" class="button button-quiet sched-preset-btn" data-cron-preset="*/30 * * * *">Every 30m</button>
+            <button type="button" class="button button-quiet sched-preset-btn" data-cron-preset="0 * * * *">Hourly</button>
+            <button type="button" class="button button-quiet sched-preset-btn" data-cron-preset="0 9 * * *">Daily 9 AM</button>
+            <button type="button" class="button button-quiet sched-preset-btn" data-cron-preset="0 9 * * 1-5">Weekdays 9 AM</button>
+            <button type="button" class="button button-quiet sched-preset-btn" data-cron-preset="0 9 * * 1">Weekly Mon</button>
+          </div>
+          <div class="sched-preview" id="sched-preview" role="status">Weekdays at 9:00 AM</div>
+          <div class="sched-form-grid sched-form-grid-3">
+            <label class="sched-field">
+              <span>Model</span>
+              <select id="sched-provider"><option value="">Auto (Ultra-Plinian)</option></select>
+            </label>
+            <label class="sched-field">
+              <span>Effort</span>
+              <select id="sched-effort">
+                <option value="low">Low</option>
+                <option value="medium" selected>Medium</option>
+                <option value="high">High</option>
+                <option value="max">Max</option>
+              </select>
+            </label>
+            <label class="sched-field">
+              <span>Permission Gate</span>
+              <select id="sched-preset">
+                <option value="safe" selected>Safe (Recommended)</option>
+                <option value="read_only">Read-only (Deny writes &amp; shell)</option>
+                <option value="dontAsk">Headless Safe (Auto-deny shell/delete)</option>
+                <option value="default">Ask Everything</option>
+                <option value="acceptEdits">Accept Edits</option>
+              </select>
+            </label>
+          </div>
+          <div class="sched-form-actions">
+            <button type="submit" class="button button-primary" id="sched-save-btn">Create schedule</button>
+            <button type="button" class="button button-quiet hidden" id="sched-cancel-edit">Cancel edit</button>
+          </div>
+        </form>
+      </div>
+      <div class="settings-card">
+        <div class="settings-card-head">
+          <div>
+            <h4>Configured schedules</h4>
+            <p class="field-help">Jobs run automatically while G0DM0D3 is open. Click <strong>History &amp; launchd</strong> on any job to inspect past runs or export a macOS LaunchAgent plist for background runs.</p>
+          </div>
+          <button type="button" class="button button-quiet" id="sched-refresh-btn">Refresh</button>
+        </div>
+        <div id="sched-list" class="sched-list"><p class="field-help">Loading schedules…</p></div>
+      </div>
+    </section>
+
     <section id="settings-pane-system" role="tabpanel" aria-labelledby="settings-tab-system" hidden>
       <header class="settings-pane-head">
         <h3>System Prompts, Tool Schemas &amp; Prefill Lab</h3>
@@ -518,6 +625,45 @@ document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" clas
         </div>
         <p class="field-help">G0DC0D3 ships with zero telemetry endpoints, never fingerprints local CLI auth files, and forcibly disables vendor CLI telemetry env vars (<code>DO_NOT_TRACK</code>, <code>OTEL_SDK_DISABLED</code>, <code>DISABLE_TELEMETRY</code>).</p>
       </div>
+      <section class="settings-card security-profile-card" id="security-profile-card">
+        <div class="permission-gate-header">
+          <div>
+            <h4>Security Posture &amp; Lockdown Mode</h4>
+            <p class="field-help">1-click OPSEC presets bundling ZDR enforcement, secret scrubbing, permission gates, Rules-of-Engagement scope, and ephemeral burn-bag controls for red teams, bug bounty &amp; IR.</p>
+          </div>
+          <span class="meta-chip" id="security-profile-badge">Standard</span>
+        </div>
+        <div class="security-profiles-grid" role="group" aria-label="Security posture presets">
+          <button type="button" class="security-profile-btn" data-security-profile="standard" aria-pressed="true">
+            <strong>Standard</strong>
+            <span>ZDR request routing &amp; secret scrubbing on. Everyday coding and chat.</span>
+          </button>
+          <button type="button" class="security-profile-btn is-hardened" data-security-profile="hardened" aria-pressed="false">
+            <strong>⛨ Hardened (Red Team / Bounty)</strong>
+            <span>Locks Strict ZDR + secret scrubbing + Safe gate + Ephemeral engagement (no disk memory/learning).</span>
+          </button>
+          <button type="button" class="security-profile-btn is-lockdown" data-security-profile="lockdown" aria-pressed="false">
+            <strong>⛨ Airgap Lockdown</strong>
+            <span>Zero cloud egress (local models only) + Ask Everything gate + Ephemeral engagement.</span>
+          </button>
+        </div>
+        <div class="setting-row"><label for="privacy-ephemeral-session">Ephemeral Engagement ("Burn Bag")<small>Pauses cross-session memory saves and local outcome learning so sensitive engagement artifacts stay strictly scoped.</small></label><input type="checkbox" role="switch" class="toggle" id="privacy-ephemeral-session" data-privacy-toggle="ephemeralSession"></div>
+        <div class="scope-guard-block">
+          <div class="scope-guard-head">
+            <h5>Rules-of-Engagement Target Scope (Optional)</h5>
+            <span class="meta-chip" id="privacy-scope-badge">Unrestricted</span>
+          </div>
+          <p class="field-help">Mechanically enforced before every <code>web.fetch</code> and <code>browser.open</code> call. Comma- or newline-separated hostnames or <code>*.domain</code> wildcards.</p>
+          <div class="scope-fields-grid">
+            <label class="field-label" for="privacy-scope-allow">In-scope allowlist <span class="optional">blank = allow public hosts</span><input id="privacy-scope-allow" type="text" placeholder="e.g. *.target-bounty.com, staging.app.io, localhost" autocomplete="off" spellcheck="false"></label>
+            <label class="field-label" for="privacy-scope-deny">Out-of-scope denylist <span class="optional">always blocked</span><input id="privacy-scope-deny" type="text" placeholder="e.g. prod.target-bounty.com, billing.*" autocomplete="off" spellcheck="false"></label>
+          </div>
+          <div class="burn-bag-row">
+            <button type="button" class="button button-secondary" id="privacy-scope-save">Save target scope</button>
+            <button type="button" class="button button-quiet burn-bag-btn" id="privacy-burn-btn" title="Clear outbound audit log, local learning, learned refusal signatures, and close ephemeral browser sessions">Burn session data</button>
+          </div>
+        </div>
+      </section>
       <section class="settings-card privacy-controls-section">
         <div class="settings-card-head">
           <h4>Zero Data Retention (ZDR) &amp; Airgap Controls</h4>
@@ -897,8 +1043,24 @@ function renderPrivacySettings(data) {
   setChecked('#privacy-strict-zdr', s.strictZdr === true);
   setChecked('#privacy-local-only', s.localOnly === true);
   setChecked('#privacy-redact-secrets', s.redactOutboundSecrets !== false);
+  setChecked('#privacy-ephemeral-session', s.ephemeralSession === true);
   const routingEl = $('#privacy-zdr-routing');
   if (routingEl) routingEl.disabled = Boolean(s.strictZdr);
+  const activeProfile = s.securityProfile || (s.localOnly && s.strictZdr ? 'lockdown' : s.strictZdr && s.ephemeralSession ? 'hardened' : 'standard');
+  $$('[data-security-profile]').forEach(btn => {
+    const on = btn.dataset.securityProfile === activeProfile;
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-pressed', String(on));
+  });
+  setText('#security-profile-badge', activeProfile === 'lockdown' ? 'Airgap Lockdown' : activeProfile === 'hardened' ? 'Hardened' : 'Standard');
+  const allow = Array.isArray(s.scopeAllow) ? s.scopeAllow : [];
+  const deny = Array.isArray(s.scopeDeny) ? s.scopeDeny : [];
+  const allowEl = $('#privacy-scope-allow');
+  const denyEl = $('#privacy-scope-deny');
+  if (allowEl && document.activeElement !== allowEl) allowEl.value = allow.join(', ');
+  if (denyEl && document.activeElement !== denyEl) denyEl.value = deny.join(', ');
+  setText('#privacy-scope-badge', (allow.length || deny.length) ? `${allow.length} allow · ${deny.length} deny` : 'Unrestricted');
+  if (typeof window.syncSecurityPostureChrome === 'function') window.syncSecurityPostureChrome(privacy);
 
   const provList = $('#privacy-providers-list');
   if (provList) {
@@ -929,11 +1091,23 @@ async function loadPrivacySettings() {
 async function updatePrivacySetting(key, value) {
   settingsFeedback('Saving privacy setting…');
   try {
-    const data = await api('/api/privacy', { method: 'PATCH', body: JSON.stringify({ [key]: value }) });
+    const payload = typeof key === 'object' ? key : { [key]: value };
+    const data = await api('/api/privacy', { method: 'PATCH', body: JSON.stringify(payload) });
+    if (data.permissions) {
+      globalPermissionsState = data.permissions;
+      state.permissions = data.permissions;
+      renderPermissionsSection();
+    }
     renderPrivacySettings(data);
+    updateSettingsNavBadges();
     if (selectedData?.task) renderTaskMetaStrip(selectedData.task);
-    settingsFeedback('Privacy policy saved.');
-    toast(`Privacy updated: ${key} ${value ? 'ON' : 'OFF'}`);
+    const label = payload.applyProfile
+      ? `Security posture set to ${payload.applyProfile === 'lockdown' ? 'Airgap Lockdown' : payload.applyProfile === 'hardened' ? 'Hardened (Red Team / Bounty)' : 'Standard'}.`
+      : typeof key === 'string'
+        ? `Privacy updated: ${key} ${value ? 'ON' : 'OFF'}`
+        : 'Security scope saved.';
+    settingsFeedback(label);
+    toast(label);
   } catch (error) {
     settingsFeedback(error.message, true);
     toast(error.message);
@@ -1074,11 +1248,18 @@ function updateSettingsNavBadges() {
   setBadge('settings-badge-tools', preset === 'permissive' ? 'Auto' : preset === 'auto' ? 'AI' : preset === 'safe' ? 'Safe' : preset === 'acceptEdits' ? 'Edits' : preset === 'dontAsk' ? 'CI' : 'Ask');
   const ps = state.privacy?.settings;
   if (ps) {
-    setBadge('settings-badge-privacy', ps.localOnly ? 'Airgap' : ps.strictZdr ? 'Strict' : ps.zdrRouting !== false ? 'ZDR' : '', ps.localOnly || ps.strictZdr ? 'is-ok' : '');
+    const badgeTxt = ps.securityProfile === 'lockdown' ? 'Lockdown'
+      : ps.securityProfile === 'hardened' ? 'Hardened'
+      : ps.localOnly ? 'Airgap'
+      : ps.strictZdr ? 'Strict'
+      : ps.zdrRouting !== false ? 'ZDR' : '';
+    setBadge('settings-badge-privacy', badgeTxt, ps.securityProfile === 'lockdown' || ps.securityProfile === 'hardened' || ps.localOnly || ps.strictZdr ? 'is-ok' : '');
   }
   const ov = transparencyState?.overrideCount;
   const ovTotal = (ov?.prompts || 0) + (ov?.tools || 0) + (ov?.disabledTools || 0) + (ov?.injectionsActive ? 1 : 0);
   setBadge('settings-badge-system', ovTotal > 0 ? 'Custom' : '', ovTotal > 0 ? 'is-accent' : '');
+  const schedEnabled = Number(state.schedulesSummary?.enabled || 0);
+  setBadge('settings-badge-schedules', schedEnabled > 0 ? String(schedEnabled) : '', schedEnabled > 0 ? 'is-ok' : '');
 }
 
 function renderPersonalInstructionsFromTransparency() {
@@ -1182,9 +1363,10 @@ async function selectSettingsPane(pane, options = {}) {
   $('.settings-body').scrollTop = 0;
   const scopedPanes = new Set(['general', 'models', 'recovery', 'tools', 'advanced']);
   $('.settings-context')?.classList.toggle('is-muted', !scopedPanes.has(pane));
-  const feedback = { shortcuts: 'Press ? anytime outside Settings to view keyboard shortcuts.', recovery: 'GODMODƎ recovery, retry limits, and continuation controls save automatically.', prompts: 'Saved on this device for every chat.', system: 'Local prompt transparency — overrides apply on this device to live non-fixture chats.', memory: 'Personal instructions, memories, and /skills save locally on this device.', privacy: 'Zero telemetry. ZDR & privacy controls apply immediately.', models: 'Switch between Connections, Catalog, Routing, and Overseer above.', tools: settingsTask() ? 'Permissions save automatically. Save checks after editing.' : 'Permissions and checks apply to individual tasks.' };
+  const feedback = { shortcuts: 'Press ? anytime outside Settings to view keyboard shortcuts.', recovery: 'GODMODƎ recovery, retry limits, and continuation controls save automatically.', prompts: 'Saved on this device for every chat.', schedules: 'Scheduled jobs run locally in your timezone and respect Privacy & Permission Gates.', system: 'Local prompt transparency — overrides apply on this device to live non-fixture chats.', memory: 'Personal instructions, memories, and /skills save locally on this device.', privacy: 'Zero telemetry. ZDR & privacy controls apply immediately.', models: 'Switch between Connections, Catalog, Routing, and Overseer above.', tools: settingsTask() ? 'Permissions save automatically. Save checks after editing.' : 'Permissions and checks apply to individual tasks.' };
   settingsFeedback(feedback[pane] || 'Changes save automatically.');
   if (pane === 'prompts') { try { await loadPromptLibrary(); } catch (error) { settingsFeedback(error.message, true); } }
+  if (pane === 'schedules') { try { await loadSchedulesSettings(); } catch (error) { settingsFeedback(error.message, true); } }
   if (pane === 'system') {
     if (options.subtab) selectTransparencySubtab(options.subtab);
     await loadTransparencySettings();
@@ -1316,6 +1498,8 @@ $('#settings-dialog').addEventListener('click', async event => {
     selectSettingsPane(settingsPane);
     return;
   }
+  const secProfileBtn = event.target.closest('[data-security-profile]');
+  if (secProfileBtn) { updatePrivacySetting({ applyProfile: secProfileBtn.dataset.securityProfile }); return; }
   const presetBtn = event.target.closest('[data-permission-preset]');
   if (presetBtn) { applyPermissionPreset(presetBtn.dataset.permissionPreset); return; }
   const delPerm = event.target.closest('[data-delete-perm-rule]');
@@ -1485,6 +1669,33 @@ $('#skill-add-form').addEventListener('submit', async event => {
 });
 $('#learning-reset').addEventListener('click', async () => { try { await api('/api/learning', { method: 'DELETE', body: '{}' }); await loadLearning(); settingsFeedback('Local learning reset.'); } catch (error) { settingsFeedback(error.message, true); } });
 $('#privacy-audit-clear').addEventListener('click', async () => { try { const data = await api('/api/privacy/audit', { method: 'DELETE', body: '{}' }); renderPrivacySettings(data); settingsFeedback('Outbound audit log cleared.'); } catch (error) { settingsFeedback(error.message, true); } });
+$('#privacy-scope-save')?.addEventListener('click', () => {
+  const scopeAllow = ($('#privacy-scope-allow')?.value || '').split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+  const scopeDeny = ($('#privacy-scope-deny')?.value || '').split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+  updatePrivacySetting({ scopeAllow, scopeDeny });
+});
+$('#privacy-burn-btn')?.addEventListener('click', async () => {
+  const btn = $('#privacy-burn-btn');
+  if (btn) btn.disabled = true;
+  settingsFeedback('Burning session telemetry, learning, and ephemeral browser profiles…');
+  try {
+    const res = await api('/api/privacy/burn', { method: 'POST', body: JSON.stringify({ includeTasks: false }) });
+    if (res.privacy) renderPrivacySettings(res.privacy);
+    if (res.overseer && typeof overseerData !== 'undefined') {
+      overseerData = res.overseer;
+      state.overseer = res.overseer;
+      if (typeof renderOverseerSection === 'function') renderOverseerSection();
+      if (typeof renderOverseerEdge === 'function') renderOverseerEdge();
+    }
+    settingsFeedback('Session burned: cleared outbound audit, local learning, refusal patterns & ephemeral browsers.');
+    toast('Session burned cleanly.');
+  } catch (error) {
+    settingsFeedback(error.message, true);
+    toast(error.message);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+});
 $('#drafts-clear').addEventListener('click', () => { composerDrafts.clear(); composerDraftTimes.clear(); saveComposerDraft('welcome', ''); $('#composer-input').value = ''; resizeComposer(); renderComposer(); settingsFeedback(draftStorageAvailable ? 'Saved drafts cleared.' : 'Could not clear stored drafts.', !draftStorageAvailable); });
 $('#benchmark-open')?.addEventListener('click', () => { $('#settings-dialog')?.close(); openBenchmark(); });
 $('#welcome-create')?.addEventListener('click', () => { $('#settings-dialog')?.close(); openCreate(); });
@@ -2034,4 +2245,352 @@ $('#wire-copy-prompt')?.addEventListener('click', async () => {
 $('#wire-copy-tools')?.addEventListener('click', async () => {
   const txt = $('#wire-tools-preview')?.textContent || '';
   try { await navigator.clipboard.writeText(txt); toast('Copied active tool schemas JSON.'); } catch { toast('Clipboard unavailable.'); }
+});
+
+/* ── Scheduled Jobs & Cron Automations ─────────────────────────────────── */
+let schedulesData = { jobs: [], summary: { total: 0, enabled: 0, running: 0, nextRunAt: null } };
+let schedulesDetailOpen = new Map();
+let schedPreviewTimer = null;
+let schedPreviewSeq = 0;
+
+function formatScheduleTime(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+function populateScheduleProviderSelect(selectedValue = undefined) {
+  const sel = $('#sched-provider');
+  if (!sel) return;
+  const live = (state.providers || []).filter(p => p.kind !== 'scripted' && p.available !== false);
+  const current = selectedValue !== undefined ? selectedValue : (sel.value || '');
+  const opts = ['<option value="">Auto (Ultra-Plinian)</option>'];
+  for (const p of live) {
+    opts.push(`<option value="${escapeHTML(p.id)}" ${p.id === current ? 'selected' : ''}>${escapeHTML(p.label || p.id)}</option>`);
+  }
+  if (current && !live.some(p => p.id === current)) {
+    opts.push(`<option value="${escapeHTML(current)}" selected>${escapeHTML(current)}</option>`);
+  }
+  sel.innerHTML = opts.join('');
+}
+
+function syncScheduleFormVisibility() {
+  const mode = $('#sched-mode')?.value || 'godmode';
+  const kind = $('#sched-kind')?.value || 'cron';
+  $('#sched-source-wrap')?.classList.toggle('hidden', mode !== 'godcode');
+  $('#sched-expr-wrap')?.classList.toggle('hidden', kind !== 'cron');
+  $('#sched-runat-wrap')?.classList.toggle('hidden', kind !== 'once');
+  $('#sched-presets')?.classList.toggle('hidden', kind !== 'cron');
+}
+
+function resetScheduleForm() {
+  if ($('#sched-edit-id')) $('#sched-edit-id').value = '';
+  if ($('#sched-name')) $('#sched-name').value = '';
+  if ($('#sched-mode')) $('#sched-mode').value = 'godmode';
+  if ($('#sched-source-path')) $('#sched-source-path').value = '';
+  if ($('#sched-prompt')) $('#sched-prompt').value = '';
+  if ($('#sched-kind')) $('#sched-kind').value = 'cron';
+  if ($('#sched-expression')) $('#sched-expression').value = '0 9 * * 1-5';
+  if ($('#sched-runat')) $('#sched-runat').value = '';
+  if ($('#sched-effort')) $('#sched-effort').value = 'medium';
+  if ($('#sched-preset')) $('#sched-preset').value = 'safe';
+  populateScheduleProviderSelect('');
+  setText('#sched-form-heading', 'New scheduled job');
+  setText('#sched-save-btn', 'Create schedule');
+  $('#sched-cancel-edit')?.classList.add('hidden');
+  syncScheduleFormVisibility();
+  void refreshSchedulePreview();
+}
+
+function parseLocalDateTimeToIso(raw) {
+  if (!raw) return null;
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString();
+}
+
+async function refreshSchedulePreview() {
+  const box = $('#sched-preview');
+  if (!box) return;
+  const seq = ++schedPreviewSeq;
+  const kind = $('#sched-kind')?.value || 'cron';
+  const expression = $('#sched-expression')?.value || '';
+  const runAtIso = kind === 'once' ? parseLocalDateTimeToIso($('#sched-runat')?.value || '') : null;
+  if (kind === 'once' && !runAtIso) {
+    box.classList.add('is-error');
+    box.textContent = 'Choose a valid date and time for a one-shot schedule.';
+    return;
+  }
+  const payload = kind === 'once'
+    ? { kind: 'once', runAt: runAtIso }
+    : { kind: 'cron', expression };
+  try {
+    const res = await api('/api/schedules/preview', { method: 'POST', body: JSON.stringify(payload) });
+    if (seq !== schedPreviewSeq) return;
+    box.classList.remove('is-error');
+    const upcoming = (res.previewRuns || []).slice(0, 3).map(formatScheduleTime).join(' · ');
+    box.innerHTML = `<strong>${escapeHTML(res.humanLabel || res.normalized || '')}</strong>${upcoming ? `<span class="sched-preview-next">Next: ${escapeHTML(upcoming)}</span>` : ''}`;
+  } catch (err) {
+    if (seq !== schedPreviewSeq) return;
+    box.classList.add('is-error');
+    box.textContent = err.message || 'Invalid schedule expression.';
+  }
+}
+
+function renderSchedulesList() {
+  const list = $('#sched-list');
+  if (!list) return;
+  const jobs = schedulesData.jobs || [];
+  const enabledCount = jobs.filter(j => j.enabled).length;
+  setText('#sched-count-chip', `${enabledCount} active`);
+  state.schedulesSummary = schedulesData.summary || { total: jobs.length, enabled: enabledCount, running: jobs.filter(j => j.running).length };
+  updateSettingsNavBadges();
+  if (typeof renderOverseerEdge === 'function') renderOverseerEdge();
+
+  if (!jobs.length) {
+    list.innerHTML = '<p class="field-help">No scheduled jobs yet. Create a recurring cron or one-shot timer above.</p>';
+    return;
+  }
+
+  const providerLabel = id => {
+    if (!id) return 'Ultra-Plinian Auto';
+    const found = (state.providers || []).find(p => p.id === id);
+    return found?.label || id;
+  };
+
+  list.innerHTML = jobs.map(job => {
+    const statusCls = job.running ? 'is-running' : job.enabled ? 'is-active' : 'is-paused';
+    const statusLabel = job.running ? 'Running' : job.enabled ? 'Active' : 'Paused';
+    const detail = schedulesDetailOpen.get(job.id);
+    const lastChip = job.lastStatus
+      ? `<span class="meta-chip sched-status-${escapeHTML(job.lastStatus)}">Last: ${escapeHTML(job.lastStatus)}${job.lastRunAt ? ` · ${escapeHTML(formatScheduleTime(job.lastRunAt))}` : ''}</span>`
+      : '<span class="meta-chip">Never run</span>';
+    return `<article class="sched-job-card ${statusCls}" data-sched-id="${escapeHTML(job.id)}">
+      <div class="sched-job-top">
+        <div class="sched-job-title-wrap">
+          <span class="sched-dot ${statusCls}" aria-hidden="true"></span>
+          <strong>${escapeHTML(job.name)}</strong>
+          <span class="meta-chip">${escapeHTML(statusLabel)}</span>
+          <span class="meta-chip">${job.mode === 'godcode' ? 'GODCODƎ' : 'GODMODƎ'}</span>
+          ${job.expression ? `<code class="sched-cron-code">${escapeHTML(job.expression)}</code>` : '<span class="meta-chip">One-shot</span>'}
+        </div>
+        <div class="sched-job-actions">
+          <button type="button" class="button button-secondary" data-sched-run="${escapeHTML(job.id)}" ${job.running ? 'disabled' : ''}>Run now</button>
+          <button type="button" class="button button-quiet" data-sched-toggle="${escapeHTML(job.id)}">${job.enabled ? 'Pause' : 'Resume'}</button>
+          <button type="button" class="button button-quiet" data-sched-edit="${escapeHTML(job.id)}">Edit</button>
+          <button type="button" class="button button-quiet" data-sched-detail="${escapeHTML(job.id)}">${detail ? 'Hide' : 'History &amp; launchd'}</button>
+          <button type="button" class="button button-quiet burn-bag-btn" data-sched-delete="${escapeHTML(job.id)}">Delete</button>
+        </div>
+      </div>
+      <p class="sched-job-prompt">${escapeHTML(job.prompt)}</p>
+      <div class="sched-job-meta">
+        <span class="meta-chip">${escapeHTML(job.humanLabel || '')}</span>
+        <span class="meta-chip">Next: ${escapeHTML(job.enabled ? formatScheduleTime(job.nextRunAt) : 'Paused')}</span>
+        <span class="meta-chip">Model: ${escapeHTML(providerLabel(job.providerIds?.[0]))}</span>
+        <span class="meta-chip">Gate: ${escapeHTML(job.permissionPreset || 'safe')}</span>
+        ${lastChip}
+        ${job.lastTaskId ? `<button type="button" class="button button-quiet sched-open-task" data-sched-open-task="${escapeHTML(job.lastTaskId)}">Open thread →</button>` : ''}
+      </div>
+      ${job.lastError ? `<p class="sched-job-error">${escapeHTML(job.lastError)}</p>` : ''}
+      ${detail ? `<div class="sched-detail-drawer">
+        <div class="sched-detail-head"><strong>Recent runs (${(detail.runs || []).length})</strong><button type="button" class="button button-quiet" data-sched-copy-plist="${escapeHTML(job.id)}">Copy macOS launchd plist</button></div>
+        ${(detail.runs || []).length
+          ? `<div class="sched-runs-list">${detail.runs.slice(0, 8).map(r => `<div class="sched-run-row">
+              <span class="meta-chip sched-status-${escapeHTML(r.status)}">${escapeHTML(r.status)}</span>
+              <span>${escapeHTML(formatScheduleTime(r.startedAt))}</span>
+              <span class="field-help">${escapeHTML(r.trigger || 'schedule')}${r.durationMs != null ? ` · ${(r.durationMs / 1000).toFixed(1)}s` : ''}</span>
+              <span class="sched-run-summary">${escapeHTML(r.error || r.summary || '')}</span>
+              ${r.taskId ? `<button type="button" class="button button-quiet sched-open-task" data-sched-open-task="${escapeHTML(r.taskId)}">Open →</button>` : ''}
+            </div>`).join('')}</div>`
+          : '<p class="field-help">No runs recorded yet.</p>'}
+        <details class="sched-plist-details"><summary>macOS LaunchAgent plist (run even when app is closed)</summary><pre class="sched-plist-code">${escapeHTML(detail.launchdPlist || '')}</pre></details>
+      </div>` : ''}
+    </article>`;
+  }).join('');
+}
+
+async function loadSchedulesSettings() {
+  populateScheduleProviderSelect();
+  syncScheduleFormVisibility();
+  const data = await api('/api/schedules');
+  schedulesData = data;
+  const liveIds = new Set((data.jobs || []).map(j => j.id));
+  const refreshDetails = [];
+  for (const openId of [...schedulesDetailOpen.keys()]) {
+    if (!liveIds.has(openId)) {
+      schedulesDetailOpen.delete(openId);
+    } else {
+      refreshDetails.push(
+        api(`/api/schedules/${encodeURIComponent(openId)}`)
+          .then(d => schedulesDetailOpen.set(openId, d))
+          .catch(() => {})
+      );
+    }
+  }
+  if (refreshDetails.length) await Promise.all(refreshDetails);
+  renderSchedulesList();
+  void refreshSchedulePreview();
+}
+
+$('#sched-mode')?.addEventListener('change', syncScheduleFormVisibility);
+$('#sched-kind')?.addEventListener('change', () => { syncScheduleFormVisibility(); void refreshSchedulePreview(); });
+$('#sched-expression')?.addEventListener('input', () => {
+  clearTimeout(schedPreviewTimer);
+  schedPreviewTimer = setTimeout(() => void refreshSchedulePreview(), 180);
+});
+$('#sched-runat')?.addEventListener('change', () => void refreshSchedulePreview());
+$('#sched-presets')?.addEventListener('click', event => {
+  const btn = event.target.closest('[data-cron-preset]');
+  if (!btn) return;
+  if ($('#sched-kind')) $('#sched-kind').value = 'cron';
+  if ($('#sched-expression')) $('#sched-expression').value = btn.dataset.cronPreset;
+  syncScheduleFormVisibility();
+  void refreshSchedulePreview();
+});
+$('#sched-cancel-edit')?.addEventListener('click', resetScheduleForm);
+$('#sched-refresh-btn')?.addEventListener('click', () => void loadSchedulesSettings());
+
+$('#sched-form')?.addEventListener('submit', async event => {
+  event.preventDefault();
+  const editId = $('#sched-edit-id')?.value?.trim() || '';
+  const kind = $('#sched-kind')?.value || 'cron';
+  const mode = $('#sched-mode')?.value || 'godmode';
+  const providerVal = $('#sched-provider')?.value || '';
+  const payload = {
+    name: $('#sched-name')?.value?.trim() || '',
+    mode,
+    sourcePath: mode === 'godcode' ? ($('#sched-source-path')?.value?.trim() || null) : null,
+    prompt: $('#sched-prompt')?.value?.trim() || '',
+    kind,
+    expression: kind === 'cron' ? ($('#sched-expression')?.value?.trim() || '') : null,
+    runAt: kind === 'once' ? parseLocalDateTimeToIso($('#sched-runat')?.value || '') : null,
+    providerIds: providerVal ? [providerVal] : [],
+    effort: $('#sched-effort')?.value || 'medium',
+    permissionPreset: $('#sched-preset')?.value || 'safe',
+  };
+  try {
+    if (editId) {
+      await api(`/api/schedules/${encodeURIComponent(editId)}`, { method: 'PATCH', body: JSON.stringify(payload) });
+      settingsFeedback(`Updated schedule "${payload.name}".`);
+      toast(`Schedule updated: ${payload.name}`);
+    } else {
+      await api('/api/schedules', { method: 'POST', body: JSON.stringify(payload) });
+      settingsFeedback(`Created schedule "${payload.name}".`);
+      toast(`Schedule created: ${payload.name}`);
+    }
+    resetScheduleForm();
+    await loadSchedulesSettings();
+  } catch (error) {
+    settingsFeedback(error.message, true);
+  }
+});
+
+$('#sched-list')?.addEventListener('click', async event => {
+  const openTaskBtn = event.target.closest('[data-sched-open-task]');
+  if (openTaskBtn) {
+    const taskId = openTaskBtn.dataset.schedOpenTask;
+    $('#settings-dialog')?.close();
+    if (typeof refresh === 'function') await refresh();
+    if (typeof selectTask === 'function') await selectTask(taskId);
+    return;
+  }
+  const runBtn = event.target.closest('[data-sched-run]');
+  if (runBtn) {
+    const id = runBtn.dataset.schedRun;
+    runBtn.disabled = true;
+    try {
+      await api(`/api/schedules/${encodeURIComponent(id)}/run`, { method: 'POST', body: '{}' });
+      settingsFeedback('Scheduled job triggered — check Chats or History for progress.');
+      toast('Scheduled job started.');
+      await loadSchedulesSettings();
+      if (typeof refresh === 'function') setTimeout(() => void refresh(), 500);
+    } catch (error) {
+      settingsFeedback(error.message, true);
+      runBtn.disabled = false;
+    }
+    return;
+  }
+  const toggleBtn = event.target.closest('[data-sched-toggle]');
+  if (toggleBtn) {
+    const id = toggleBtn.dataset.schedToggle;
+    const job = (schedulesData.jobs || []).find(j => j.id === id);
+    if (!job) return;
+    try {
+      await api(`/api/schedules/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ enabled: !job.enabled }) });
+      settingsFeedback(`${job.name} ${job.enabled ? 'paused' : 'resumed'}.`);
+      await loadSchedulesSettings();
+    } catch (error) { settingsFeedback(error.message, true); }
+    return;
+  }
+  const editBtn = event.target.closest('[data-sched-edit]');
+  if (editBtn) {
+    const job = (schedulesData.jobs || []).find(j => j.id === editBtn.dataset.schedEdit);
+    if (!job) return;
+    $('#sched-edit-id').value = job.id;
+    $('#sched-name').value = job.name || '';
+    $('#sched-mode').value = job.mode || 'godmode';
+    $('#sched-source-path').value = job.sourcePath || '';
+    $('#sched-prompt').value = job.prompt || '';
+    $('#sched-kind').value = job.kind || 'cron';
+    $('#sched-expression').value = job.expression || '0 9 * * 1-5';
+    if (job.runAt) {
+      const dt = new Date(job.runAt);
+      if (!Number.isNaN(dt.getTime())) {
+        const localIso = new Date(dt.getTime() - dt.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+        $('#sched-runat').value = localIso;
+      } else {
+        $('#sched-runat').value = '';
+      }
+    } else {
+      $('#sched-runat').value = '';
+    }
+    $('#sched-effort').value = job.effort || 'medium';
+    $('#sched-preset').value = job.permissionPreset || 'safe';
+    populateScheduleProviderSelect(job.providerIds?.[0] || '');
+    setText('#sched-form-heading', `Edit schedule: ${job.name}`);
+    setText('#sched-save-btn', 'Save changes');
+    $('#sched-cancel-edit')?.classList.remove('hidden');
+    syncScheduleFormVisibility();
+    void refreshSchedulePreview();
+    $('#sched-name')?.focus();
+    return;
+  }
+  const detailBtn = event.target.closest('[data-sched-detail]');
+  if (detailBtn) {
+    const id = detailBtn.dataset.schedDetail;
+    if (schedulesDetailOpen.has(id)) {
+      schedulesDetailOpen.delete(id);
+      renderSchedulesList();
+      return;
+    }
+    try {
+      const detail = await api(`/api/schedules/${encodeURIComponent(id)}`);
+      schedulesDetailOpen.set(id, detail);
+      renderSchedulesList();
+    } catch (error) { settingsFeedback(error.message, true); }
+    return;
+  }
+  const copyPlistBtn = event.target.closest('[data-sched-copy-plist]');
+  if (copyPlistBtn) {
+    const detail = schedulesDetailOpen.get(copyPlistBtn.dataset.schedCopyPlist);
+    if (!detail?.launchdPlist) return;
+    try {
+      await navigator.clipboard.writeText(detail.launchdPlist);
+      toast('Copied macOS launchd plist to clipboard.');
+    } catch { settingsFeedback('Clipboard unavailable in this context.', true); }
+    return;
+  }
+  const delBtn = event.target.closest('[data-sched-delete]');
+  if (delBtn) {
+    const id = delBtn.dataset.schedDelete;
+    const job = (schedulesData.jobs || []).find(j => j.id === id);
+    try {
+      await api(`/api/schedules/${encodeURIComponent(id)}`, { method: 'DELETE', body: '{}' });
+      schedulesDetailOpen.delete(id);
+      if ($('#sched-edit-id')?.value === id) resetScheduleForm();
+      settingsFeedback(`Deleted schedule "${job?.name || id}".`);
+      await loadSchedulesSettings();
+    } catch (error) { settingsFeedback(error.message, true); }
+  }
 });

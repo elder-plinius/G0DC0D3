@@ -7,6 +7,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Runtime } from './runtime.mjs';
+import { CRON_PRESETS } from './cron.mjs';
 import { evaluateTask } from './evaluator.mjs';
 import { environmentProviders, HttpProvider } from './providers.mjs';
 import { createProviderSettings, linuxSecretToolKeychain, nativeKeychain } from './provider-settings.mjs';
@@ -85,7 +86,7 @@ async function readBody(req, maxBytes = 65536) {
   catch {throw Object.assign(new Error('Expected a JSON object'),{status:400});}
 }
 
-export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(projectDir,'.g0dc0d3'),providers,evaluator=evaluateTask,auth=true,keychain,fetchCatalog,fetchOpenRouterCatalog,fetchProviderCatalog,cliDiscovery={}}={}) {
+export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(projectDir,'.g0dc0d3'),providers,evaluator=evaluateTask,auth=true,keychain,fetchCatalog,fetchOpenRouterCatalog,fetchProviderCatalog,cliDiscovery={},startScheduler=true,schedulerTickMs=15000}={}) {
   dataDir=path.resolve(dataDir);
   const configuredProviders = !providers;
   providers ||= new Map([...createScriptedProviders(),...environmentProviders()]);
@@ -95,7 +96,7 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
   const cliConnections = await createCliConnections({...cliDiscovery,dataDir,providers});
   const modelCatalog = await createModelCatalog({dataDir, ...(fetchOpenRouterCatalog ? { fetchImpl: fetchOpenRouterCatalog } : {})});
   const catalog = createVeniceCatalog(providers, fetchCatalog, () => runtime.getPrivacy().settings);
-  const runtime = new Runtime({dataDir,providers,evaluator,catalog,
+  const runtime = new Runtime({dataDir,providers,evaluator,catalog,startScheduler,schedulerTickMs,
     outboundSecrets: () => [...environmentSecrets(), ...providerSettings.secrets]});
   const serviceStatus = createServiceStatus({providers,cliConnections,getPrivacy:()=>runtime.getPrivacy().settings});
   const promptCommands = createPromptCommands(runtime.store);
@@ -210,7 +211,7 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
         openrouterConnectionId:[...providers.values()].find(provider=>provider.baseUrl==='https://openrouter.ai/api/v1' && provider.available && !provider.closed)?.id || null,
         connectedApiProviders:providerSettings.connectedProfiles(),
         tasks:runtime.listTasks().map(task=>taskSummary(task,runtime)),providers:[...providers.values()].map(provider=>({id:provider.id,label:provider.label,model:provider.model||null,kind:provider.kind,available:provider.available??true,accounting:provider.accounting,tier:provider.tier||'standard',zdr:classifyProviderZdr(provider),meta:classifyModel(provider,{catalog:modelCatalog,learning})})),
-        fixtures:fixtures.map(({id,title,description,objective})=>({id,title,description,objective})),scenarios:scriptedScenarios,benchmark,version:'0.2.0',capabilities,limitations,personas:PERSONAS,tools:TOOLS.map(({name,description,parameters,result})=>({name,description,parameters,resultSchema:result})),executionAvailable:isSandboxSupportedPlatform(),sessionProtected:auth,workflows:listWorkflows(),permissions:runtime.getGlobalPermissions(),privacy:runtime.getPrivacy(),overseer:runtime.getOverseer(),router:runtime.getRouterSettings(),modelGroups:runtime.getModelGroups({sortBy,catalog:modelCatalog}),sortModes:MODEL_SORT_MODES,catalogMeta:modelCatalog.meta()
+        fixtures:fixtures.map(({id,title,description,objective})=>({id,title,description,objective})),scenarios:scriptedScenarios,benchmark,version:'0.2.0',capabilities,limitations,personas:PERSONAS,tools:TOOLS.map(({name,description,parameters,result})=>({name,description,parameters,resultSchema:result})),executionAvailable:isSandboxSupportedPlatform(),sessionProtected:auth,workflows:listWorkflows(),permissions:runtime.getGlobalPermissions(),privacy:runtime.getPrivacy(),overseer:runtime.getOverseer(),router:runtime.getRouterSettings(),schedulesSummary:runtime.getSchedulesSummary(),modelGroups:runtime.getModelGroups({sortBy,catalog:modelCatalog}),sortModes:MODEL_SORT_MODES,catalogMeta:modelCatalog.meta()
       });
       }
       if(req.method==='GET' && url.pathname==='/api/browser/settings')return send(res,200,await runtime.getBrowserInfo());
@@ -269,6 +270,31 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
       if(req.method==='GET' && url.pathname==='/api/privacy')return send(res,200,runtime.getPrivacy());
       if(req.method==='PATCH' && url.pathname==='/api/privacy')return send(res,200,runtime.updatePrivacy(await readBody(req)));
       if(req.method==='DELETE' && url.pathname==='/api/privacy/audit'){await readBody(req);return send(res,200,runtime.clearOutboundAudit());}
+      if(req.method==='POST' && url.pathname==='/api/privacy/burn')return send(res,200,await runtime.burnSession(await readBody(req)));
+      if(req.method==='GET' && url.pathname==='/api/schedules') {
+        return send(res,200,{jobs:runtime.listScheduledJobs(),summary:runtime.getSchedulesSummary(),presets:CRON_PRESETS,serverTime:new Date().toISOString()});
+      }
+      if(req.method==='POST' && url.pathname==='/api/schedules/preview') {
+        return send(res,200,runtime.previewSchedule(await readBody(req)));
+      }
+      if(req.method==='POST' && url.pathname==='/api/schedules') {
+        const job = runtime.createScheduledJob(await readBody(req));
+        return send(res,201,{job,summary:runtime.getSchedulesSummary()});
+      }
+      const schedRunMatch = req.method==='POST' && url.pathname.match(/^\/api\/schedules\/([^/]+)\/run$/);
+      if(schedRunMatch) {
+        const body = req.headers['content-length'] === '0' ? {} : await readBody(req);
+        if (body?.wait) { req.setTimeout?.(0); res.setTimeout?.(0); }
+        const result = await runtime.runScheduledJobNow(decodeURIComponent(schedRunMatch[1]), { wait: Boolean(body?.wait) });
+        return send(res,202,{...result,summary:runtime.getSchedulesSummary()});
+      }
+      const schedMatch = url.pathname.match(/^\/api\/schedules\/([^/]+)$/);
+      if(schedMatch) {
+        const schedId = decodeURIComponent(schedMatch[1]);
+        if(req.method==='GET') return send(res,200,{job:runtime.getScheduledJob(schedId),runs:runtime.getScheduledRuns(schedId, 25),launchdPlist:runtime.getScheduledJobPlist(schedId)});
+        if(req.method==='PATCH') return send(res,200,{job:runtime.updateScheduledJob(schedId, await readBody(req)),summary:runtime.getSchedulesSummary()});
+        if(req.method==='DELETE') { if (req.headers['content-length'] !== '0') await readBody(req); return send(res,200,{...runtime.deleteScheduledJob(schedId),summary:runtime.getSchedulesSummary()}); }
+      }
       if(req.method==='GET' && url.pathname==='/api/transparency')return send(res,200,runtime.getTransparency(url.searchParams.get('taskId')||null));
       if(req.method==='PATCH' && url.pathname==='/api/transparency'){const body=await readBody(req);return send(res,200,runtime.updateTransparency(body,url.searchParams.get('taskId')||body?.taskId||null));}
       if(req.method==='POST' && url.pathname==='/api/transparency/reset'){const body=await readBody(req);return send(res,200,runtime.resetTransparency({...body,taskId:url.searchParams.get('taskId')||body?.taskId||null}));}
@@ -321,6 +347,9 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
         return send(res,200,{...result,memoryFile:runtime.memory.memoryFile});
       }
       if(req.method==='POST' && url.pathname==='/api/memory') {
+        if (runtime.getPrivacy().settings.ephemeralSession) {
+          return send(res, 403, { error: 'Ephemeral engagement mode is active; persistent memory saves are paused.', code: 'EPHEMERAL_SESSION' });
+        }
         const body=await readBody(req);
         let scope=body.scope||'global';
         if(scope==='project') {

@@ -7515,3 +7515,416 @@ body.browser-open.sidebar-collapsed .browser-dock { grid-column: 2; }
   border-color: #d8d4e2;
   color: #1e1a28;
 }
+
+/* ── Hardened / Lockdown Security Mode & Sidebar Overseer Quick Popover ──── */
+.security-profiles-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.security-profile-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel-soft);
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .15s ease, background-color .15s ease, color .15s ease;
+}
+.security-profile-btn strong {
+  font-size: .8rem;
+  color: var(--text);
+}
+.security-profile-btn span {
+  font-size: .71rem;
+  line-height: 1.4;
+  color: var(--muted);
+}
+.security-profile-btn:hover {
+  border-color: color-mix(in srgb, var(--violet) 48%, var(--line));
+}
+.security-profile-btn.active {
+  border-color: color-mix(in srgb, var(--violet) 65%, var(--line));
+  background: color-mix(in srgb, var(--violet) 12%, var(--panel-soft));
+}
+.security-profile-btn.is-hardened.active {
+  border-color: color-mix(in srgb, var(--amber, #f59e0b) 65%, var(--line));
+  background: color-mix(in srgb, var(--amber, #f59e0b) 11%, var(--panel-soft));
+}
+.security-profile-btn.is-lockdown.active {
+  border-color: color-mix(in srgb, var(--signal, #4ade80) 65%, var(--line));
+  background: color-mix(in srgb, var(--signal, #4ade80) 11%, var(--panel-soft));
+}
+.scope-guard-block {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.scope-guard-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.scope-guard-head h5 {
+  margin: 0;
+  font-size: .8rem;
+  font-weight: 600;
+  color: var(--text);
+}
+.scope-fields-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+.scope-fields-grid input {
+  width: 100%;
+  margin-top: 4px;
+  font-family: var(--mono);
+  font-size: .74rem;
+}
+.burn-bag-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+.burn-bag-btn {
+  color: var(--red, #f87171);
+}
+.security-posture-pill {
+  border: 1px solid color-mix(in srgb, var(--amber, #f59e0b) 42%, var(--line));
+  background: color-mix(in srgb, var(--amber, #f59e0b) 10%, transparent);
+  color: var(--text);
+}
+.security-posture-pill.is-lockdown {
+  border-color: color-mix(in srgb, var(--signal, #4ade80) 48%, var(--line));
+  background: color-mix(in srgb, var(--signal, #4ade80) 11%, transparent);
+}
+.sidebar-link > span.overseer-edge-badge,
+.overseer-edge-badge {
+  margin-left: auto;
+  flex-shrink: 0;
+  overflow: visible;
+  text-overflow: clip;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel-soft);
+  font-family: var(--mono);
+  font-size: .64rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+.overseer-edge-badge.is-active {
+  border-color: color-mix(in srgb, var(--signal, #4ade80) 48%, var(--line));
+  background: color-mix(in srgb, var(--signal, #4ade80) 14%, var(--panel-soft));
+  color: var(--signal, #4ade80);
+}
+.overseer-edge-badge.is-blocked {
+  border-color: color-mix(in srgb, var(--red, #f87171) 48%, var(--line));
+  background: color-mix(in srgb, var(--red, #f87171) 14%, var(--panel-soft));
+  color: var(--red, #f87171);
+}
+.overseer-popover {
+  width: min(360px, calc(100vw - 24px));
+}
+.overseer-popover-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px 14px;
+}
+.overseer-pop-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.overseer-pop-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: .82rem;
+}
+.overseer-pop-switch {
+  padding: 5px 11px;
+  min-height: 28px;
+  font-size: .75rem;
+}
+.overseer-pop-selects {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.overseer-pop-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: .71rem;
+  color: var(--muted);
+}
+.overseer-pop-field span {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.overseer-pop-field select {
+  width: 100%;
+  height: 31px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--text);
+  font-size: .75rem;
+}
+.overseer-pop-checks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: .76rem;
+}
+.overseer-pop-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+}
+.overseer-pop-foot-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+:root[data-theme="light"] .overseer-pop-field select {
+  background: #ffffff;
+  border-color: #d8d4e2;
+  color: #1e1a28;
+}
+/* ── Schedules & Cron Jobs UI ──────────────────────────────────────────── */
+.sched-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.sched-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+}
+.sched-form-grid-3 {
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+.sched-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: .76rem;
+  color: var(--text-secondary);
+}
+.sched-field span {
+  font-weight: 600;
+}
+.sched-field input,
+.sched-field select,
+.sched-field textarea {
+  width: 100%;
+}
+.sched-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.sched-preset-btn {
+  padding: 4px 9px;
+  min-height: 26px;
+  font-size: .72rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+.sched-preview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 11px;
+  border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--signal, #4ade80) 32%, var(--line));
+  background: color-mix(in srgb, var(--signal, #4ade80) 7%, var(--panel-soft));
+  font-size: .76rem;
+  color: var(--text);
+}
+.sched-preview.is-error {
+  border-color: color-mix(in srgb, var(--red, #f87171) 45%, var(--line));
+  background: color-mix(in srgb, var(--red, #f87171) 9%, var(--panel-soft));
+  color: var(--red, #f87171);
+}
+.sched-preview-next {
+  font-family: var(--mono);
+  font-size: .7rem;
+  color: var(--muted);
+}
+.sched-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+.sched-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.sched-job-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel-soft);
+}
+.sched-job-card.is-paused {
+  border-style: dashed;
+  opacity: .9;
+}
+.sched-job-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.sched-job-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  font-size: .85rem;
+}
+.sched-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--muted);
+  flex-shrink: 0;
+}
+.sched-dot.is-active {
+  background: var(--signal, #4ade80);
+}
+.sched-dot.is-running {
+  background: var(--violet, #a78bfa);
+}
+.sched-cron-code {
+  padding: 1px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  font-family: var(--mono);
+  font-size: .71rem;
+  color: var(--text-secondary);
+}
+.sched-job-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.sched-job-prompt {
+  margin: 0;
+  font-size: .79rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.sched-job-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.sched-open-task {
+  padding: 2px 8px;
+  min-height: 24px;
+  font-size: .72rem;
+}
+.sched-job-error {
+  margin: 0;
+  font-size: .74rem;
+  color: var(--red, #f87171);
+}
+.sched-status-completed {
+  color: var(--signal, #4ade80);
+}
+.sched-status-failed,
+.sched-status-blocked {
+  color: var(--red, #f87171);
+}
+.sched-detail-drawer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+  padding-top: 9px;
+  border-top: 1px solid var(--line);
+}
+.sched-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: .76rem;
+}
+.sched-runs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sched-run-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: .74rem;
+  padding: 6px 8px;
+  border-radius: 7px;
+  background: var(--bg);
+  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+}
+.sched-run-summary {
+  flex: 1 1 200px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+.sched-plist-details summary {
+  cursor: pointer;
+  font-size: .74rem;
+  color: var(--text-secondary);
+}
+.sched-plist-code {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  font-family: var(--mono);
+  font-size: .68rem;
+  overflow-x: auto;
+  max-height: 220px;
+}

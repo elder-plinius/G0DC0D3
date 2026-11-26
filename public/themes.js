@@ -1470,6 +1470,8 @@
       btn.setAttribute('aria-expanded', 'false');
       btn.addEventListener('click', event => {
         event.stopPropagation();
+        document.getElementById('overseer-popover')?.classList.add('hidden');
+        document.getElementById('overseer-toggle')?.setAttribute('aria-expanded', 'false');
         togglePopover();
       });
     }

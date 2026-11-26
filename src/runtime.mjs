@@ -7,6 +7,9 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { promises as fs, constants as fsConstants } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Store } from './store.mjs';
+import { CronScheduler, CRON_PRESETS, READ_ONLY_SCHEDULE_RULES, validateScheduleInput, renderLaunchdPlist } from './cron.mjs';
+import { createConversationTask, createImportedTask } from './workspaces.mjs';
+import { fileURLToPath } from 'node:url';
 import { Broker, snapshotWorkspace, sha256, taskTools, conversationWithoutChecks, bindVerification, stableJson, evaluateBounded, scopedPath, READ_ONLY_TOOLS } from './broker.mjs';
 import { BrowserPool, DEFAULT_BROWSER_SETTINGS, normalizeBrowserSettings, findChromiumBinary } from './browser-env.mjs';
 import { validateTool } from './tool-schema.mjs';
@@ -81,6 +84,7 @@ import { buildModelGroups } from './model-groups.mjs';
 import {
   TELEMETRY_POLICY,
   DEFAULT_PRIVACY_SETTINGS,
+  SECURITY_PROFILES,
   OutboundAuditLog,
   checkProviderPrivacyAllowed,
   classifyProviderZdr,
@@ -663,7 +667,7 @@ export function buildContext({ task, history, files, snapshotHash, learning, mem
 }
 
 export class Runtime {
-  constructor({ dataDir, providers = new Map(), evaluator, faultInjector, catalog, outboundSecrets = environmentSecrets } = {}) {
+  constructor({ dataDir, providers = new Map(), evaluator, faultInjector, catalog, outboundSecrets = environmentSecrets, startScheduler = false, schedulerTickMs = 15000 } = {}) {
     this.outboundSecrets = outboundSecrets;
     if (!dataDir) throw new Error('dataDir is required');
     this.store = new Store(dataDir);
@@ -693,6 +697,12 @@ export class Runtime {
     this.outboundAudit = new OutboundAuditLog({ maxEntries: 100 });
     this.activeSubagents = new Map();
     this._workerSteers = new Map();
+    this.cron = new CronScheduler({
+      store: this.store,
+      tickMs: schedulerTickMs,
+      onTrigger: (job, run) => this._executeScheduledJob(job, run),
+    });
+    if (startScheduler) this.cron.start();
   }
   subscribeStream(taskId, callback) {
     if (!this._streamSubs.has(taskId)) this._streamSubs.set(taskId, new Set());
@@ -2138,7 +2148,7 @@ export class Runtime {
               reason: verdict.reason
             });
             if (verdict.isRefusal) {
-              if (task.policy?.learning !== false) {
+              if (task.policy?.learning !== false && !this.getPrivacy().settings.ephemeralSession) {
                 const sig = extractDeclineSignature(response.text);
                 if (sig) this.store.recordRefusalPattern({ signature: sig, source: 'overseer_judge', providerId: task.providerId });
               }
@@ -2375,16 +2385,18 @@ export class Runtime {
     if (events.some(event => event.type === 'model.switched')) notes.push('checkpoint-handoff');
     if (events.some(event => event.type === 'evaluation.completed' && event.data.status === 'fail')) notes.push('repair-from-evidence');
     if (names.includes('repo.read') || names.includes('repo.patch')) notes.push('retrieve-before-edit');
-    this.store.recordLearning(`${id}:${task.contractVersion || 1}:verified`, observations, notes);
-    if (task.routing?.lastRecoveryStrategy?.strategy) {
-      this.store.recordStrategyLearning(`${id}:${task.contractVersion || 1}:strategy:win:${task.recoveries || 0}`, {
-        modelFamily: task.routing.lastRecoveryStrategy.modelFamily || inferModelFamily(task.providerId),
-        strategy: task.routing.lastRecoveryStrategy.strategy,
-        outcome: 'success'
-      });
+    if (!this.getPrivacy().settings.ephemeralSession) {
+      this.store.recordLearning(`${id}:${task.contractVersion || 1}:verified`, observations, notes);
+      if (task.routing?.lastRecoveryStrategy?.strategy) {
+        this.store.recordStrategyLearning(`${id}:${task.contractVersion || 1}:strategy:win:${task.recoveries || 0}`, {
+          modelFamily: task.routing.lastRecoveryStrategy.modelFamily || inferModelFamily(task.providerId),
+          strategy: task.routing.lastRecoveryStrategy.strategy,
+          outcome: 'success'
+        });
+      }
+      const domain = task.routing?.domain || classifyPromptDomain(task.followups?.at(-1)?.message || task.objective, { attachments: task.attachments }).primaryDomain;
+      try { this.store.recordDomainOutcome({ domain, providerId: task.providerId, outcome: 'win' }); } catch {}
     }
-    const domain = task.routing?.domain || classifyPromptDomain(task.followups?.at(-1)?.message || task.objective, { attachments: task.attachments }).primaryDomain;
-    try { this.store.recordDomainOutcome({ domain, providerId: task.providerId, outcome: 'win' }); } catch {}
   }
   async _recover(id, epoch, incident, signal) {
     signal = signal || this.runs.get(id)?.controller?.signal;
@@ -2500,7 +2512,7 @@ export class Runtime {
         }
       }
       const isRefusal = incident.code === 'CONTENT_RESTRICTION' || incident.kind === 'refusal';
-      if (isRefusal && task.policy.learning !== false) {
+      if (isRefusal && task.policy.learning !== false && !this.getPrivacy().settings.ephemeralSession) {
         const refDomain = task.routing?.domain || classifyPromptDomain(task.followups?.at(-1)?.message || task.objective, { attachments: task.attachments }).primaryDomain;
         try { this.store.recordDomainOutcome({ domain: refDomain, providerId: task.providerId, outcome: 'refusal' }); } catch {}
       }
@@ -2583,7 +2595,7 @@ export class Runtime {
     }
     // Repeated failures in one contract are correlated evidence, not independent
     // samples. A loop cannot manufacture confidence by repeatedly declining.
-    if (task.policy.learning !== false) {
+    if (task.policy.learning !== false && !this.getPrivacy().settings.ephemeralSession) {
       this.store.recordLearning(`${id}:${task.contractVersion || 1}:failure:${providerKey}:${diagnosis.category}`, [{ providerId: task.providerId, providerKey, category: diagnosis.category, outcome: 'failure', ...(Number.isFinite(incident.durationMs ?? task.routing?.lastTurnDurationMs) ? { durationMs: incident.durationMs ?? task.routing.lastTurnDurationMs } : {}) }]);
       if (diagnosis.category === 'content_restriction' || diagnosis.category === 'refusal') {
         const refDomain = task.routing?.domain || classifyPromptDomain(task.followups?.at(-1)?.message || task.objective, { attachments: task.attachments }).primaryDomain;
@@ -2647,7 +2659,7 @@ export class Runtime {
       }
       // Ultra-Plinian recovery: consult pluggable Overseer (if configured & privacy-allowed)
       // and apply bandit-guided escalating semantic reframing before model switching.
-      if (task.policy.learning !== false && task.routing?.lastRecoveryStrategy?.strategy && ['content_restriction', 'refusal', 'stalled'].includes(diagnosis.category)) {
+      if (task.policy.learning !== false && !this.getPrivacy().settings.ephemeralSession && task.routing?.lastRecoveryStrategy?.strategy && ['content_restriction', 'refusal', 'stalled'].includes(diagnosis.category)) {
         this.store.recordStrategyLearning(`${id}:${task.contractVersion || 1}:strategy:fail:${task.calls}:${task.recoveries}`, {
           modelFamily: task.routing.lastRecoveryStrategy.modelFamily || inferModelFamily(task.providerId),
           strategy: task.routing.lastRecoveryStrategy.strategy,
@@ -3346,7 +3358,7 @@ export class Runtime {
     if (active.has(task.status) || this.runs.has(id)) throw fault('TASK_RUNNING', 'Wait for the current turn to finish before flagging a refusal.');
     const provider = this.selectedProvider(task.providerId, task.workspaceKind);
     const providerKey = providerIdentity(task.providerId, provider || {});
-    if (task.policy?.learning !== false) {
+    if (task.policy?.learning !== false && !this.getPrivacy().settings.ephemeralSession) {
       this.store.recordLearning(`${id}:${task.contractVersion || 1}:owner_refusal:${task.calls}:${providerKey}`, [{
         providerId: task.providerId,
         providerKey,
@@ -3411,6 +3423,7 @@ export class Runtime {
     });
     return {
       telemetry: TELEMETRY_POLICY,
+      profiles: SECURITY_PROFILES,
       settings,
       providers,
       audit: this.outboundAudit.list()
@@ -3424,11 +3437,38 @@ export class Runtime {
     const current = this.getPrivacy().settings;
     const next = normalizePrivacySettings(patch, current);
     this.store.setLocalState('privacySettings', next);
-    return this.getPrivacy();
+    const appliedProfileKey = patch?.applyProfile !== undefined ? String(patch.applyProfile).trim().toLowerCase() : null;
+    const appliedPreset = appliedProfileKey && SECURITY_PROFILES[appliedProfileKey]?.permissionPreset;
+    if (appliedPreset && PERMISSION_PRESETS[appliedPreset]) {
+      this.updateGlobalPermissions([...PERMISSION_PRESETS[appliedPreset]]);
+    }
+    return { ...this.getPrivacy(), permissions: this.getGlobalPermissions() };
   }
   clearOutboundAudit() {
     this.outboundAudit.clear();
     return this.getPrivacy();
+  }
+  async burnSession({ includeTasks = false } = {}) {
+    this.outboundAudit.clear();
+    this.resetLearning();
+    this.deleteRefusalPattern(null);
+    await this.broker.browser.closeAll().catch(() => {});
+    let tasksPurged = 0;
+    if (includeTasks === true) {
+      for (const task of this.listTasks()) {
+        if (active.has(task.status) || this.runs.has(task.id) || this.crew.busy(task.id)) continue;
+        try {
+          await this.purgeTask(task.id);
+          tasksPurged += 1;
+        } catch {}
+      }
+    }
+    return {
+      burned: true,
+      cleared: { audit: true, learning: true, browsers: true, tasksPurged },
+      privacy: this.getPrivacy(),
+      overseer: this.getOverseer(),
+    };
   }
   getTransparencyConfig() {
     const stored = this.store.getLocalState('promptTransparency', DEFAULT_TRANSPARENCY_CONFIG);
@@ -4148,15 +4188,165 @@ export class Runtime {
     if (current.version !== task.version || current.epoch !== task.epoch || current.status !== task.status) throw fault('ACCEPTANCE_STALE', 'Task changed while acceptance was capturing its snapshot; review its current state and retry.');
     return this.store.updateTask(id, current => { current.status = 'completed'; current.completionKind = 'user_accepted'; current.acceptedSnapshotHash = snapshot.snapshotHash; current.completedAt = new Date().toISOString(); return current; }, 'task.completed', { completionKind: 'user_accepted', snapshotHash: snapshot.snapshotHash, independentVerification: task.verification?.status || 'unknown' });
   }
+  listScheduledJobs() { return this.cron.listJobs(); }
+  getScheduledJob(id) { return this.cron.getJob(id); }
+  getScheduledRuns(id, limit = 25) { return this.cron.getRuns(id, limit); }
+  getSchedulesSummary() { return this.cron.summary(); }
+  previewSchedule(input) { return validateScheduleInput(input); }
+  createScheduledJob(input) { return this.cron.createJob(input); }
+  updateScheduledJob(id, patch) { return this.cron.updateJob(id, patch); }
+  deleteScheduledJob(id) { return this.cron.deleteJob(id); }
+  getScheduledJobPlist(id) {
+    const job = this.cron.getJob(id);
+    const cliPath = fileURLToPath(new URL('./cli.mjs', import.meta.url));
+    return renderLaunchdPlist(job, { nodePath: process.execPath, cliPath, dataDir: this.store.dataDir });
+  }
+  async runScheduledJobNow(id, { wait = false, respectEnabled = false } = {}) {
+    const dispatched = this.cron.triggerNow(id, { respectEnabled });
+    if (dispatched.skipped) {
+      return { skipped: true, reason: dispatched.reason, run: null, job: this.cron.getJob(id) };
+    }
+    const { run, promise } = dispatched;
+    if (wait) {
+      const finalRun = await promise;
+      let job = null;
+      try { job = this.cron.getJob(id); } catch {}
+      return { run: finalRun, job };
+    }
+    promise.catch(() => {});
+    return { run, job: this.cron.getJob(id) };
+  }
+  async _executeScheduledJob(job, run) {
+    if (this.closed) return { status: 'cancelled', error: 'Runtime is closing.' };
+    const privacy = this.getPrivacy().settings;
+    const filtered = this._privacyFilteredProviders();
+    const isLive = p => p && p.kind && p.kind !== 'scripted' && p.available !== false && !p.closed;
+
+    let selectedIds = Array.isArray(job.providerIds) ? job.providerIds.filter(Boolean) : [];
+    if (job.mode !== 'godcode' && selectedIds.some(id => isCatalogModel(id))) {
+      try { await this.catalog?.list?.(); } catch {}
+    }
+    if (selectedIds.length) {
+      const eligible = selectedIds.filter(id => {
+        if (isCatalogModel(id)) return job.mode !== 'godcode' && !privacy.localOnly && Boolean(this.catalog?.get?.(id));
+        const p = filtered.get(id);
+        return isLive(p);
+      });
+      if (!eligible.length) {
+        const hadRaw = selectedIds.some(id => isLive(this.providers.get(id)));
+        const reason = privacy.localOnly
+          ? 'Airgap Lockdown blocked scheduled cloud model. Assign a local model or relax Lockdown mode.'
+          : (privacy.strictZdr && hadRaw)
+            ? 'Strict ZDR blocked the configured scheduled provider. Choose a verified ZDR or local model.'
+            : (job.mode === 'godcode' && selectedIds.some(id => isCatalogModel(id)))
+              ? 'GODCODƎ scheduled jobs require a connected provider (not a catalog-only model).'
+              : 'Configured scheduled provider is currently unavailable or disabled.';
+        return { status: 'blocked', error: reason };
+      }
+      selectedIds = eligible;
+    } else {
+      const liveFiltered = [...filtered.values()].filter(isLive);
+      if (!liveFiltered.length) {
+        return {
+          status: 'blocked',
+          error: privacy.localOnly
+            ? 'Airgap Lockdown is active and no local model is configured for scheduled runs.'
+            : privacy.strictZdr
+              ? 'Strict ZDR is active and no verified ZDR or local model is configured for scheduled runs.'
+              : 'No configured live model is available for scheduled runs.',
+        };
+      }
+      try {
+        const decision = routeUltraPlinian({
+          prompt: job.prompt,
+          providers: filtered,
+          learning: this.getLearning(),
+          settings: this.getRouterSettings(),
+          privacy,
+        });
+        if (decision?.selectedId && isLive(filtered.get(decision.selectedId))) {
+          selectedIds = [decision.selectedId];
+        }
+      } catch {}
+      if (!selectedIds.length) selectedIds = [liveFiltered[0].id];
+    }
+
+    const resolveScheduleRules = preset => {
+      if (preset === 'read_only') return [...READ_ONLY_SCHEDULE_RULES];
+      if (Object.hasOwn(PERMISSION_PRESETS, preset)) return [...PERMISSION_PRESETS[preset]];
+      // Fail closed for any unrecognized preset
+      return [...PERMISSION_PRESETS.dontAsk];
+    };
+    const rawPreset = job.permissionPreset || 'safe';
+    const effectivePreset = (privacy.localOnly && ['acceptEdits', 'permissive'].includes(rawPreset)) ? 'default' : rawPreset;
+    const permissionRules = resolveScheduleRules(effectivePreset);
+    const title = `[Cron] ${job.name}`.slice(0, 180);
+
+    let task;
+    if (job.mode === 'godcode') {
+      if (!job.sourcePath) {
+        return { status: 'failed', error: 'GODCODƎ scheduled job is missing a repository path.' };
+      }
+      task = await createImportedTask(this, this.store.dataDir, {
+        title,
+        objective: job.prompt,
+        sourcePath: job.sourcePath,
+        providerIds: selectedIds,
+        effort: job.effort || 'medium',
+        planMode: Boolean(job.planMode),
+        permissionRules,
+      });
+    } else {
+      task = await createConversationTask(this, this.store.dataDir, {
+        title,
+        objective: job.prompt,
+        providerIds: selectedIds,
+        effort: job.effort || 'medium',
+        planMode: Boolean(job.planMode),
+        permissionRules,
+      });
+    }
+
+    this.store.updateTask(task.id, current => {
+      current.scheduledJob = {
+        id: job.id,
+        name: job.name,
+        runId: run.id,
+        kind: job.kind,
+        expression: job.expression,
+        trigger: run.trigger,
+      };
+      return current;
+    }, 'schedule.triggered', {
+      jobId: job.id,
+      jobName: job.name,
+      runId: run.id,
+      trigger: run.trigger,
+      expression: job.expression,
+    });
+
+    const finalTask = await this.run(task.id);
+    const events = this.getRecentEvents(task.id, 30);
+    const lastReply = [...events].reverse().find(e => e.type === 'model.response' && !e.data?.superseded && e.data?.response?.text);
+    const summary = lastReply?.data?.response?.text ? String(lastReply.data.response.text).trim().slice(0, 400) : null;
+    return {
+      status: finalTask.status,
+      taskId: finalTask.id,
+      summary,
+      error: finalTask.blocker?.message || null,
+    };
+  }
   close() {
     if (this.closePromise) return this.closePromise;
     this.closed = true;
+    this.cron?.stop();
     this.closePromise = (async () => {
       try {
         await this.crew.close();
         for (const id of this.runs.keys()) this.pause(id);
         await this.broker.close();
         await Promise.allSettled([...this.runs.values()].map(entry => entry.promise));
+        await this.cron?.close();
         await Promise.allSettled([...this.sourceChanges.jobs.values()].map(entry => entry.promise));
         await Promise.allSettled([...this.broker.locks.values()]);
         const providers = [...new Set(this.providers.values())].filter(provider => typeof provider?.close === 'function');
