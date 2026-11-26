@@ -201,7 +201,7 @@ function formatTranscriptForDistillation(foldedEvents = [], maxChars = 14000) {
 }
 
 const COMPACTION_SYSTEM_PROMPT = [
-  'You are the G0DC0D3 Context Compactor. Distill folded conversation history into a concise, high-signal handoff memory JSON so the next model turn can continue seamlessly without losing decisions, root causes, or user preferences.',
+  'You are the Context Compactor. Distill folded conversation history into a concise, high-signal handoff memory JSON so the next model turn can continue seamlessly without losing decisions, root causes, or user preferences.',
   'Rules:',
   '- Do NOT invent file edits or passing tests; rely strictly on the provided transcript and structural summary.',
   '- Merge prior semantic memory with new folded events so critical earlier decisions are retained.',

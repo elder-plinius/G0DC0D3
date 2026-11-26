@@ -1425,7 +1425,7 @@ export class CodexProvider {
     const prompt=compilePrompt({...context,tools})+`\n\nThis is a planner-only bridge. DO NOT invoke any Codex tools. Return only the JSON schema next-action envelope.\n`+
       `For tool actions set type="tool", calls=[{id:"a stable unique identifier",name:"repo.write",arguments:"a JSON string of arguments"}], text="", finish="continue".\n`+
       `Available tools: ${JSON.stringify(tools)}\n`+
-      `For a final response set type="message",calls=[],text="summary",finish="done". Native tool actions are unavailable; the outer G0DC0D3 broker executes the described calls.`;
+      `For a final response set type="message",calls=[],text="summary",finish="done". Native tool actions are unavailable; the outer local tool broker executes the described calls.`;
     const result=await new Promise((resolve,reject)=>{
       // Temp/schema preparation yields. Close or cancellation during that work
       // must never spawn a late child or fall back to process.env inheritance.
@@ -1523,7 +1523,7 @@ export class ClaudeCodeProvider extends CodexProvider {
         '--settings',JSON.stringify({disableAllHooks:true,enabledPlugins:{}}),
         '--strict-mcp-config','--mcp-config',JSON.stringify({mcpServers:{}}),
         '--max-turns','3','--json-schema',JSON.stringify(decisionSchema(tools)),
-        '--system-prompt',compileInstructions(context)+'\nThis is a planner-only bridge. Do not invoke native tools. Return one next-action decision. The outer G0DC0D3 broker executes the described calls.'];
+        '--system-prompt',compileInstructions(context)+'\nThis is a planner-only bridge. Do not invoke native tools. Return one next-action decision. The outer local tool broker executes the described calls.'];
       if(this.model)args.push('--model',this.model);
       const output=await runClaudePlanner(this,{args,cwd:working,signal,turnTimeoutMs,input:compileTaskContext({...context,tools})});
       const events=output.split('\n').filter(line=>line.trim()).map(line=>{
@@ -1679,7 +1679,7 @@ export class GeminiCliProvider extends CodexProvider {
     const working = await fs.mkdtemp(path.join(tmpdir(), 'g0d-gemini-planner-'));
     try {
       if (this.closed) throw Object.assign(new Error('Gemini CLI provider is closed'), { code: 'PROVIDER_CLOSED', retryable: false });
-      const directive = 'Return ONLY one valid JSON object matching the G0DC0D3 next-action decision envelope (no markdown fences, no commentary). Do not invoke any native Gemini CLI tools.';
+      const directive = 'Return ONLY one valid JSON object matching the next-action decision envelope (no markdown fences, no commentary). Do not invoke any native Gemini CLI tools.';
       const args = ['--prompt', directive, '--output-format', 'json'];
       if (this.model) args.push('--model', this.model);
       const stdinPayload = `${compilePrompt({ ...context, tools })}\n\n` +
@@ -1739,7 +1739,7 @@ export class CopilotCliProvider extends CodexProvider {
         `For tool actions set type="tool", calls=[...], text="", finish="continue". For final replies set type="message", calls=[], text="summary", finish="done".`;
       // Intentionally omit --allow-all-tools so Copilot cannot execute local tools directly.
       // Pipe the full prompt over stdin (with a short -p directive) to avoid argv E2BIG crashes & ps aux leaks.
-      const directive = 'Read the complete G0DC0D3 planner prompt from stdin and return ONLY the single raw JSON decision envelope.';
+      const directive = 'Read the complete planner prompt from stdin and return ONLY the single raw JSON decision envelope.';
       const args = ['-p', directive, '-s'];
       if (this.model) args.push('--model', this.model);
       const env = copilotSubscriptionEnvironment(cliEnvironments.get(this));
