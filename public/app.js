@@ -663,12 +663,13 @@ function renderRecoveryControl(task, loading = false) {
   $('#main-content').classList.toggle('ultra-active', ultraOn);
   setVisible('#composer-race', !task || task.workspaceKind === 'conversation');
   $('#composer-race').classList.toggle('race-enabled', ultraOn);
+  const arenaN = racing?.models?.length || state.router?.arenaSize || ultraRouterData?.settings?.arenaSize || 3;
   $('#composer-race').textContent = routerMode === 'auto_route' && !racing
     ? 'Ultra-Plinian · Auto ⌄'
     : routerMode === 'auto_arena' && !racing
-      ? 'Ultra-Plinian · Arena ⌄'
+      ? `Ultra-Plinian · Arena ${arenaN}× ⌄`
       : racing
-        ? 'Ultra-Plinian · Custom ⌄'
+        ? `Ultra-Plinian · Custom ${arenaN}× ⌄`
         : 'Ultra-Plinian ⌄';
   $('#composer-race').title = routerMode === 'auto_route' && !racing
     ? 'Ultra-Plinian Auto-Route · Click to switch mode'
@@ -2658,7 +2659,7 @@ function renderUltraRouterSection() {
   const modeCards = [
     ['off', 'Off', 'Use your manually selected model & waterfall.'],
     ['auto_route', 'Auto-Route (Best Model)', 'Picks the highest-scoring endpoint per task domain & routes away from refusals.'],
-    ['auto_arena', 'Auto-Arena (Top-2 + Judge)', 'Races the top 2 domain contenders & trains your personal Elo from the judge.'],
+    ['auto_arena', 'Auto-Arena (2–4 Models + Judge)', 'Races your top 2–4 distinct model families & trains your personal Elo from the blind judge.'],
     ['manual_arena', 'Manual Arena', 'Race any two connected models & judge below.']
   ];
   const domainTabs = domains.map(d => `<button type="button" class="ultra-domain-tab ${d.id === activeDom ? 'active' : ''}" data-router-domain="${escapeHTML(d.id)}" title="${escapeHTML(d.description)}">${escapeHTML(d.shortLabel)}</button>`).join('');
@@ -6767,52 +6768,59 @@ function renderUltraPopover() {
   const task = selectedData?.task?.workspaceKind === 'conversation' ? selectedData.task : null;
   const mode = activeUltraMode(task);
   const racing = task ? task.answerRace : RecoveryUI.preferences().answerRace;
+  const routerCfg = ultraRouterData?.settings || state.router || {};
+  const arenaSize = [2, 3, 4].includes(Number(routerCfg.arenaSize)) ? Number(routerCfg.arenaSize) : 3;
+  const metaMode = routerCfg.metacognition || 'smart';
   const arenaModels = availableArenaModels();
   const totalLiveModels = new Set([...liveProviders().map(p => p.id), ...(veniceCatalog?.models || []).map(m => m.id)]).size;
-  const hasMultipleModels = totalLiveModels >= 2;
+  const hasMultipleModels = totalLiveModels >= 2 || arenaModels.length >= 2;
+  const arenaActive = mode === 'auto_arena' || mode === 'manual_arena';
+
   const modes = [
-    ['off', 'Off', 'Direct model & waterfall', false],
-    ['auto_route', 'Auto-Route', hasMultipleModels ? 'Best model per domain' : 'Single model active (add 2+ to route)', false],
-    ['auto_arena', 'Auto-Arena', hasMultipleModels ? 'Top-2 race + blind judge (complex tasks)' : 'Needs 2+ connected models', !hasMultipleModels],
-    ['manual_arena', 'Custom Arena', arenaModels.length >= 2 ? 'Pick any 2 writers + judge' : 'Needs 2+ API models', false],
+    ['off', 'Off', 'Direct model & fallback waterfall', false],
+    ['auto_route', 'Auto-Route', hasMultipleModels ? 'Best model per prompt + local Elo' : 'Single model active (add 2+ to route)', false],
+    ['auto_arena', 'Arena Race', hasMultipleModels ? `Race ${arenaSize} models blindly + judge` : 'Needs 2+ connected models', !hasMultipleModels],
   ];
-  let customHtml = '';
-  if (mode === 'manual_arena') {
-    if (arenaModels.length < 2) {
-      customHtml = `<div class="ultra-pop-custom"><p class="ultra-pop-note">Connect at least 2 API models (OpenRouter, Venice, Anthropic, OpenAI, Gemini, or local) to race custom writers.</p><button type="button" class="button button-secondary" data-ultra-open-settings="models">Manage Models →</button></div>`;
-    } else {
-      const preferred = task?.providerId || newConversationProviders()[0];
-      const defFirst = arenaModels.some(m => m.id === preferred) ? preferred : (RecoveryUI.recommendedBackup(arenaModels, null) || arenaModels[0]?.id);
-      const defSecond = RecoveryUI.recommendedBackup(arenaModels, defFirst) || arenaModels.find(m => m.id !== defFirst)?.id || '';
-      const defJudge = arenaModels.find(m => /glm-5-3-flash|gemini-4-neon|claude-sonnet/i.test(m.id))?.id || defSecond || defFirst;
-      const curFirst = racing?.models?.[0] && arenaModels.some(m => m.id === racing.models[0]) ? racing.models[0] : (defFirst || '');
-      const curSecond = racing?.models?.[1] && arenaModels.some(m => m.id === racing.models[1]) ? racing.models[1] : (defSecond || '');
-      const curJudge = racing?.judge && arenaModels.some(m => m.id === racing.judge) ? racing.judge : (defJudge || '');
-      const optsFor = selected => arenaModels.map(m => {
-        const label = m.label || m.model || m.id;
-        return `<option value="${escapeHTML(m.id)}"${m.id === selected ? ' selected' : ''}>${escapeHTML(label)}</option>`;
-      }).join('');
-      const sameWarn = curFirst && curFirst === curSecond ? '<p class="ultra-pop-error">Choose two different writers.</p>' : '';
-      customHtml = `<div class="ultra-pop-custom">
-        <label class="ultra-pop-field"><span>Writer A</span><select id="ultra-pop-first" data-ultra-custom-select>${optsFor(curFirst)}</select></label>
-        <label class="ultra-pop-field"><span>Writer B</span><select id="ultra-pop-second" data-ultra-custom-select>${optsFor(curSecond)}</select></label>
-        <label class="ultra-pop-field"><span>Judge</span><select id="ultra-pop-judge" data-ultra-custom-select>${optsFor(curJudge)}</select></label>
-        ${sameWarn}
-      </div>`;
-    }
-  }
-  const statusTag = mode === 'off' ? 'Off' : mode === 'auto_route' ? 'Auto-Route active' : mode === 'auto_arena' ? (hasMultipleModels ? 'Auto-Arena active' : 'Auto-Arena (needs 2+ models)') : 'Custom Arena active';
+
+  const sizeSection = hasMultipleModels ? `
+    <div class="ultra-pop-seg-row" aria-label="Arena contender count">
+      <span class="ultra-pop-seg-label">Contenders</span>
+      <div class="ultra-pop-seg-pills">
+        ${[2, 3, 4].map(n => `<button type="button" class="ultra-pop-pill${arenaSize === n && mode !== 'manual_arena' ? ' active' : ''}" data-ultra-arena-size="${n}" ${ultraRouterBusy || (n > Math.max(2, totalLiveModels)) ? 'disabled' : ''}>${n}×</button>`).join('')}
+      </div>
+    </div>` : '';
+
+  const customLineupBanner = mode === 'manual_arena' && racing?.models?.length ? `
+    <div class="ultra-pop-custom-pill">
+      <span>Custom lineup · <strong>${racing.models.length} writers</strong> + Judge</span>
+      <button type="button" class="button button-quiet" data-ultra-open-settings="arena">Edit</button>
+    </div>` : '';
+
+  const metaSection = `
+    <div class="ultra-pop-seg-row" aria-label="Metacognition mode">
+      <span class="ultra-pop-seg-label">Metacognition</span>
+      <div class="ultra-pop-seg-pills">
+        ${[['off', 'Off'], ['smart', 'Smart'], ['auto_forge', 'Auto-Forge']].map(([id, lbl]) => `<button type="button" class="ultra-pop-pill${metaMode === id ? ' active' : ''}" data-ultra-meta-mode="${id}" ${ultraRouterBusy ? 'disabled' : ''}>${lbl}</button>`).join('')}
+      </div>
+    </div>`;
+
+  const statusTag = mode === 'off' ? 'Off' : mode === 'auto_route' ? 'Auto-Route active' : mode === 'manual_arena' ? `Custom ${racing?.models?.length || 2}× Arena` : `Auto-Arena ${arenaSize}×`;
   pop.innerHTML = `
     <div class="ultra-popover-head">
-      <div><strong>ULTRA-PLINIAN</strong><small>${escapeHTML(statusTag)}</small></div>
+      <div><strong>Ultra-Plinian</strong><small>${escapeHTML(statusTag)}</small></div>
       <button type="button" class="icon-button" data-close-ultra-popover aria-label="Close Ultra-Plinian menu">×</button>
     </div>
     <div class="ultra-popover-modes" role="radiogroup" aria-label="Ultra-Plinian mode">
-      ${modes.map(([id, title, desc, unavailable]) => `<button type="button" class="ultra-pop-card${mode === id ? ' active' : ''}" role="radio" aria-checked="${mode === id}" data-ultra-pop-mode="${id}" ${ultraRouterBusy || unavailable ? 'disabled' : ''}><strong>${title}</strong><span>${desc}</span></button>`).join('')}
+      ${modes.map(([id, title, desc, unavailable]) => {
+        const isSelected = id === 'auto_arena' ? arenaActive : mode === id;
+        return `<button type="button" class="ultra-pop-card${isSelected ? ' active' : ''}" role="radio" aria-checked="${isSelected}" data-ultra-pop-mode="${id}" ${ultraRouterBusy || unavailable ? 'disabled' : ''}><strong>${title}</strong><span>${desc}</span></button>`;
+      }).join('')}
     </div>
-    ${customHtml}
+    ${sizeSection}
+    ${customLineupBanner}
+    ${metaSection}
     <div class="ultra-popover-foot">
-      <button type="button" class="button button-quiet ultra-pop-advanced" data-ultra-open-settings="router">Router weights &amp; Elo ↗</button>
+      <button type="button" class="button button-secondary ultra-pop-customize" data-ultra-open-settings="arena">⚙ Customize Arena &amp; Routing…</button>
       <span class="ultra-pop-status">${escapeHTML(task ? 'This chat' : 'Default')}</span>
     </div>`;
   positionUltraPopover();
@@ -6843,52 +6851,46 @@ $('#ultra-popover')?.addEventListener('click', async event => {
   const openSettingsBtn = event.target.closest('[data-ultra-open-settings]');
   if (openSettingsBtn) {
     closeUltraPopover();
-    await openSettings('models');
-    const target = openSettingsBtn.dataset.ultraOpenSettings === 'router' ? $('#ultra-router-section') : $('#api-key-setup');
+    await openSettings('models', { subtab: 'routing' });
+    const targetId = openSettingsBtn.dataset.ultraOpenSettings === 'arena' ? '#race-options' : '#ultra-router-section';
+    const target = $(targetId) || $('#ultra-router-section');
     target?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    return;
+  }
+  const sizeBtn = event.target.closest('[data-ultra-arena-size]');
+  if (sizeBtn) {
+    const n = Number(sizeBtn.dataset.ultraArenaSize);
+    if ([2, 3, 4].includes(n)) {
+      try {
+        await applyUltraCustomArena(null);
+        await updateUltraRouter({ mode: 'auto_arena', arenaSize: n }, `Ultra-Plinian Arena set to ${n} contenders.`);
+      } catch (err) {
+        toast(err.message || 'Could not update Arena size.');
+      }
+      renderUltraPopover();
+    }
+    return;
+  }
+  const metaBtn = event.target.closest('[data-ultra-meta-mode]');
+  if (metaBtn) {
+    const m = metaBtn.dataset.ultraMetaMode;
+    try {
+      await updateUltraRouter({ metacognition: m }, `Metacognition set to ${m === 'auto_forge' ? 'Auto-Forge' : m === 'smart' ? 'Smart' : 'Off'}.`);
+    } catch (err) {
+      toast(err.message || 'Could not update Metacognition.');
+    }
+    renderUltraPopover();
     return;
   }
   const modeBtn = event.target.closest('[data-ultra-pop-mode]');
   if (!modeBtn) return;
   const mode = modeBtn.dataset.ultraPopMode;
   try {
-    if (mode === 'manual_arena') {
-      if (!veniceCatalog?.models?.length && state.veniceConnectionId) await loadVeniceCatalog();
-      const models = availableArenaModels();
-      await updateUltraRouter({ mode: 'manual_arena' }, 'Ultra-Plinian Custom Arena selected.');
-      if (models.length >= 2) {
-        const task = selectedData?.task?.workspaceKind === 'conversation' ? selectedData.task : null;
-        const preferred = task?.providerId || newConversationProviders()[0];
-        const first = models.some(m => m.id === preferred) ? preferred : (RecoveryUI.recommendedBackup(models, null) || models[0]?.id);
-        const second = RecoveryUI.recommendedBackup(models, first) || models.find(m => m.id !== first)?.id;
-        const judge = models.find(m => /glm-5-3-flash|gemini-4-neon|claude-sonnet/i.test(m.id))?.id || second || first;
-        if (first && second && first !== second && judge) {
-          await applyUltraCustomArena({ models: [first, second], judge });
-        }
-      }
-    } else {
-      await applyUltraCustomArena(null);
-      const label = mode === 'off' ? 'Off' : mode === 'auto_route' ? 'Auto-Route' : 'Auto-Arena';
-      await updateUltraRouter({ mode }, `Ultra-Plinian set to ${label}.`);
-    }
+    await applyUltraCustomArena(null);
+    const label = mode === 'off' ? 'Off' : mode === 'auto_route' ? 'Auto-Route' : 'Arena Race';
+    await updateUltraRouter({ mode }, `Ultra-Plinian set to ${label}.`);
   } catch (err) {
     toast(err.message || 'Could not update Ultra-Plinian mode.');
-  }
-  renderUltraPopover();
-});
-
-$('#ultra-popover')?.addEventListener('change', async event => {
-  if (!event.target.matches('[data-ultra-custom-select]')) return;
-  const a = $('#ultra-pop-first')?.value;
-  const b = $('#ultra-pop-second')?.value;
-  const j = $('#ultra-pop-judge')?.value;
-  if (!a || !b || !j) { renderUltraPopover(); return; }
-  if (a === b) { toast('Choose two different writers.'); renderUltraPopover(); return; }
-  try {
-    await applyUltraCustomArena({ models: [a, b], judge: j });
-    toast('Updated Ultra-Plinian writers.');
-  } catch (err) {
-    toast(err.message || 'Could not update arena writers.');
   }
   renderUltraPopover();
 });

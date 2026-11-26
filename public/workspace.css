@@ -6873,6 +6873,77 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   color: var(--text-muted);
   white-space: nowrap;
 }
+
+/* ── Simplified Ultra-Plinian Popover Segmented Pills ── */
+.ultra-pop-seg-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 2px 2px;
+}
+.ultra-pop-seg-label {
+  font-size: .73rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+.ultra-pop-seg-pills {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel-soft);
+}
+.ultra-pop-pill {
+  height: 24px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: 500 .72rem/1 var(--font);
+  cursor: pointer;
+  transition: background-color .12s ease, color .12s ease;
+}
+.ultra-pop-pill:hover:not(:disabled) {
+  color: var(--text);
+  background: color-mix(in srgb, var(--panel-raised) 80%, transparent);
+}
+.ultra-pop-pill.active {
+  background: color-mix(in srgb, var(--violet, #a78bfa) 22%, var(--panel));
+  color: var(--text);
+  font-weight: 600;
+}
+.ultra-pop-pill:disabled {
+  opacity: .4;
+  cursor: not-allowed;
+}
+.ultra-pop-custom-pill {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 6px 9px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--violet, #a78bfa) 38%, var(--line));
+  background: color-mix(in srgb, var(--violet, #a78bfa) 10%, var(--panel-soft));
+  font-size: .74rem;
+  color: var(--text-secondary);
+}
+.ultra-pop-custom-pill .button {
+  padding: 2px 8px;
+  font-size: .71rem;
+}
+.ultra-pop-customize {
+  padding: 4px 10px;
+  font-size: .74rem;
+}
+.ultra-popover-modes .ultra-pop-card:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
 .pda-head {
   display: flex;
   align-items: center;

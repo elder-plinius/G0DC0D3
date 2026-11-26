@@ -502,10 +502,13 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
           if (decision.selectedId) {
             routingReceipt = decision;
             body.ultraplinian = true;
-            if (routerSettings.mode === 'auto_arena' && decision.arenaPair && decision.judgeId && !promptNeedsLiveTools(body.objective)) {
-              body.answerRace = { models: decision.arenaPair, judge: decision.judgeId };
-              body.providerIds = decision.waterfallIds.filter(id => isCatalogModel(id)).slice(0, 2);
-              if (!body.providerIds.length) body.providerIds = [decision.arenaPair[0]];
+            const raceContenders = decision.arenaModels || decision.arenaPair;
+            if (routerSettings.mode === 'auto_arena' && Array.isArray(raceContenders) && raceContenders.length >= 2 && decision.judgeId && !promptNeedsLiveTools(body.objective)) {
+              body.answerRace = { models: raceContenders, judge: decision.judgeId };
+              const leadIsCat = isCatalogModel(raceContenders[0]);
+              const compat = decision.waterfallIds.filter(id => isCatalogModel(id) === leadIsCat);
+              body.providerIds = leadIsCat ? compat.slice(0, 2) : compat.slice(0, 8);
+              if (!body.providerIds.length) body.providerIds = [raceContenders[0]];
             } else {
               // Ensure homogeneous route compatibility (catalog models stay with catalog models; connected providers stay with connected providers)
               const primaryIsCat = isCatalogModel(decision.selectedId);

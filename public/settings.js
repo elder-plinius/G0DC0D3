@@ -1574,47 +1574,69 @@ document.addEventListener('click', event => { if (event.target.closest('[data-co
 $('#settings-checks').addEventListener('input', () => { if (settingsTaskId) settingsCheckDrafts.set(settingsTaskId, $('#settings-checks').value); });
 
 function renderRaceOptions(task) {
-  const panel=$('#race-options'), models=veniceCatalog.models;
-  const config=task ? task.answerRace : RecoveryUI.preferences().answerRace;
-  const routerMode=state.router?.mode || ultraRouterData?.settings?.mode || 'off';
-  panel.hidden=!veniceCatalog.connected || Boolean(task && task.workspaceKind!=='conversation') || (routerMode!=='manual_arena' && !config);
+  const panel = $('#race-options');
+  if (!panel) return;
+  const models = typeof availableArenaModels === 'function' ? availableArenaModels() : (veniceCatalog.models || []);
+  const config = task ? task.answerRace : RecoveryUI.preferences().answerRace;
+  panel.hidden = models.length < 2 || Boolean(task && task.workspaceKind !== 'conversation');
   if (panel.hidden) return;
-  const scope=JSON.stringify([task?.id || 'defaults',config || null]);
-  const changed=panel.dataset.scope!==scope;
-  panel.dataset.scope=scope;
+  const scope = JSON.stringify([task?.id || 'defaults', config || null, models.length]);
+  const changed = panel.dataset.scope !== scope;
+  panel.dataset.scope = scope;
   if (changed) {
-    $('#race-enabled').checked=Boolean(config);
-    setText('#race-feedback','');
+    $('#race-enabled').checked = Boolean(config);
+    setText('#race-feedback', '');
   }
   const preferred = task?.providerId || newConversationProviders()[0];
-  const first = models.some(model => model.id === preferred) ? preferred : RecoveryUI.recommendedBackup(models, null);
-  const second = RecoveryUI.recommendedBackup(models, first);
-  const judge = models.find(model => model.id === 'venice-catalog:z-ai-glm-5-3-flash')?.id || second || first;
-  const saved=config ? [config.models?.[0],config.models?.[1],config.judge] : [first,second,judge];
-  ['#race-first','#race-second','#race-judge'].forEach((selector,i)=>{
-    const el=$(selector), value=changed ? saved[i] : el.value;
-    if (settingsListContents.get(el)!==models) {
-      el.replaceChildren(new Option('Choose a model',''),...models.map(m=>new Option(m.label===m.model?m.model:m.label+' · '+m.model,m.id)));
-      settingsListContents.set(el,models);
+  const first = models.some(m => m.id === preferred) ? preferred : (RecoveryUI.recommendedBackup(models, null) || models[0]?.id);
+  const second = RecoveryUI.recommendedBackup(models, first) || models.find(m => m.id !== first)?.id || '';
+  const third = models.find(m => m.id !== first && m.id !== second)?.id || '';
+  const judge = models.find(m => /glm-5-3-flash|gemini-4-neon|claude-sonnet/i.test(m.id))?.id || second || first;
+  const saved = config
+    ? [config.models?.[0] || '', config.models?.[1] || '', config.models?.[2] || '', config.models?.[3] || '', config.judge || '']
+    : [first || '', second || '', third || '', '', judge || ''];
+  const selectors = [
+    ['#race-first', 'Choose Writer A'],
+    ['#race-second', 'Choose Writer B'],
+    ['#race-third', 'None (2-model race)'],
+    ['#race-fourth', 'None'],
+    ['#race-judge', 'Choose Blind Judge']
+  ];
+  const key = models.map(m => m.id).join('|');
+  selectors.forEach(([selector, placeholder], i) => {
+    const el = $(selector);
+    if (!el) return;
+    const value = changed ? saved[i] : el.value;
+    if (settingsListContents.get(el) !== key) {
+      el.replaceChildren(
+        new Option(placeholder, ''),
+        ...models.map(m => new Option(m.label === m.model ? m.model : `${m.label || m.id}${m.model && !String(m.label || '').includes(m.model) ? ` · ${m.model}` : ''}`, m.id))
+      );
+      settingsListContents.set(el, key);
     }
-    el.value=value || '';
+    el.value = value || '';
   });
   syncRaceControls();
 }
 function syncRaceControls() {
-  const task=settingsTask(), locked=settingsBusy || Boolean(task?.draining) || ACTIVE.has(task?.status) || task?.status==='cancelled';
-  const enabled=$('#race-enabled').checked;
-  $('#race-enabled').disabled=locked;
-  $$('.race-selectors select').forEach(el=>el.disabled=locked || !enabled);
-  const a=$('#race-first').value,b=$('#race-second').value,j=$('#race-judge').value;
-  $('#race-save').disabled=locked || (enabled && (!a || !b || !j || a===b));
-  setText('#race-feedback',enabled && a && a===b ? 'Choose different writers.' : '');
+  const task = settingsTask(), locked = settingsBusy || Boolean(task?.draining) || ACTIVE.has(task?.status) || task?.status === 'cancelled';
+  const enabled = $('#race-enabled').checked;
+  $('#race-enabled').disabled = locked;
+  $$('.race-selectors select').forEach(el => el.disabled = locked || !enabled);
+  const chosen = ['#race-first', '#race-second', '#race-third', '#race-fourth'].map(s => $(s)?.value || '').filter(Boolean);
+  const unique = new Set(chosen);
+  const dup = unique.size !== chosen.length;
+  const a = $('#race-first')?.value, b = $('#race-second')?.value, j = $('#race-judge')?.value;
+  $('#race-save').disabled = locked || (enabled && (!a || !b || !j || dup));
+  setText('#race-feedback', enabled && dup ? 'Choose distinct models for each writer slot.' : '');
 }
-$('#race-options').addEventListener('change',syncRaceControls);
-$('#race-save').addEventListener('click',async()=>{
-  const task=settingsTask(), enabled=$('#race-enabled').checked;
-  const answerRace=enabled ? {models:[$('#race-first').value,$('#race-second').value],judge:$('#race-judge').value} : null;
-  await saveSetting('answer-race',{answerRace},task);
+$('#race-options').addEventListener('change', syncRaceControls);
+$('#race-save').addEventListener('click', async () => {
+  const task = settingsTask(), enabled = $('#race-enabled').checked;
+  const writers = ['#race-first', '#race-second', '#race-third', '#race-fourth'].map(s => $(s)?.value || '').filter(Boolean);
+  const answerRace = enabled ? { models: writers, judge: $('#race-judge').value } : null;
+  await saveSetting('answer-race', { answerRace }, task);
+  if (enabled) await updateUltraRouter({ mode: 'manual_arena' }).catch(() => {});
   delete $('#race-options').dataset.scope;
   renderRaceOptions(settingsTask());
 });

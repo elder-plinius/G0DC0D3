@@ -455,14 +455,15 @@
           contenders: [
             { slot: 'A', providerId: 'gemini:gemini-4-neon', label: 'Gemini 4 Neon', status: 'completed', durationMs: 4120, isWinner: true, grade: { id: 'A', fidelity: 5, completeness: 5, clarity: 5, total: 15, reason: 'Deepest architectural precision and zero-dependency implementation.' } },
             { slot: 'B', providerId: 'openrouter:claude-sonnet-5.5', label: 'Claude Sonnet 5.5', status: 'completed', durationMs: 4860, isWinner: false, grade: { id: 'B', fidelity: 5, completeness: 4, clarity: 5, total: 14, reason: 'Clean structure, slightly less thorough on edge cases.' } },
+            { slot: 'C', providerId: 'openai:gpt-5.4', label: 'GPT-5.4', status: 'completed', durationMs: 4410, isWinner: false, grade: { id: 'C', fidelity: 4, completeness: 5, clarity: 4, total: 13, reason: 'Strong coverage, slightly denser explanation.' } },
           ],
           judge: { providerId: 'venice:hermes-4-405b', label: 'Hermes 4 405B', status: 'completed' },
-          note: 'Blind judge awarded Contender A (15/15 vs 14/15).',
+          note: 'Blind judge crowned Contender A across 3 frontier models (15/15 vs 14/15 vs 13/15).',
         },
         failovers: [],
         fileConflicts: [],
         pendingApproval: null,
-        stats: { totalWorkers: 3, activeWorkers: 0, completedWorkers: 3, failedWorkers: 0, totalCalls: 3 },
+        stats: { totalWorkers: 4, activeWorkers: 0, completedWorkers: 4, failedWorkers: 0, totalCalls: 4 },
       };
     }
     const w1Status = cycle >= 3 ? 'completed' : cycle >= 1 ? 'tool' : 'streaming';
@@ -1525,112 +1526,119 @@
   }
 
   function drawArenaRace(ctx, w, h, pal, arena) {
-    const contenders = arena.contenders || [];
-    const leftX = 28;
-    const judgeX = w - 82;
-    const trackW = Math.max(130, judgeX - leftX - 48);
-    const centerY = h * 0.45;
-    const lanes = [centerY - 78, centerY + 78];
+    const contenders = (arena.contenders || []).slice(0, 4);
+    const n = Math.max(2, contenders.length);
+    const leftX = 26;
+    const judgeX = w - 80;
+    const trackW = Math.max(130, judgeX - leftX - 46);
+    const laneColors = [pal.violet, pal.blue, '#2dd4bf', '#f472b6'];
+    const cardH = n >= 4 ? 64 : n === 3 ? 72 : 82;
+    const gap = n >= 4 ? 10 : 14;
+    const totalH = n * cardH + (n - 1) * gap;
+    const topStart = Math.max(46, (h - 76 - totalH) / 2 + 14);
+    const centerY = topStart + totalH / 2;
 
     // Header title inside stage
     ctx.save();
     ctx.fillStyle = pal.muted;
     ctx.font = '600 10px ui-monospace, SFMono-Regular, monospace';
     ctx.textAlign = 'left';
-    ctx.fillText('ULTRA-PLINIAN HEAD-TO-HEAD ARENA', leftX, 26);
+    ctx.fillText(`ULTRA-PLINIAN ${n}-WAY ARENA RACE`, leftX, 24);
     ctx.restore();
 
-    contenders.slice(0, 2).forEach((c, idx) => {
-      const ly = lanes[idx] || centerY;
+    contenders.forEach((c, idx) => {
+      const cardTop = topStart + idx * (cardH + gap);
+      const ly = cardTop + (n >= 4 ? 26 : 32);
       const done = c.status === 'completed';
       const failed = c.status === 'declined' || c.status === 'failed';
       const gradeRevealed = c._replayGradeRevealed !== undefined ? c._replayGradeRevealed : Boolean(c.grade);
       const prog = typeof c._replayProg === 'number'
         ? c._replayProg
         : done ? 1 : failed ? 0.45 : (0.28 + 0.58 * ((Math.sin(animPhase * 1.8 + idx * 1.4) + 1) / 2));
-      const color = c.isWinner ? pal.gold : done ? pal.sage : failed ? pal.coral : (idx === 0 ? pal.violet : pal.blue);
+      const color = c.isWinner ? pal.gold : done ? pal.sage : failed ? pal.coral : (laneColors[idx] || pal.violet);
 
       ctx.save();
       // Subtle lane panel
       ctx.fillStyle = pal.isLight ? 'rgba(255,255,255,0.72)' : 'rgba(255,255,255,0.025)';
       ctx.strokeStyle = c.isWinner ? pal.gold : pal.line;
       ctx.lineWidth = c.isWinner ? 1.5 : 1;
-      drawRoundedRect(ctx, leftX - 10, ly - 34, trackW + 20, 82, 12);
+      drawRoundedRect(ctx, leftX - 10, cardTop, trackW + 20, cardH, 11);
       ctx.fill();
       ctx.stroke();
 
       // Label above track
       ctx.fillStyle = pal.text;
-      ctx.font = '600 12px -apple-system, BlinkMacSystemFont, sans-serif';
+      ctx.font = '600 11.5px -apple-system, BlinkMacSystemFont, sans-serif';
       ctx.textAlign = 'left';
-      ctx.fillText(`${c.isWinner ? '♛ ' : ''}${c.slot} · ${c.label}`, leftX, ly - 15);
+      ctx.fillText(`${c.isWinner ? '♛ ' : ''}${c.slot} · ${c.label}`, leftX, ly - 11);
 
-      // Duration / Score right-aligned (only reveal final score after Judge finishes!)
+      // Duration / Score right-aligned
       ctx.fillStyle = c.isWinner ? pal.gold : pal.muted;
-      ctx.font = '600 11px ui-monospace, SFMono-Regular, monospace';
+      ctx.font = '600 10.5px ui-monospace, SFMono-Regular, monospace';
       ctx.textAlign = 'right';
       const rightTxt = (c.grade && gradeRevealed)
         ? `${c.grade.total}/15 · ${fmtMs(c.durationMs)}`
-        : (done ? `DRAFT READY · ${fmtMs(c.durationMs)}` : 'DRAFTING…');
-      ctx.fillText(rightTxt, leftX + trackW, ly - 15);
+        : (done ? `READY · ${fmtMs(c.durationMs)}` : 'DRAFTING…');
+      ctx.fillText(rightTxt, leftX + trackW, ly - 11);
 
       // Track rail
       ctx.fillStyle = pal.isLight ? 'rgba(24,25,27,0.08)' : 'rgba(255,255,255,0.08)';
-      drawRoundedRect(ctx, leftX, ly - 3, trackW, 13, 6.5);
+      drawRoundedRect(ctx, leftX, ly - 2, trackW, 11, 5.5);
       ctx.fill();
 
       // Active velocity bar + glowing lead tip while streaming
       const barW = Math.max(16, trackW * prog);
       ctx.fillStyle = color;
-      drawRoundedRect(ctx, leftX, ly - 3, barW, 13, 6.5);
+      drawRoundedRect(ctx, leftX, ly - 2, barW, 11, 5.5);
       ctx.fill();
       if (!done && !failed) {
         ctx.fillStyle = '#ffffff';
         ctx.globalAlpha = 0.85;
         ctx.beginPath();
-        ctx.arc(leftX + barW - 5, ly + 3.5, 3.2, 0, Math.PI * 2);
+        ctx.arc(leftX + barW - 5, ly + 3.5, 2.8, 0, Math.PI * 2);
         ctx.fill();
         ctx.globalAlpha = 1;
       }
 
-      // Converging smooth S-curve wire + animated pulse to Blind Judge
+      // Converging smooth S-curve wire to Blind Judge
       ctx.strokeStyle = color;
-      ctx.globalAlpha = c.isWinner ? 0.92 : 0.45;
-      ctx.lineWidth = c.isWinner ? 2.4 : 1.5;
+      ctx.globalAlpha = c.isWinner ? 0.92 : 0.42;
+      ctx.lineWidth = c.isWinner ? 2.2 : 1.4;
       const sx = leftX + trackW + 10;
+      const wireY = cardTop + cardH / 2;
       ctx.beginPath();
-      ctx.moveTo(sx, ly + 3);
-      ctx.bezierCurveTo(sx + 26, ly + 3, judgeX - 48, centerY, judgeX - 30, centerY);
+      ctx.moveTo(sx, wireY);
+      ctx.bezierCurveTo(sx + 24, wireY, judgeX - 46, centerY, judgeX - 30, centerY);
       ctx.stroke();
 
       if (c.grade && gradeRevealed) {
         ctx.globalAlpha = 1;
-        // 3 mini rubric score meters (Fidelity, Completeness, Clarity)
         const rubrics = [
           ['Fidelity', c.grade.fidelity],
           ['Complete', c.grade.completeness],
           ['Clarity', c.grade.clarity]
         ];
         const colW = Math.floor(trackW / 3);
+        const rY = ly + (n >= 4 ? 20 : 23);
         rubrics.forEach(([lbl, val], ri) => {
           const rx0 = leftX + ri * colW;
           ctx.fillStyle = pal.muted;
-          ctx.font = '500 9.5px ui-monospace, SFMono-Regular, monospace';
+          ctx.font = '500 9px ui-monospace, SFMono-Regular, monospace';
           ctx.textAlign = 'left';
-          ctx.fillText(`${lbl} ${val}/5`, rx0, ly + 25);
+          ctx.fillText(`${lbl} ${val}/5`, rx0, rY);
           ctx.fillStyle = pal.isLight ? 'rgba(24,25,27,0.1)' : 'rgba(255,255,255,0.1)';
-          drawRoundedRect(ctx, rx0, ly + 31, colW - 14, 4, 2);
+          drawRoundedRect(ctx, rx0, rY + 5, colW - 14, 3.5, 2);
           ctx.fill();
           ctx.fillStyle = color;
-          drawRoundedRect(ctx, rx0, ly + 31, ((colW - 14) * Math.max(0, Math.min(5, val))) / 5, 4, 2);
+          drawRoundedRect(ctx, rx0, rY + 5, ((colW - 14) * Math.max(0, Math.min(5, val))) / 5, 3.5, 2);
           ctx.fill();
         });
       } else {
         ctx.globalAlpha = 1;
         ctx.fillStyle = pal.muted;
-        ctx.font = '500 9.5px ui-monospace, SFMono-Regular, monospace';
+        ctx.font = '500 9px ui-monospace, SFMono-Regular, monospace';
         ctx.textAlign = 'left';
-        ctx.fillText(done ? 'Submitted blindly to Judge — awaiting rubric scores…' : 'Streaming independent draft in isolated lane…', leftX, ly + 27);
+        ctx.fillText(done ? 'Submitted blindly to Judge — awaiting rubric scores…' : 'Streaming independent draft in isolated lane…', leftX, ly + 22);
       }
       ctx.restore();
     });
@@ -1638,12 +1646,12 @@
     // Blind Judge Diamond Node with gentle halo
     const jy = centerY;
     ctx.save();
-    const jHalo = ctx.createRadialGradient(judgeX, jy, 6, judgeX, jy, 52);
+    const jHalo = ctx.createRadialGradient(judgeX, jy, 6, judgeX, jy, 50);
     jHalo.addColorStop(0, arena.winnerId ? 'rgba(251, 191, 36, 0.28)' : 'rgba(245, 158, 11, 0.22)');
     jHalo.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.fillStyle = jHalo;
     ctx.beginPath();
-    ctx.arc(judgeX, jy, 52, 0, Math.PI * 2);
+    ctx.arc(judgeX, jy, 50, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.translate(judgeX, jy);
@@ -1651,7 +1659,7 @@
     ctx.fillStyle = pal.panel;
     ctx.strokeStyle = arena.winnerId ? pal.gold : pal.amber;
     ctx.lineWidth = 2.4;
-    drawRoundedRect(ctx, -26, -26, 52, 52, 9);
+    drawRoundedRect(ctx, -25, -25, 50, 50, 9);
     ctx.fill();
     ctx.stroke();
     ctx.restore();
@@ -1667,12 +1675,12 @@
     if (arena.judge?.label) {
       ctx.fillStyle = pal.muted;
       ctx.font = '500 9.5px -apple-system, BlinkMacSystemFont, sans-serif';
-      ctx.fillText(shortModel(arena.judge.label).slice(0, 14), judgeX, jy + 48);
+      ctx.fillText(shortModel(arena.judge.label).slice(0, 14), judgeX, jy + 46);
     }
 
-    // Verdict / live phase banner neatly anchored below both lanes
+    // Verdict / live phase banner neatly anchored below all lanes
     if (arena.note) {
-      const bannerY = Math.min(h - 52, centerY + 150);
+      const bannerY = Math.min(h - 46, topStart + totalH + 26);
       ctx.fillStyle = pal.isLight ? 'rgba(255,255,255,0.82)' : 'rgba(255,255,255,0.035)';
       ctx.strokeStyle = arena.winnerId ? pal.gold : pal.line;
       ctx.lineWidth = 1;
@@ -1682,7 +1690,7 @@
       ctx.fillStyle = arena.winnerId ? pal.gold : pal.text;
       ctx.font = '600 10.5px -apple-system, BlinkMacSystemFont, sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText(arena.note.slice(0, 78), w / 2, bannerY + 1);
+      ctx.fillText(arena.note.slice(0, 82), w / 2, bannerY + 1);
     }
     ctx.restore();
   }

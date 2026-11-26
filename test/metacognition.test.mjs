@@ -116,6 +116,20 @@ test('End-to-end Ultra-Plinian Auto-Forge HTTP API, Arena Judge rubric propagati
           })
         };
       }
+      if (sys.includes('blind editor')) {
+        if (sys.includes('UNIQUE_RUBRIC_TOKEN_42')) judgeReceivedRubric = true;
+        return {
+          type: 'message',
+          finish: 'done',
+          text: JSON.stringify({
+            winner: 'A',
+            grades: [
+              { id: 'A', fidelity: 5, completeness: 5, clarity: 5, reason: 'Met forged idempotency rubric.' },
+              { id: 'B', fidelity: 4, completeness: 4, clarity: 5, reason: 'Good overview.' }
+            ]
+          })
+        };
+      }
       return { type: 'message', finish: 'done', text: 'Contender A answer on event-sourced ledgers.' };
     }
   };

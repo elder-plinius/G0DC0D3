@@ -427,10 +427,10 @@
     <section id="ultra-router-section" class="settings-card ultra-router-section" data-model-subtab="routing" aria-label="Ultra-Plinian Intelligent Router"></section>
     <section id="model-groups-section" class="settings-card model-groups-section" data-model-subtab="routing" aria-label="G0DM0D3 fallback models"></section>
     <section id="overseer-section" class="settings-card overseer-section" data-model-subtab="overseer" aria-label="Overseer and self-optimization"></section>
-    <section id="race-options" class="settings-card" data-model-subtab="routing" hidden><div class="race-heading"><h3>Ultra-Plinian · Manual Arena</h3><label><input id="race-enabled" type="checkbox"> Compare written answers</label></div>
-      <p class="field-help">Two connected models draft in parallel across any provider (OpenRouter, Venice, Anthropic, OpenAI, Gemini, Nous, or Local). A blind judge scores the drafts for fidelity, completeness, and clarity.</p>
-      <div class="race-selectors"><label>First writer<select id="race-first"></select></label><label>Second writer<select id="race-second"></select></label><label>Judge<select id="race-judge"></select></label></div>
-      <button type="button" class="button button-secondary" id="race-save">Apply comparison</button><p id="race-feedback" class="form-feedback" role="status"></p>
+    <section id="race-options" class="settings-card" data-model-subtab="routing" hidden><div class="race-heading"><h3>Ultra-Plinian · Custom Arena (2–4 Models)</h3><label><input id="race-enabled" type="checkbox"> Pin custom arena lineup</label></div>
+      <p class="field-help">Race 2, 3, or 4 connected models in parallel across any provider (OpenRouter, Venice, Anthropic, OpenAI, Gemini, Nous, or Local). A blind judge grades every draft for fidelity, completeness, and clarity.</p>
+      <div class="race-selectors"><label>Writer A<select id="race-first"></select></label><label>Writer B<select id="race-second"></select></label><label>Writer C (optional)<select id="race-third"></select></label><label>Writer D (optional)<select id="race-fourth"></select></label><label>Blind Judge<select id="race-judge"></select></label></div>
+      <button type="button" class="button button-secondary" id="race-save">Save custom arena</button><p id="race-feedback" class="form-feedback" role="status"></p>
     </section>
     <section id="openrouter-browser" class="settings-card openrouter-browser" data-model-subtab="catalog" hidden>
       <div class="openrouter-browser-head">

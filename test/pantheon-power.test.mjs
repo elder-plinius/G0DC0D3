@@ -270,3 +270,80 @@ test('Pantheon Power #5: Headless Chromium E2E — Replay 4x scrub, Formations U
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
+
+test('Ultra-Plinian 3-Way Arena Race & arenaSize routing across non-Venice providers', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'g0d-ultra-3way-'));
+  const wsDir = path.join(dir, 'ws');
+  await fs.mkdir(wsDir, { recursive: true });
+  const mkProv = (id, label, model, answer) => ({
+    id, label, model, kind: 'http', tier: 'frontier', available: true,
+    maxOutputTokensCeiling: 16000,
+    capabilities: { tools: true, nativeTools: true },
+    async turn() { return { type: 'message', finish: 'done', text: answer }; },
+    async draft() { return { type: 'message', finish: 'done', text: answer }; }
+  });
+  const judge = {
+    id: 'nous:hermes-4-405b', label: 'Hermes 4 405B', model: 'hermes-4-405b', kind: 'http', tier: 'frontier', available: true,
+    maxOutputTokensCeiling: 16000,
+    capabilities: { tools: true, nativeTools: true },
+    async turn() { return { type: 'message', finish: 'done', text: 'ok' }; },
+    async draft(input) {
+      const payload = JSON.parse(input[1].content);
+      assert.equal(payload.drafts.length, 3);
+      assert.deepEqual(payload.drafts.map(d => d.id), ['A', 'B', 'C']);
+      const grades = payload.drafts.map((d, idx) => ({
+        id: d.id,
+        fidelity: idx === 0 ? 5 : 4,
+        completeness: idx === 0 ? 5 : 4,
+        clarity: 5,
+        reason: `Draft ${d.id} reviewed cleanly.`
+      }));
+      return { type: 'message', finish: 'done', text: JSON.stringify({ winner: 'A', grades }) };
+    }
+  };
+  const providers = new Map([
+    ['openrouter:gemini-4-neon', mkProv('openrouter:gemini-4-neon', 'Gemini 4 Neon', 'google/gemini-4-neon', 'Gemini answer')],
+    ['openrouter:claude-sonnet-5.5', mkProv('openrouter:claude-sonnet-5.5', 'Claude Sonnet 5.5', 'anthropic/claude-sonnet-5.5', 'Claude answer')],
+    ['openai:gpt-5.4', mkProv('openai:gpt-5.4', 'GPT-5.4', 'gpt-5.4', 'GPT answer')],
+    [judge.id, judge]
+  ]);
+  const app = await createApp({ dataDir: path.join(dir, 'state'), auth: false, providers, cliDiscovery: { probes: [] } });
+  const root = await app.listen(0);
+  const headers = { 'content-type': 'application/json', 'x-g0d-request': '1' };
+
+  try {
+    // 1. Update router to auto_arena with arenaSize: 3 and verify preview returns 3 distinct contenders!
+    const patchRes = await fetch(`${root}/api/router`, {
+      method: 'PATCH', headers, body: JSON.stringify({ mode: 'auto_arena', arenaSize: 3 })
+    });
+    assert.equal(patchRes.status, 200);
+    const preview = await (await fetch(`${root}/api/router/preview`, {
+      method: 'POST', headers, body: JSON.stringify({ objective: 'Design a zero-copy ring buffer in Rust.' })
+    })).json();
+    assert.equal(preview.arenaSize, 3);
+    assert.equal(preview.arenaModels?.length, 3);
+    assert.ok(preview.judgeId);
+
+    // 2. Run a real 3-contender Answer Race end-to-end and verify Conclave Arena snapshot!
+    const task = await app.runtime.createTask({
+      objective: 'Compare three sorting algorithms concisely.',
+      workspaceKind: 'conversation',
+      workspace: wsDir,
+      providers: ['openrouter:gemini-4-neon'],
+      answerRace: {
+        models: ['openrouter:gemini-4-neon', 'openrouter:claude-sonnet-5.5', 'openai:gpt-5.4'],
+        judge: judge.id
+      }
+    });
+    await app.runtime.run(task.id);
+    const done = app.runtime.getTask(task.id);
+    assert.equal(done.status, 'completed');
+    const pState = await (await fetch(`${root}/api/tasks/${encodeURIComponent(task.id)}/pantheon`)).json();
+    assert.equal(pState.mode, 'arena');
+    assert.equal(pState.arena.contenders.length, 3);
+    assert.equal(pState.arena.contenders.filter(c => c.isWinner).length, 1);
+  } finally {
+    await app.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
