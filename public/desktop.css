@@ -422,6 +422,9 @@ body.code-open .inspector { display: none; }
 .model-picker-name strong { font-size: .875rem; font-weight: 550; overflow-wrap: anywhere; }
 .model-picker-name small { color: var(--muted); font-size: .7rem; overflow-wrap: anywhere; }
 .model-picker-check { color: var(--signal); margin-left: auto; width: 18px; flex-shrink: 0; text-align: center; }
+.model-picker-check.is-add { color: var(--muted); font-weight: 600; font-size: .95rem; }
+.model-picker-option:hover .model-picker-check.is-add, .model-picker-option.highlighted .model-picker-check.is-add { color: var(--signal); }
+.model-picker-more { font-size: .75rem; border-top: 1px solid var(--line-subtle); padding-top: .55rem; }
 .model-picker-empty { margin: .7rem; font-size: .875rem; color: var(--muted); }
 .model-picker-error { margin: 0; padding: .65rem 1rem; color: var(--red); font-size: .8rem; flex-shrink: 0; }
 .model-picker-error:empty { display: none; }

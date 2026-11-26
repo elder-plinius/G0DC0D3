@@ -85,7 +85,7 @@ async function readBody(req, maxBytes = 65536) {
   catch {throw Object.assign(new Error('Expected a JSON object'),{status:400});}
 }
 
-export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(projectDir,'.g0dc0d3'),providers,evaluator=evaluateTask,auth=true,keychain,fetchCatalog,cliDiscovery={}}={}) {
+export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(projectDir,'.g0dc0d3'),providers,evaluator=evaluateTask,auth=true,keychain,fetchCatalog,fetchOpenRouterCatalog,cliDiscovery={}}={}) {
   dataDir=path.resolve(dataDir);
   const configuredProviders = !providers;
   providers ||= new Map([...createScriptedProviders(),...environmentProviders()]);
@@ -93,7 +93,7 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
   const providerSettings = await createProviderSettings(providers, keychain);
   const redact = value => redactDiagnostics(value, [...environmentSecrets(), ...providerSettings.secrets]);
   const cliConnections = await createCliConnections({...cliDiscovery,dataDir,providers});
-  const modelCatalog = await createModelCatalog({dataDir});
+  const modelCatalog = await createModelCatalog({dataDir, ...(fetchOpenRouterCatalog ? { fetchImpl: fetchOpenRouterCatalog } : {})});
   const catalog = createVeniceCatalog(providers, fetchCatalog, () => runtime.getPrivacy().settings);
   const runtime = new Runtime({dataDir,providers,evaluator,catalog,
     outboundSecrets: () => [...environmentSecrets(), ...providerSettings.secrets]});
@@ -206,7 +206,9 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
         setup:setup.state(),
         promptCommandRevision:promptCommands.revision,
         veniceConnectionId:[...providers.values()].find(provider=>provider.baseUrl===veniceEndpoint && provider.available && !provider.closed)?.id || null,
-        tasks:runtime.listTasks().map(task=>taskSummary(task,runtime)),providers:[...providers.values()].map(provider=>({id:provider.id,label:provider.label,kind:provider.kind,available:provider.available??true,accounting:provider.accounting,tier:provider.tier||'standard',zdr:classifyProviderZdr(provider),meta:classifyModel(provider,{catalog:modelCatalog,learning})})),
+        openrouterConnectionId:[...providers.values()].find(provider=>provider.baseUrl==='https://openrouter.ai/api/v1' && provider.available && !provider.closed)?.id || null,
+        connectedApiProviders:providerSettings.connectedProfiles(),
+        tasks:runtime.listTasks().map(task=>taskSummary(task,runtime)),providers:[...providers.values()].map(provider=>({id:provider.id,label:provider.label,model:provider.model||null,kind:provider.kind,available:provider.available??true,accounting:provider.accounting,tier:provider.tier||'standard',zdr:classifyProviderZdr(provider),meta:classifyModel(provider,{catalog:modelCatalog,learning})})),
         fixtures:fixtures.map(({id,title,description,objective})=>({id,title,description,objective})),scenarios:scriptedScenarios,benchmark,version:'0.2.0',capabilities,limitations,personas:PERSONAS,tools:TOOLS.map(({name,description,parameters,result})=>({name,description,parameters,resultSchema:result})),executionAvailable:isSandboxSupportedPlatform(),sessionProtected:auth,workflows:listWorkflows(),permissions:runtime.getGlobalPermissions(),privacy:runtime.getPrivacy(),overseer:runtime.getOverseer(),router:runtime.getRouterSettings(),modelGroups:runtime.getModelGroups({sortBy,catalog:modelCatalog}),sortModes:MODEL_SORT_MODES,catalogMeta:modelCatalog.meta()
       });
       }
@@ -342,6 +344,57 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
       }
       if(req.method==='GET' && url.pathname==='/api/learning')return send(res,200,runtime.getLearning());
       if(req.method==='GET' && url.pathname==='/api/providers/venice-models')return send(res,200,await catalog.list(url.searchParams.get('refresh')==='1'));
+      if(req.method==='GET' && url.pathname==='/api/providers/openrouter-models') {
+        const openrouterEndpoint = 'https://openrouter.ai/api/v1';
+        const connectedProviders = [...providers.values()].filter(p => p.baseUrl === openrouterEndpoint && p.available !== false && !p.closed);
+        const connected = connectedProviders.length > 0 || Boolean(process.env.OPENROUTER_API_KEY);
+        if (!connected) {
+          return send(res, 200, { connected: false, models: [], registered: [], count: 0, fetchedAt: null, stale: false, warning: '' });
+        }
+        const refreshed = await modelCatalog.ensureFresh({
+          privacy: runtime.getPrivacy().settings,
+          onOutbound: entry => runtime.outboundAudit.record(entry),
+          force: url.searchParams.get('refresh') === '1'
+        });
+        const registeredSet = new Set(connectedProviders.map(p => p.model).filter(Boolean));
+        const seen = new Set();
+        const models = [];
+        const addEntry = (entry) => {
+          if (!entry?.id || seen.has(entry.id)) return;
+          seen.add(entry.id);
+          const id = 'openrouter:' + entry.id.replaceAll('/', '-');
+          const displayName = entry.name || entry.id;
+          const label = `${displayName} · OpenRouter`;
+          const pseudoProvider = { id, model: entry.id, label, baseUrl: openrouterEndpoint, kind: 'http' };
+          models.push({
+            id,
+            model: entry.id,
+            name: displayName,
+            label,
+            contextWindow: entry.contextWindow ?? null,
+            maxOutput: entry.maxOutput ?? null,
+            pricing: entry.pricing ?? null,
+            supportsTools: Boolean(entry.supportsTools),
+            supportsReasoning: Boolean(entry.supportsReasoning),
+            registered: registeredSet.has(entry.id),
+            meta: classifyModel(pseudoProvider, { catalog: modelCatalog })
+          });
+        };
+        for (const entry of refreshed.entries) addEntry(entry);
+        // Ensure already-registered OpenRouter models always appear even if offline/unlisted.
+        for (const p of connectedProviders) {
+          if (p.model && !seen.has(p.model)) addEntry({ id: p.model, name: p.model });
+        }
+        return send(res, 200, {
+          connected: true,
+          models,
+          registered: [...registeredSet],
+          count: models.length,
+          fetchedAt: refreshed.updatedAt,
+          stale: refreshed.stale,
+          warning: refreshed.warning
+        });
+      }
       if(req.method==='GET' && url.pathname==='/api/providers/parameters') {
         const ids=[...new Set((url.searchParams.get('ids') || '').split(',').filter(Boolean))];
         if(!ids.length || ids.length>10) return send(res,400,{error:'Choose one to ten models.'});
@@ -358,7 +411,15 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
       if(req.method==='DELETE' && url.pathname==='/api/providers/connections')return send(res,200,await cliConnections.disconnect(await readBody(req)));
       if(req.method==='POST' && url.pathname==='/api/providers/key') {
         const result = await providerSettings.connect(await readBody(req));
-        return send(res,200,{...result,providers:[...providers.values()].map(({id,label,kind,available=true,tier='standard'})=>({id,label,kind,available,tier}))});
+        return send(res,200,{...result,connectedApiProviders:providerSettings.connectedProfiles(),providers:[...providers.values()].map(({id,label,kind,available=true,tier='standard'})=>({id,label,kind,available,tier}))});
+      }
+      if(req.method==='POST' && url.pathname==='/api/providers/models') {
+        const result = await providerSettings.addModels(await readBody(req));
+        return send(res,200,{...result,connectedApiProviders:providerSettings.connectedProfiles(),providers:[...providers.values()].map(({id,label,kind,available=true,tier='standard'})=>({id,label,kind,available,tier}))});
+      }
+      if(req.method==='DELETE' && url.pathname==='/api/providers/models') {
+        const result = await providerSettings.removeModels(await readBody(req));
+        return send(res,200,{...result,connectedApiProviders:providerSettings.connectedProfiles(),providers:[...providers.values()].map(({id,label,kind,available=true,tier='standard'})=>({id,label,kind,available,tier}))});
       }
       if(req.method==='POST' && url.pathname==='/api/providers/local') {
         const body=await readBody(req);

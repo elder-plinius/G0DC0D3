@@ -328,9 +328,16 @@ function duration(value) {
 const settingsListContents = new WeakMap();
 let veniceCatalog = { connected: false, models: [], warning: '' };
 let veniceCatalogConnection = null;
+let openrouterCatalog = { connected: false, models: [], registered: [], warning: '' };
+let openrouterCatalogConnection = null;
+let openrouterFilter = '';
+let openrouterBusyModel = null;
+let openrouterRefreshBusy = false;
 const catalogId = id => typeof id === 'string' && id.startsWith('venice-catalog:');
 function providerById(id) {
-  return state.providers.find(provider => provider.id === id) || (catalogId(id) && (veniceCatalog.models.find(model => model.id === id) || {id, label:id.slice('venice-catalog:'.length)}));
+  return state.providers.find(provider => provider.id === id)
+    || (catalogId(id) && (veniceCatalog.models.find(model => model.id === id) || {id, label:id.slice('venice-catalog:'.length)}))
+    || openrouterCatalog.models.find(model => model.id === id);
 }
 function liveProviders() { return state.providers.filter(provider => provider.kind !== 'scripted' && provider.available !== false); }
 function newConversationProviders() {
@@ -1873,6 +1880,159 @@ function renderVeniceCatalog() {
   backup.disabled = routeBusy || !catalogId(primary) || Boolean(modelSelectionLock(task));
   setText('#venice-count', [veniceCatalog.models.length + ' models available', veniceCatalog.warning].filter(Boolean).join(' · '));
 }
+async function loadOpenRouterCatalog(force = false) {
+  if (force) {
+    openrouterRefreshBusy = true;
+    renderOpenRouterCatalog();
+  }
+  try {
+    openrouterCatalog = await api('/api/providers/openrouter-models' + (force ? '?refresh=1' : ''));
+  } catch (error) { openrouterCatalog = { ...openrouterCatalog, warning: error.message }; }
+  finally {
+    if (force) openrouterRefreshBusy = false;
+  }
+  renderOpenRouterCatalog();
+  if ($('#model-picker')?.open) renderModelPicker();
+  if ($('#settings-dialog')?.open) renderModelSettings();
+}
+function formatOpenRouterPrice(pricing) {
+  if (!pricing || !Number.isFinite(pricing.inputPer1M) || !Number.isFinite(pricing.outputPer1M)) return '';
+  if (pricing.inputPer1M === 0 && pricing.outputPer1M === 0) return 'Free';
+  const fmt = v => v < 0.01 ? v.toFixed(4).replace(/0+$/, '').replace(/\.$/, '') : v < 1 ? v.toFixed(2).replace(/0+$/, '').replace(/\.$/, '') : v.toFixed(2).replace(/\.00$/, '');
+  return `$${fmt(pricing.inputPer1M)} / $${fmt(pricing.outputPer1M)}`;
+}
+function formatOpenRouterContext(ctx) {
+  if (!Number.isFinite(ctx) || ctx <= 0) return '';
+  return ctx >= 1000000 ? `${(ctx / 1000000).toFixed(ctx % 1000000 === 0 ? 0 : 1)}M` : `${Math.round(ctx / 1000)}k`;
+}
+function renderOpenRouterCatalog() {
+  const section = $('#openrouter-browser');
+  if (!section) return;
+  section.hidden = !openrouterCatalog.connected;
+  if (!openrouterCatalog.connected) return;
+  const refreshBtn = $('#openrouter-refresh');
+  if (refreshBtn) {
+    refreshBtn.disabled = openrouterRefreshBusy;
+    refreshBtn.textContent = openrouterRefreshBusy ? 'Refreshing…' : 'Refresh catalog';
+  }
+  const registeredSet = new Set(
+    state.providers
+      .filter(p => p.id?.startsWith('openrouter:') && p.available !== false)
+      .map(p => p.model)
+      .filter(Boolean)
+  );
+  const models = Array.isArray(openrouterCatalog.models) ? openrouterCatalog.models : [];
+  const addedCount = registeredSet.size || (openrouterCatalog.registered?.length || 0);
+  setText('#openrouter-count', [
+    `${models.length} models available on OpenRouter`,
+    `${addedCount} added`,
+    openrouterCatalog.warning
+  ].filter(Boolean).join(' · '));
+  const query = openrouterFilter.trim().toLowerCase();
+  const filtered = query
+    ? models.filter(m => `${m.name || ''} ${m.model || ''} ${m.id || ''}`.toLowerCase().includes(query))
+    : models.slice().sort((a, b) => {
+        const aReg = registeredSet.has(a.model) ? 0 : 1;
+        const bReg = registeredSet.has(b.model) ? 0 : 1;
+        if (aReg !== bReg) return aReg - bReg;
+        const aIq = Number(a.meta?.intelligence ?? 0);
+        const bIq = Number(b.meta?.intelligence ?? 0);
+        if (bIq !== aIq) return bIq - aIq;
+        return (a.name || a.model).localeCompare(b.name || b.model);
+      });
+  const limit = 60;
+  const visible = filtered.slice(0, limit);
+  const listEl = $('#openrouter-list');
+  if (!listEl) return;
+  if (!visible.length) {
+    listEl.innerHTML = `<p class="field-help">${query ? 'No matching OpenRouter models. You can still paste any slug in “Add any model ID” above.' : 'No OpenRouter models loaded yet. Click Refresh catalog.'}</p>`;
+    return;
+  }
+  const rows = visible.map(m => {
+    const isAdded = registeredSet.has(m.model);
+    const busy = openrouterBusyModel === m.model;
+    const price = formatOpenRouterPrice(m.pricing);
+    const ctx = formatOpenRouterContext(m.contextWindow);
+    const metaParts = [m.model, ctx ? `${ctx} ctx` : '', price].filter(Boolean).join(' · ');
+    const actions = isAdded
+      ? `<button type="button" class="button button-secondary openrouter-row-btn" data-or-use="${escapeHTML(m.id)}" ${busy || routeBusy ? 'disabled' : ''}>Use</button>${addedCount > 1 ? `<button type="button" class="button button-quiet openrouter-row-btn" data-or-remove="${escapeHTML(m.model)}" ${busy ? 'disabled' : ''}>Remove</button>` : ''}`
+      : `<button type="button" class="button button-secondary openrouter-row-btn" data-or-add="${escapeHTML(m.model)}" ${busy ? 'disabled' : ''}>${busy ? 'Adding…' : '+ Add'}</button>`;
+    return `<div class="openrouter-row ${isAdded ? 'is-added' : ''}"><div class="openrouter-row-info"><strong>${escapeHTML(m.name || m.model)}</strong><small>${escapeHTML(metaParts)}</small></div><div class="openrouter-row-actions">${actions}</div></div>`;
+  }).join('');
+  const tail = filtered.length > limit ? `<p class="field-help openrouter-list-more">Showing ${limit} of ${filtered.length} matching models — type to narrow the list.</p>` : '';
+  listEl.innerHTML = rows + tail;
+}
+function renderCustomModelForm() {
+  const wrap = $('#custom-model-setup');
+  const select = $('#custom-model-provider');
+  if (!wrap || !select) return;
+  const connected = Array.isArray(state.connectedApiProviders) ? state.connectedApiProviders : [];
+  wrap.hidden = connected.length === 0;
+  if (!connected.length) return;
+  const prev = select.value;
+  const key = JSON.stringify(connected.map(c => [c.provider, c.label]));
+  if (settingsListContents.get(select) !== key) {
+    select.replaceChildren(...connected.map(c => new Option(c.label, c.provider)));
+    settingsListContents.set(select, key);
+  }
+  if (connected.some(c => c.provider === prev)) select.value = prev;
+  else if (connected.some(c => c.provider === 'openrouter')) select.value = 'openrouter';
+}
+async function addProviderModel(provider, model, { select = false, feedbackEl = null } = {}) {
+  const slug = String(model || '').trim();
+  if (!slug) throw new Error('Enter a model ID.');
+  openrouterBusyModel = slug;
+  renderOpenRouterCatalog();
+  try {
+    const result = await api('/api/providers/models', { method: 'POST', body: JSON.stringify({ provider, models: [slug] }) });
+    if (Array.isArray(result.connectedApiProviders)) state.connectedApiProviders = result.connectedApiProviders;
+    await refresh();
+    if (provider === 'openrouter') await loadOpenRouterCatalog();
+    if ($('#settings-dialog')?.open) {
+      await Promise.all([loadServices(), loadModelGroups(selectedModelSort)]);
+      renderModelSettings();
+    }
+    const newId = result.added?.[0] || `${provider}:${slug.replaceAll('/', '-')}`;
+    if (select) await selectModel(newId);
+    if (feedbackEl) {
+      $(feedbackEl)?.classList.remove('error');
+      setText(feedbackEl, `Added ${slug} to ${humanize(provider)}.`);
+    }
+    toast(`Added ${slug} (${humanize(provider)}).`);
+    return newId;
+  } catch (error) {
+    if (feedbackEl) {
+      $(feedbackEl)?.classList.add('error');
+      setText(feedbackEl, error.message);
+    }
+    throw error;
+  } finally {
+    openrouterBusyModel = null;
+    renderOpenRouterCatalog();
+  }
+}
+async function removeProviderModel(provider, model) {
+  const slug = String(model || '').trim();
+  if (!slug) return;
+  openrouterBusyModel = slug;
+  renderOpenRouterCatalog();
+  try {
+    const result = await api('/api/providers/models', { method: 'DELETE', body: JSON.stringify({ provider, models: [slug] }) });
+    if (Array.isArray(result.connectedApiProviders)) state.connectedApiProviders = result.connectedApiProviders;
+    await refresh();
+    if (provider === 'openrouter') await loadOpenRouterCatalog();
+    if ($('#settings-dialog')?.open) {
+      await Promise.all([loadServices(), loadModelGroups(selectedModelSort)]);
+      renderModelSettings();
+    }
+    toast(`Removed ${slug}.`);
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    openrouterBusyModel = null;
+    renderOpenRouterCatalog();
+  }
+}
 let selectedModelGroupId = 'flagship-waterfall';
 let selectedModelSort = '';
 let modelGroupBusy = false;
@@ -2488,6 +2648,8 @@ function formatRouteSummary(ids, scopePrefix) {
 
 function renderModelSettings() {
   renderVeniceCatalog();
+  renderOpenRouterCatalog();
+  renderCustomModelForm();
   renderServicesHub();
   renderUltraRouterSection();
   renderModelGroups();
@@ -5110,6 +5272,13 @@ async function refresh() {
       veniceCatalogConnection = null;
       veniceCatalog = { connected: false, models: [], warning: '' };
     }
+    if (state.openrouterConnectionId && openrouterCatalogConnection !== state.openrouterConnectionId) {
+      openrouterCatalogConnection = state.openrouterConnectionId;
+      void loadOpenRouterCatalog();
+    } else if (!state.openrouterConnectionId) {
+      openrouterCatalogConnection = null;
+      openrouterCatalog = { connected: false, models: [], registered: [], warning: '' };
+    }
     if (selectedId && !state.tasks.some(task => task.id === selectedId)) {
       newConversation();
     }
@@ -6574,7 +6743,7 @@ async function submitApiKey(inputOrKey, feedbackEl, provider = '') {
     if (result.registered.length && !preferredProvider) { preferredProvider = result.registered[0]; try { localStorage.setItem('g0dc0d3.preferredProvider', preferredProvider); } catch {} }
     await refresh();
     renderComposer();
-    if ($('#settings-dialog').open) { await Promise.all([loadVeniceCatalog(), loadServices(), loadModelGroups(selectedModelSort)]); renderModelSettings(); }
+    if ($('#settings-dialog').open) { await Promise.all([loadVeniceCatalog(), loadOpenRouterCatalog(), loadServices(), loadModelGroups(selectedModelSort)]); renderModelSettings(); }
     setVisible('#welcome-setup', false);
     toast(`Connected ${providerName} (${result.registered.length} model${result.registered.length === 1 ? '' : 's'}).`);
   } catch (error) {
@@ -6583,6 +6752,39 @@ async function submitApiKey(inputOrKey, feedbackEl, provider = '') {
   }
 }
 $('#api-key-form').addEventListener('submit', event => { event.preventDefault(); submitApiKey($('#api-key-input'), '#api-key-feedback', $('#api-key-provider')?.value || ''); });
+$('#custom-model-form')?.addEventListener('submit', async event => {
+  event.preventDefault();
+  const provider = $('#custom-model-provider')?.value || '';
+  const input = $('#custom-model-name');
+  const submitBtn = $('#custom-model-submit');
+  const model = (input?.value || '').trim();
+  if (!provider || !model) {
+    $('#custom-model-feedback')?.classList.add('error');
+    setText('#custom-model-feedback', 'Choose a provider and enter a model ID.');
+    return;
+  }
+  $('#custom-model-feedback')?.classList.remove('error');
+  setText('#custom-model-feedback', `Adding ${model}…`);
+  if (submitBtn) submitBtn.disabled = true;
+  try {
+    await addProviderModel(provider, model, { feedbackEl: '#custom-model-feedback' });
+    if (input) input.value = '';
+  } catch {}
+  finally { if (submitBtn) submitBtn.disabled = false; }
+});
+$('#openrouter-filter')?.addEventListener('input', event => {
+  openrouterFilter = event.target.value || '';
+  renderOpenRouterCatalog();
+});
+$('#openrouter-refresh')?.addEventListener('click', () => { void loadOpenRouterCatalog(true); });
+$('#openrouter-list')?.addEventListener('click', event => {
+  const addBtn = event.target.closest('[data-or-add]');
+  if (addBtn) { void addProviderModel('openrouter', addBtn.dataset.orAdd).catch(err => toast(err.message)); return; }
+  const useBtn = event.target.closest('[data-or-use]');
+  if (useBtn) { void selectModel(useBtn.dataset.orUse).catch(err => toast(err.message)); return; }
+  const removeBtn = event.target.closest('[data-or-remove]');
+  if (removeBtn) { void removeProviderModel('openrouter', removeBtn.dataset.orRemove); }
+});
 function openFinishedChange(event) {
   const launcher = event?.currentTarget || $('#command-open');
   const dialog = $('#finished-change');
@@ -7054,7 +7256,16 @@ function selectableModels(task) {
   const catalog = !task || task.workspaceKind === 'conversation' ? veniceCatalog.models : [];
   // The catalog and configured Venice connections can refer to the same model.
   const catalogModels = new Set(catalog.map(model => model.model));
-  return [...catalog, ...configured.filter(p => !catalogModels.has(p.model) || !/venice/i.test(p.id))];
+  const base = [...catalog, ...configured.filter(p => !catalogModels.has(p.model) || !/venice/i.test(p.id))];
+  if (!task?.fixtureId && openrouterCatalog.connected && Array.isArray(openrouterCatalog.models) && openrouterCatalog.models.length) {
+    const existingIds = new Set(base.map(p => p.id));
+    const existingOpenRouterModels = new Set(base.filter(p => p.id?.startsWith('openrouter:')).map(p => p.model).filter(Boolean));
+    for (const m of openrouterCatalog.models) {
+      if (existingIds.has(m.id) || existingOpenRouterModels.has(m.model)) continue;
+      base.push({ ...m, kind: 'http', catalogAdd: true, catalogProvider: 'openrouter' });
+    }
+  }
+  return base;
 }
 
 function positionModelPicker() {
@@ -7095,40 +7306,74 @@ function renderModelPicker() {
   if (!$('#model-picker').open) return;
   const task = pickerTask(), selected = task?.providerId || newConversationProviders()[0];
   const previous = pickerModels[pickerIndex]?.id;
-  const query = $('#model-picker-search').value.trim().toLowerCase();
+  const rawQuery = $('#model-picker-search').value.trim();
+  const query = rawQuery.toLowerCase();
   const models = selectableModels(task);
   // Keep the actual active connection visible even when a catalog alias exists.
   if (selected && !models.some(p => p.id === selected)) {
     const active = providerById(selected);
     if (active) models.unshift(active);
   }
-  const rank = id => id === selected ? -2 : recentModels.includes(id) ? recentModels.indexOf(id) - 1 : 10;
+  const rank = p => {
+    if (p.id === selected) return -3;
+    if (recentModels.includes(p.id)) return recentModels.indexOf(p.id) - 2;
+    if (p.catalogAdd) return query ? 12 : 20;
+    return 10;
+  };
   const metaOf = p => p?.meta || modelMetaById(p?.id);
   const iqOf = p => {
     const m = metaOf(p);
     return Number(m?.effectiveIntelligence ?? m?.intelligence ?? 0);
   };
-  models.sort((a,b) => rank(a.id) - rank(b.id) || (iqOf(b) - iqOf(a)) || (a.label || a.id).localeCompare(b.label || b.id));
-  pickerModels = models.filter(p => `${p.label || ''} ${p.model || ''} ${p.id}`.toLowerCase().includes(query));
+  models.sort((a,b) => rank(a) - rank(b) || (iqOf(b) - iqOf(a)) || (a.label || a.id).localeCompare(b.label || b.id));
+  const matched = models.filter(p => `${p.label || ''} ${p.name || ''} ${p.model || ''} ${p.id}`.toLowerCase().includes(query));
+  // If OpenRouter is connected and the user typed a custom org/model slug not yet listed, offer 1-click add.
+  if (!task?.fixtureId && openrouterCatalog.connected && /^[a-zA-Z0-9][a-zA-Z0-9._-]+\/[a-zA-Z0-9][a-zA-Z0-9:._/+~-]{0,120}$/.test(rawQuery)) {
+    const exactExists = matched.some(p => p.model?.toLowerCase() === query && p.id?.startsWith('openrouter:'));
+    if (!exactExists) {
+      matched.push({
+        id: 'openrouter:' + rawQuery.replaceAll('/', '-'),
+        model: rawQuery,
+        label: `${rawQuery} · OpenRouter`,
+        kind: 'http',
+        catalogAdd: true,
+        catalogProvider: 'openrouter',
+        customSlug: true
+      });
+    }
+  }
+  const totalMatches = matched.length;
+  const maxVisible = 80;
+  pickerModels = matched.slice(0, maxVisible);
   const lock = modelSelectionLock(task);
   setText('#model-picker-scope', task ? 'This chat' : 'New chats');
-  setText('#model-picker-count', pickerLoading ? 'Loading…' : `${pickerModels.length} models`);
+  setText('#model-picker-count', pickerLoading ? 'Loading…' : `${totalMatches} models`);
   const race = task ? task.answerRace : RecoveryUI.preferences().answerRace;
   setText('#model-picker-note', lock || (race ? 'Ultra-Plinian is on. This selects the model used when comparison is off.' : task ? 'Select a model for your next message.' : 'Select the default for new chats.'));
-  $('#model-picker-results').innerHTML = pickerModels.length ? pickerModels.map((p,i) => {
+  const rowsHtml = pickerModels.map((p,i) => {
     const name = p.label || p.model || p.id;
-    const connection = catalogId(p.id) || /venice/i.test(p.id) ? 'Venice' : kindLabel(p.kind || 'http');
+    const isOr = p.id?.startsWith('openrouter:') || p.catalogProvider === 'openrouter';
+    const connection = catalogId(p.id) || /venice/i.test(p.id) ? 'Venice' : isOr ? 'OpenRouter' : kindLabel(p.kind || 'http');
     const meta = metaOf(p);
     const detail = [
       connection,
+      p.customSlug ? 'Add custom OpenRouter model' : '',
       meta?.tier ? `Est. ${meta.tier}·${meta.intelligence}` : '',
-      meta?.priceLabel || '',
-      meta?.contextLabel || '',
+      meta?.priceLabel || formatOpenRouterPrice(p.pricing) || '',
+      meta?.contextLabel || formatOpenRouterContext(p.contextWindow) || '',
       meta?.zdr?.label || '',
       recentModels.includes(p.id) && p.id !== selected ? 'Recent' : ''
     ].filter(Boolean).join(' · ');
-    return `<button type="button" id="model-picker-option-${i}" class="model-picker-option" role="option" aria-selected="${p.id === selected}" data-pick-model="${escapeHTML(p.id)}" ${lock || routeBusy ? 'disabled' : ''}><span class="model-picker-name"><strong>${escapeHTML(name)}</strong><small>${escapeHTML(detail)}</small></span><span class="model-picker-check" aria-hidden="true">${p.id === selected ? '✓' : ''}</span></button>`;
-  }).join('') : `<p class="model-picker-empty">${pickerLoading ? 'Loading connected models…' : query ? 'No matching models. Try another name.' : 'Connect a provider to choose a model.'}</p>`;
+    const badge = p.id === selected ? '✓' : p.catalogAdd ? '+' : '';
+    const badgeTitle = p.catalogAdd ? 'Click to add and select from OpenRouter' : '';
+    return `<button type="button" id="model-picker-option-${i}" class="model-picker-option ${p.catalogAdd ? 'is-catalog-add' : ''}" role="option" aria-selected="${p.id === selected}" data-pick-model="${escapeHTML(p.id)}" ${lock || routeBusy ? 'disabled' : ''}><span class="model-picker-name"><strong>${escapeHTML(name)}</strong><small>${escapeHTML(detail)}</small></span><span class="model-picker-check ${p.catalogAdd ? 'is-add' : ''}" aria-hidden="true" ${badgeTitle ? `title="${escapeHTML(badgeTitle)}"` : ''}>${badge}</span></button>`;
+  }).join('');
+  const overflowNote = totalMatches > pickerModels.length
+    ? `<p class="model-picker-empty model-picker-more">Showing top ${pickerModels.length} of ${totalMatches} models — type to search all OpenRouter models…</p>`
+    : '';
+  $('#model-picker-results').innerHTML = pickerModels.length
+    ? rowsHtml + overflowNote
+    : `<p class="model-picker-empty">${pickerLoading ? 'Loading connected models…' : query ? 'No matching models. Try another name.' : 'Connect a provider to choose a model.'}</p>`;
   highlightPickerModel(Math.max(0, pickerModels.findIndex(p => p.id === previous)));
   positionModelPicker();
 }
@@ -7145,7 +7390,11 @@ async function openModelPicker(scope = selectedId, anchor = document.activeEleme
   $('#composer-model').setAttribute('aria-expanded', 'true');
   renderModelPicker();
   $('#model-picker-search').focus();
-  await Promise.all([loadVeniceCatalog(), Array.isArray(state.modelGroups) && state.modelGroups.length ? Promise.resolve() : loadModelGroups()]);
+  await Promise.all([
+    loadVeniceCatalog(),
+    state.openrouterConnectionId && !openrouterCatalog.models.length ? loadOpenRouterCatalog() : Promise.resolve(),
+    Array.isArray(state.modelGroups) && state.modelGroups.length ? Promise.resolve() : loadModelGroups()
+  ]);
   pickerLoading = false;
   renderModelPicker();
 }
@@ -7207,7 +7456,26 @@ async function selectModel(id, {scope = pickerScope, backup} = {}) {
 async function choosePickerModel(id) {
   setText('#model-picker-error','');
   try {
-    if (await selectModel(id)) {
+    let targetId = id;
+    const entry = pickerModels.find(p => p.id === id);
+    if (entry?.catalogAdd && entry.model) {
+      routeBusy = true;
+      setText('#model-picker-note', `Adding ${entry.model}…`);
+      renderModelPicker();
+      try {
+        const result = await api('/api/providers/models', {
+          method: 'POST',
+          body: JSON.stringify({ provider: entry.catalogProvider || 'openrouter', models: [entry.model] })
+        });
+        targetId = result.added?.[0] || id;
+        if (Array.isArray(result.connectedApiProviders)) state.connectedApiProviders = result.connectedApiProviders;
+        await refresh();
+        if (entry.catalogProvider === 'openrouter') await loadOpenRouterCatalog();
+      } finally {
+        routeBusy = false;
+      }
+    }
+    if (await selectModel(targetId)) {
       const fromSettings = $('#settings-dialog').open;
       if (!fromSettings) pickerReturnFocus = $('#composer-input');
       $('#model-picker').close();

@@ -5,12 +5,31 @@ import path from 'node:path';
 import { HttpProvider } from './providers.mjs';
 
 const profiles = {
-  venice: { label: 'Venice', protocol: 'openai-chat', endpoint: 'https://api.venice.ai/api/v1', defaults: ['venice-uncensored-1-2'] },
-  openrouter: { label: 'OpenRouter', protocol: 'openai-chat', endpoint: 'https://openrouter.ai/api/v1', defaults: ['deepseek/deepseek-chat-v3-0324', 'meta-llama/llama-4-scout', 'qwen/qwen3-235b-a22b'] },
-  anthropic: { label: 'Anthropic', protocol: 'anthropic', endpoint: 'https://api.anthropic.com/v1', defaults: ['claude-sonnet-4-6', 'claude-opus-4-6'] },
-  openai: { label: 'OpenAI', protocol: 'openai-responses', endpoint: 'https://api.openai.com/v1', defaults: ['gpt-5.4', 'o3'] },
-  gemini: { label: 'Gemini API', protocol: 'openai-chat', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai', defaults: ['gemini-2.5-pro', 'gemini-2.5-flash'] },
-  nous: { label: 'Nous Portal', protocol: 'openai-chat', endpoint: 'https://inference-api.nousresearch.com/v1', defaults: ['Hermes-4-405B', 'Hermes-4-70B'] },
+  venice: { label: 'Venice', protocol: 'openai-chat', endpoint: 'https://api.venice.ai/api/v1', apiKeyEnv: 'VENICE_API_KEY', defaults: ['venice-uncensored-1-2'] },
+  openrouter: {
+    label: 'OpenRouter',
+    protocol: 'openai-chat',
+    endpoint: 'https://openrouter.ai/api/v1',
+    apiKeyEnv: 'OPENROUTER_API_KEY',
+    defaults: [
+      'anthropic/claude-sonnet-4.6',
+      'anthropic/claude-opus-4.6',
+      'openai/gpt-5.4',
+      'openai/o3',
+      'google/gemini-2.5-pro',
+      'google/gemini-2.5-flash',
+      'deepseek/deepseek-r1',
+      'deepseek/deepseek-chat-v3-0324',
+      'qwen/qwen3-235b-a22b',
+      'qwen/qwen3-coder',
+      'meta-llama/llama-4-maverick',
+      'x-ai/grok-4',
+    ],
+  },
+  anthropic: { label: 'Anthropic', protocol: 'anthropic', endpoint: 'https://api.anthropic.com/v1', apiKeyEnv: 'ANTHROPIC_API_KEY', defaults: ['claude-sonnet-4-6', 'claude-opus-4-6'] },
+  openai: { label: 'OpenAI', protocol: 'openai-responses', endpoint: 'https://api.openai.com/v1', apiKeyEnv: 'OPENAI_API_KEY', defaults: ['gpt-5.4', 'o3'] },
+  gemini: { label: 'Gemini API', protocol: 'openai-chat', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai', apiKeyEnv: 'GEMINI_API_KEY', defaults: ['gemini-2.5-pro', 'gemini-2.5-flash'] },
+  nous: { label: 'Nous Portal', protocol: 'openai-chat', endpoint: 'https://inference-api.nousresearch.com/v1', apiKeyEnv: 'NOUS_API_KEY', defaults: ['Hermes-4-405B', 'Hermes-4-70B'] },
 };
 
 export function nativeKeychain(executable, dataDir) {
@@ -94,29 +113,37 @@ export function linuxSecretToolKeychain(dataDir, { binary } = {}) {
   };
 }
 
+export const MAX_MODELS_PER_PROVIDER = 128;
+
 export async function createProviderSettings(providers, keychain) {
   const secrets = new Set();
   const savedModels = new Map();
+  const savedKeys = new Map();
   let pending = Promise.resolve();
 
-  function prepare(provider, key, models) {
-    if (!Object.hasOwn(profiles, provider)) throw new Error(`Choose one of: ${Object.keys(profiles).join(', ')}.`);
-    if (typeof key !== 'string' || !key.trim() || key.length > 512 || /[\x00-\x20\x7f]/.test(key))
-      throw new Error('Provide a valid API key.');
-    if (!Array.isArray(models) || !models.length || models.length > 32 ||
+  function validateModels(models) {
+    if (!Array.isArray(models) || !models.length || models.length > MAX_MODELS_PER_PROVIDER ||
         models.some(model => typeof model !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9:._/+~-]{0,159}$/.test(model)))
-      throw new Error('Choose one to 32 valid model IDs.');
+      throw Object.assign(new Error(`Choose one to ${MAX_MODELS_PER_PROVIDER} valid model IDs.`), { status: 400 });
+  }
+
+  function prepare(provider, key, models, { useEnv = false } = {}) {
+    if (!Object.hasOwn(profiles, provider)) throw Object.assign(new Error(`Choose one of: ${Object.keys(profiles).join(', ')}.`), { status: 400 });
+    if (!useEnv && (typeof key !== 'string' || !key.trim() || key.length > 512 || /[\x00-\x20\x7f]/.test(key)))
+      throw Object.assign(new Error('Provide a valid API key.'), { status: 400 });
+    validateModels(models);
     const profile = profiles[provider];
     const protocol = profile.protocol || 'openai-chat';
     const instances = new Map();
     for (const model of models) {
       const id = provider + ':' + model.replaceAll('/', '-');
-      if (instances.has(id)) throw new Error('Choose distinct model IDs.');
+      if (instances.has(id)) throw Object.assign(new Error('Choose distinct model IDs.'), { status: 400 });
       const existing = providers.get(id);
       if (existing && (existing.model !== model || existing.baseUrl !== profile.endpoint || existing.protocol !== protocol))
-        throw new Error('This model ID is already configured for another connection.');
+        throw Object.assign(new Error('This model ID is already configured for another connection.'), { status: 400 });
       instances.set(id, new HttpProvider({
-        id, label: existing?.label ?? model + ' · ' + profile.label, protocol, model, baseUrl: profile.endpoint, credential: key,
+        id, label: existing?.label ?? model + ' · ' + profile.label, protocol, model, baseUrl: profile.endpoint,
+        ...(useEnv ? { apiKeyEnv: profile.apiKeyEnv } : { credential: key }),
         timeoutMs: existing?.timeoutMs ?? 600000, maxOutputTokens: existing?.maxOutputTokens ?? 16000,
         maxOutputTokensCeiling: existing?.maxOutputTokensCeiling ?? 64000,
       }));
@@ -131,7 +158,10 @@ export async function createProviderSettings(providers, keychain) {
       }
       providers.set(id, instance);
     }
-    secrets.add(record.key);
+    if (record.key) {
+      secrets.add(record.key);
+      savedKeys.set(provider, record.key);
+    }
     savedModels.set(provider, record.models);
   }
   if (keychain) {
@@ -144,8 +174,40 @@ export async function createProviderSettings(providers, keychain) {
       }
     }
   }
+  function profileModelsFromProviders(provider) {
+    const profile = profiles[provider];
+    if (!profile) return [];
+    const found = [];
+    for (const item of providers.values()) {
+      if (item.baseUrl === profile.endpoint && item.protocol === (profile.protocol || 'openai-chat') && item.available !== false && !item.closed && typeof item.model === 'string') {
+        found.push(item.model);
+      }
+    }
+    return [...new Set(found)];
+  }
+  function isEnvConnected(provider) {
+    const profile = profiles[provider];
+    if (!profile?.apiKeyEnv) return false;
+    return Boolean(process.env[profile.apiKeyEnv]) || profileModelsFromProviders(provider).length > 0;
+  }
   return {
     secrets,
+    connectedProfiles() {
+      const list = [];
+      for (const [provider, profile] of Object.entries(profiles)) {
+        const hasKey = savedKeys.has(provider);
+        const activeModels = profileModelsFromProviders(provider);
+        const hasEnv = Boolean(profile.apiKeyEnv && process.env[profile.apiKeyEnv]);
+        if (!hasKey && !activeModels.length && !hasEnv) continue;
+        list.push({
+          provider,
+          label: profile.label,
+          models: activeModels.length ? activeModels : [...(savedModels.get(provider) ?? [])],
+          storage: hasKey ? (keychain ? 'keychain' : 'session') : 'env',
+        });
+      }
+      return list;
+    },
     connect(body) {
       const operation = pending.then(async () => {
         const key = typeof body.key === 'string' ? body.key.trim() : '';
@@ -155,16 +217,93 @@ export async function createProviderSettings(providers, keychain) {
           : key.startsWith('sk-') ? 'openai'
           : 'venice';
         const provider = body.provider || detected;
-        if (!Object.hasOwn(profiles, provider)) throw new Error(`Choose one of: ${Object.keys(profiles).join(', ')}.`);
+        if (!Object.hasOwn(profiles, provider)) throw Object.assign(new Error(`Choose one of: ${Object.keys(profiles).join(', ')}.`), { status: 400 });
         const previous = savedModels.get(provider) ?? [];
         const selected = body.models ?? (previous.length ? previous : profiles[provider].defaults);
-        if (!Array.isArray(selected) || !selected.length) throw new Error('Choose at least one model.');
+        if (!Array.isArray(selected) || !selected.length) throw Object.assign(new Error('Choose at least one model.'), { status: 400 });
         const models = [...new Set([...previous, ...selected])];
         const record = { key, models };
         const instances = prepare(provider, key, models);
         if (keychain) await keychain.write(provider, record);
         install(provider, record, instances);
-        return { registered: [...instances.keys()], storage: keychain ? 'keychain' : 'session' };
+        return { provider, registered: [...instances.keys()], storage: keychain ? 'keychain' : 'session' };
+      });
+      pending = operation.catch(() => {});
+      return operation;
+    },
+    addModels(body) {
+      const operation = pending.then(async () => {
+        const provider = typeof body?.provider === 'string' ? body.provider.trim().toLowerCase() : '';
+        if (!Object.hasOwn(profiles, provider)) throw Object.assign(new Error(`Choose one of: ${Object.keys(profiles).join(', ')}.`), { status: 400 });
+        const rawModels = Array.isArray(body?.models) ? body.models : (typeof body?.model === 'string' ? [body.model] : []);
+        const cleaned = [...new Set(rawModels.map(m => typeof m === 'string' ? m.trim() : '').filter(Boolean))];
+        validateModels(cleaned);
+        const key = savedKeys.get(provider);
+        const profile = profiles[provider];
+        if (key) {
+          const previous = savedModels.get(provider) ?? [];
+          const models = [...new Set([...previous, ...cleaned])];
+          const record = { key, models };
+          const instances = prepare(provider, key, models);
+          if (keychain) await keychain.write(provider, record);
+          install(provider, record, instances);
+          const added = cleaned.map(m => provider + ':' + m.replaceAll('/', '-'));
+          return { provider, added, registered: [...instances.keys()], storage: keychain ? 'keychain' : 'session' };
+        }
+        if (isEnvConnected(provider) && process.env[profile.apiKeyEnv]) {
+          const existing = profileModelsFromProviders(provider);
+          const models = [...new Set([...existing, ...cleaned])];
+          const instances = prepare(provider, null, cleaned, { useEnv: true });
+          for (const [id, instance] of instances) {
+            if (!providers.has(id)) providers.set(id, instance);
+          }
+          const added = cleaned.map(m => provider + ':' + m.replaceAll('/', '-'));
+          return { provider, added, registered: models.map(m => provider + ':' + m.replaceAll('/', '-')), storage: 'env' };
+        }
+        throw Object.assign(new Error(`Connect a ${profile.label} API key first before adding models.`), { status: 400 });
+      });
+      pending = operation.catch(() => {});
+      return operation;
+    },
+    removeModels(body) {
+      const operation = pending.then(async () => {
+        const provider = typeof body?.provider === 'string' ? body.provider.trim().toLowerCase() : '';
+        if (!Object.hasOwn(profiles, provider)) throw Object.assign(new Error(`Choose one of: ${Object.keys(profiles).join(', ')}.`), { status: 400 });
+        const rawModels = Array.isArray(body?.models) ? body.models : (typeof body?.model === 'string' ? [body.model] : []);
+        const toRemove = new Set(rawModels.map(m => typeof m === 'string' ? m.trim() : '').filter(Boolean));
+        if (!toRemove.size) throw Object.assign(new Error('Specify at least one model to remove.'), { status: 400 });
+        const key = savedKeys.get(provider);
+        const profile = profiles[provider];
+        if (key) {
+          const previous = savedModels.get(provider) ?? [];
+          const remaining = previous.filter(m => !toRemove.has(m));
+          if (!remaining.length) throw Object.assign(new Error(`Keep at least one ${profile.label} model connected.`), { status: 400 });
+          const record = { key, models: remaining };
+          const instances = prepare(provider, key, remaining);
+          if (keychain) await keychain.write(provider, record);
+          for (const m of toRemove) {
+            const id = provider + ':' + m.replaceAll('/', '-');
+            const prev = providers.get(id);
+            if (prev && prev.baseUrl === profile.endpoint) {
+              try { prev.close?.(); } catch {}
+              providers.delete(id);
+            }
+          }
+          install(provider, record, instances);
+          return { provider, removed: [...toRemove], registered: [...instances.keys()], storage: keychain ? 'keychain' : 'session' };
+        }
+        const existing = profileModelsFromProviders(provider);
+        const remaining = existing.filter(m => !toRemove.has(m));
+        if (!remaining.length) throw Object.assign(new Error(`Keep at least one ${profile.label} model connected.`), { status: 400 });
+        for (const m of toRemove) {
+          const id = provider + ':' + m.replaceAll('/', '-');
+          const prev = providers.get(id);
+          if (prev && prev.baseUrl === profile.endpoint) {
+            try { prev.close?.(); } catch {}
+            providers.delete(id);
+          }
+        }
+        return { provider, removed: [...toRemove], registered: remaining.map(m => provider + ':' + m.replaceAll('/', '-')), storage: 'env' };
       });
       pending = operation.catch(() => {});
       return operation;

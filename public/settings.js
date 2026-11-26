@@ -915,7 +915,7 @@ async function selectSettingsPane(pane, options = {}) {
     if (options.subtab) selectTransparencySubtab(options.subtab);
     await loadTransparencySettings();
   }
-  if (pane === 'models') { renderModelSettings(); await Promise.all([loadModelConnections(), loadVeniceCatalog(), typeof loadServices === 'function' ? loadServices() : Promise.resolve(), typeof loadModelGroups === 'function' ? loadModelGroups() : Promise.resolve(), typeof loadOverseer === 'function' ? loadOverseer() : Promise.resolve(), typeof loadUltraRouter === 'function' ? loadUltraRouter() : Promise.resolve()]); }
+  if (pane === 'models') { renderModelSettings(); await Promise.all([loadModelConnections(), loadVeniceCatalog(), typeof loadOpenRouterCatalog === 'function' ? loadOpenRouterCatalog() : Promise.resolve(), typeof loadServices === 'function' ? loadServices() : Promise.resolve(), typeof loadModelGroups === 'function' ? loadModelGroups() : Promise.resolve(), typeof loadOverseer === 'function' ? loadOverseer() : Promise.resolve(), typeof loadUltraRouter === 'function' ? loadUltraRouter() : Promise.resolve()]); }
   if (pane === 'tools') { await Promise.all([loadPermissionsSettings(), loadHooksSettings()]); }
   if (pane === 'memory') { await Promise.all([loadMemorySettings(options.query), loadSkillsSettings()]); }
   if (pane === 'privacy') { await loadPrivacySettings(); }
