@@ -56,7 +56,7 @@ import {
   normalizeRosterAgent,
   slugifyAgent,
   STARTER_FORMATIONS
-} from './pantheon-roster.mjs';
+} from './conclave-roster.mjs';
 import { validateExecution, validateChecks } from './runner.mjs';
 import { SourceChanges } from './source-changes.mjs';
 import { CrewController } from './crew.mjs';
@@ -707,7 +707,7 @@ export class Runtime {
       const key = `${taskId}:${cleanWorkerId}`;
       const next = [...(this._workerSteers.get(key) || []), text].slice(-6);
       this._workerSteers.set(key, next);
-      this._emitStream(taskId, { type: 'pantheon.steered', workerId: cleanWorkerId, message: text, target: 'subagent' });
+      this._emitStream(taskId, { type: 'conclave.steered', workerId: cleanWorkerId, message: text, target: 'subagent' });
       return { ok: true, target: 'subagent', workerId: cleanWorkerId, queued: next.length };
     }
     const crew = this.crew?.record(taskId);
@@ -718,17 +718,17 @@ export class Runtime {
         throw fault('INVALID_STEER', 'Independent verifier checks cannot be steered mid-run.');
       }
       // Record crew steer out-of-band without mutating pendingMessages (which would invalidate contractVersion)
-      this.store.appendEvent(taskId, 'pantheon.steered', { workerId: cleanWorkerId, role: crewRole, message: text, target: 'crew_worker' });
-      this._emitStream(taskId, { type: 'pantheon.steered', workerId: cleanWorkerId, role: crewRole, message: text, target: 'crew_worker' });
+      this.store.appendEvent(taskId, 'conclave.steered', { workerId: cleanWorkerId, role: crewRole, message: text, target: 'crew_worker' });
+      this._emitStream(taskId, { type: 'conclave.steered', workerId: cleanWorkerId, role: crewRole, message: text, target: 'crew_worker' });
       return { ok: true, target: 'crew_worker', workerId: cleanWorkerId, queued: 1 };
     }
     if (active.has(task.status)) {
       const res = await this.submitMessage(task.id, `[Conclave steer → ${cleanWorkerId}] ${text}`, undefined, 'steer');
-      this._emitStream(taskId, { type: 'pantheon.steered', workerId: cleanWorkerId, message: text, target: 'orchestrator' });
+      this._emitStream(taskId, { type: 'conclave.steered', workerId: cleanWorkerId, message: text, target: 'orchestrator' });
       return { ok: true, target: 'orchestrator', workerId: cleanWorkerId, queued: res.task?.pendingMessages?.length || 1 };
     }
-    this.store.appendEvent(taskId, 'pantheon.steered', { workerId: cleanWorkerId, message: text, target: 'note' });
-    this._emitStream(taskId, { type: 'pantheon.steered', workerId: cleanWorkerId, message: text, target: 'note' });
+    this.store.appendEvent(taskId, 'conclave.steered', { workerId: cleanWorkerId, message: text, target: 'note' });
+    this._emitStream(taskId, { type: 'conclave.steered', workerId: cleanWorkerId, message: text, target: 'note' });
     return { ok: true, target: 'note', workerId: cleanWorkerId, queued: 1 };
   }
   drainWorkerSteer(taskId, workerId) {
@@ -779,7 +779,7 @@ export class Runtime {
         status: result?.ok ? 'succeeded' : 'failed', result, createdAt: nowIso, updatedAt: nowIso
       }, 'tool.completed', { operationId: opId, name: call.name, status: result?.ok ? 'succeeded' : 'failed', result });
       this.store.appendEvent(id, 'subagent.completed', { workerId, callId: call.id, ...result });
-      this.recordPantheonAgentRun(result?.role || role, { ok: Boolean(result?.ok), durationMs: result?.durationMs || 0 });
+      this.recordConclaveAgentRun(result?.role || role, { ok: Boolean(result?.ok), durationMs: result?.durationMs || 0 });
       this._emitStream(id, { type: 'subagent.completed', worker: { ...initialState, ...result, status: result?.ok ? 'completed' : 'failed' } });
       return result;
     } finally {
@@ -789,7 +789,7 @@ export class Runtime {
       this._workerSteers.delete(`${id}:${workerId}`);
     }
   }
-  getPantheonState(taskId) {
+  getConclaveState(taskId) {
     const task = this.getTask(taskId);
     const events = this.store.getRecentEvents(taskId, 300);
     const workersById = new Map();
@@ -953,7 +953,7 @@ export class Runtime {
       .filter(([, owners]) => owners.length > 1)
       .map(([file, owners]) => ({ file, owners }));
 
-    // Surface Worktree Code Diff Race on the Pantheon Stage if this task has a worktree build!
+    // Surface Worktree Code Diff Race on the Conclave Stage if this task has a worktree build!
     let worktreeRace = null;
     try {
       const wtApi = this.worktrees;
@@ -3116,7 +3116,7 @@ export class Runtime {
       outbound: this.outboundOptions()
     });
   }
-  async getPantheonRoster() {
+  async getConclaveRoster() {
     const candidates = await this.listRoutableCandidates('conversation');
     const harnesses = await detectExternalHarnesses({ providers: this.providers, catalog: this.catalog });
     const routerSettings = this.getRouterSettings();
@@ -3125,9 +3125,9 @@ export class Runtime {
     const byId = new Map(candidates.map(c => [c.id, c]));
     const harnessById = new Map(harnesses.map(h => [h.id, h]));
 
-    const savedRaw = this.store.getLocalState('pantheon_roster', []);
+    const savedRaw = this.store.getLocalState('conclave_roster', []);
     const savedList = Array.isArray(savedRaw) ? savedRaw : [];
-    const xpMap = this.store.getLocalState('pantheon_agent_xp', {});
+    const xpMap = this.store.getLocalState('conclave_agent_xp', {});
     const starters = buildStarterRoster(candidates, harnesses);
     const mergedMap = new Map();
     for (const s of starters) mergedMap.set(s.slug, s);
@@ -3165,17 +3165,17 @@ export class Runtime {
 
     return {
       agents: [...mergedMap.values()].map(enrichAgent),
-      formations: this.getPantheonFormations(),
+      formations: this.getConclaveFormations(),
       harnesses,
       engines,
       archetypes: AGENT_ARCHETYPES,
       domains: ROUTER_DOMAINS
     };
   }
-  recordPantheonAgentRun(rawSlug, { ok = true, durationMs = 0, mvp = false } = {}) {
+  recordConclaveAgentRun(rawSlug, { ok = true, durationMs = 0, mvp = false } = {}) {
     try {
       const slug = slugifyAgent(rawSlug || 'explore');
-      const map = { ...(this.store.getLocalState('pantheon_agent_xp', {}) || {}) };
+      const map = { ...(this.store.getLocalState('conclave_agent_xp', {}) || {}) };
       const cur = map[slug] || { runs: 0, wins: 0, mvps: 0, xp: 0, avgMs: 0, lastRunAt: null };
       const runs = (Number(cur.runs) || 0) + 1;
       const wins = (Number(cur.wins) || 0) + (ok ? 1 : 0);
@@ -3185,14 +3185,14 @@ export class Runtime {
       const dur = Math.max(0, Number(durationMs) || 0);
       const avgMs = prevAvg > 0 && dur > 0 ? Math.round((prevAvg * (runs - 1) + dur) / runs) : (dur || prevAvg);
       map[slug] = { runs, wins, mvps, xp: (Number(cur.xp) || 0) + xpGain, avgMs, lastRunAt: new Date().toISOString() };
-      this.store.setLocalState('pantheon_agent_xp', map);
+      this.store.setLocalState('conclave_agent_xp', map);
       return computeXpLevel(map[slug]);
     } catch {
       return computeXpLevel(null);
     }
   }
-  getPantheonFormations() {
-    const savedRaw = this.store.getLocalState('pantheon_formations', []);
+  getConclaveFormations() {
+    const savedRaw = this.store.getLocalState('conclave_formations', []);
     const saved = Array.isArray(savedRaw) ? savedRaw : [];
     const merged = new Map();
     for (const f of STARTER_FORMATIONS) merged.set(f.id, { ...f });
@@ -3202,48 +3202,48 @@ export class Runtime {
     }
     return [...merged.values()];
   }
-  savePantheonFormation(payload = {}) {
-    const savedRaw = this.store.getLocalState('pantheon_formations', []);
+  saveConclaveFormation(payload = {}) {
+    const savedRaw = this.store.getLocalState('conclave_formations', []);
     const list = Array.isArray(savedRaw) ? [...savedRaw] : [];
     const targetId = slugifyAgent(payload.id || payload.name);
     const idx = list.findIndex(f => f?.id === targetId);
     const normalized = normalizeFormation(payload, idx >= 0 ? list[idx] : null);
     if (idx >= 0) list[idx] = normalized;
     else list.push(normalized);
-    this.store.setLocalState('pantheon_formations', list.slice(0, 24));
-    return { ok: true, formation: normalized, formations: this.getPantheonFormations() };
+    this.store.setLocalState('conclave_formations', list.slice(0, 24));
+    return { ok: true, formation: normalized, formations: this.getConclaveFormations() };
   }
-  deletePantheonFormation(rawId) {
+  deleteConclaveFormation(rawId) {
     const id = slugifyAgent(rawId);
-    const savedRaw = this.store.getLocalState('pantheon_formations', []);
+    const savedRaw = this.store.getLocalState('conclave_formations', []);
     const list = Array.isArray(savedRaw) ? savedRaw : [];
     const next = list.filter(f => f?.id !== id);
-    this.store.setLocalState('pantheon_formations', next);
-    return { ok: true, deleted: next.length !== list.length, id, formations: this.getPantheonFormations() };
+    this.store.setLocalState('conclave_formations', next);
+    return { ok: true, deleted: next.length !== list.length, id, formations: this.getConclaveFormations() };
   }
-  async savePantheonAgent(payload = {}) {
-    const savedRaw = this.store.getLocalState('pantheon_roster', []);
+  async saveConclaveAgent(payload = {}) {
+    const savedRaw = this.store.getLocalState('conclave_roster', []);
     const list = Array.isArray(savedRaw) ? [...savedRaw] : [];
     const targetSlug = slugifyAgent(payload.slug || payload.name);
     const existingIdx = list.findIndex(a => a?.slug === targetSlug);
     const normalized = normalizeRosterAgent(payload, existingIdx >= 0 ? list[existingIdx] : null);
     if (existingIdx >= 0) list[existingIdx] = normalized;
     else list.push(normalized);
-    this.store.setLocalState('pantheon_roster', list.slice(0, 48));
-    const roster = await this.getPantheonRoster();
+    this.store.setLocalState('conclave_roster', list.slice(0, 48));
+    const roster = await this.getConclaveRoster();
     const saved = roster.agents.find(a => a.slug === normalized.slug) || normalized;
     return { ok: true, agent: saved, roster };
   }
-  async deletePantheonAgent(rawSlug) {
+  async deleteConclaveAgent(rawSlug) {
     const slug = slugifyAgent(rawSlug);
-    const savedRaw = this.store.getLocalState('pantheon_roster', []);
+    const savedRaw = this.store.getLocalState('conclave_roster', []);
     const list = Array.isArray(savedRaw) ? savedRaw : [];
     const next = list.filter(a => a?.slug !== slug);
-    this.store.setLocalState('pantheon_roster', next);
-    const roster = await this.getPantheonRoster();
+    this.store.setLocalState('conclave_roster', next);
+    const roster = await this.getConclaveRoster();
     return { ok: true, deleted: next.length !== list.length, slug, roster };
   }
-  async previewPantheonStats({ providerId = null, harnessId = null, primarySpecialty = 'swe_coding', secondarySpecialty = 'math_reasoning' } = {}) {
+  async previewConclaveStats({ providerId = null, harnessId = null, primarySpecialty = 'swe_coding', secondarySpecialty = 'math_reasoning' } = {}) {
     const candidates = await this.listRoutableCandidates('conversation');
     const routerSettings = this.getRouterSettings();
     const matrix = loadBenchmarkMatrix(routerSettings.customBenchmarks || {});

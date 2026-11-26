@@ -222,15 +222,15 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
       }
       if(req.method==='POST' && url.pathname==='/api/router/preview')return send(res,200,await runtime.previewUltraRoute(await readBody(req)));
       if(req.method==='POST' && url.pathname==='/api/metacognition/forge')return send(res,200,await runtime.forgeMetapromptPreview(await readBody(req)));
-      if(req.method==='GET' && url.pathname==='/api/pantheon/roster')return send(res,200,await runtime.getPantheonRoster());
-      if(req.method==='POST' && url.pathname==='/api/pantheon/roster')return send(res,201,await runtime.savePantheonAgent(await readBody(req)));
-      if(req.method==='POST' && url.pathname==='/api/pantheon/stats/preview')return send(res,200,await runtime.previewPantheonStats(await readBody(req)));
-      const rosterDelMatch = req.method === 'DELETE' && url.pathname.match(/^\/api\/pantheon\/roster\/([^/]+)$/);
-      if (rosterDelMatch) return send(res, 200, await runtime.deletePantheonAgent(decodeURIComponent(rosterDelMatch[1])));
-      if(req.method==='GET' && url.pathname==='/api/pantheon/formations')return send(res,200,{formations:runtime.getPantheonFormations()});
-      if(req.method==='POST' && url.pathname==='/api/pantheon/formations')return send(res,201,runtime.savePantheonFormation(await readBody(req)));
-      const formDelMatch = req.method === 'DELETE' && url.pathname.match(/^\/api\/pantheon\/formations\/([^/]+)$/);
-      if (formDelMatch) return send(res, 200, runtime.deletePantheonFormation(decodeURIComponent(formDelMatch[1])));
+      if(req.method==='GET' && url.pathname==='/api/conclave/roster')return send(res,200,await runtime.getConclaveRoster());
+      if(req.method==='POST' && url.pathname==='/api/conclave/roster')return send(res,201,await runtime.saveConclaveAgent(await readBody(req)));
+      if(req.method==='POST' && url.pathname==='/api/conclave/stats/preview')return send(res,200,await runtime.previewConclaveStats(await readBody(req)));
+      const rosterDelMatch = req.method === 'DELETE' && url.pathname.match(/^\/api\/conclave\/roster\/([^/]+)$/);
+      if (rosterDelMatch) return send(res, 200, await runtime.deleteConclaveAgent(decodeURIComponent(rosterDelMatch[1])));
+      if(req.method==='GET' && url.pathname==='/api/conclave/formations')return send(res,200,{formations:runtime.getConclaveFormations()});
+      if(req.method==='POST' && url.pathname==='/api/conclave/formations')return send(res,201,runtime.saveConclaveFormation(await readBody(req)));
+      const formDelMatch = req.method === 'DELETE' && url.pathname.match(/^\/api\/conclave\/formations\/([^/]+)$/);
+      if (formDelMatch) return send(res, 200, runtime.deleteConclaveFormation(decodeURIComponent(formDelMatch[1])));
       if(req.method==='DELETE' && url.pathname==='/api/router/reset') {
         await readBody(req).catch(()=>({}));
         runtime.resetRouter();
@@ -682,18 +682,18 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
         res.on('error', cleanup);
         return;
       }
-      const pantheonMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/pantheon(?:\/(steer))?$/);
-      if (pantheonMatch) {
-        const id = decodeURIComponent(pantheonMatch[1]);
-        const subAction = pantheonMatch[2] || '';
+      const conclaveMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/conclave(?:\/(steer))?$/);
+      if (conclaveMatch) {
+        const id = decodeURIComponent(conclaveMatch[1]);
+        const subAction = conclaveMatch[2] || '';
         if (req.method === 'GET' && !subAction) {
-          return send(res, 200, runtime.getPantheonState(id));
+          return send(res, 200, runtime.getConclaveState(id));
         }
         if (req.method === 'POST' && subAction === 'steer') {
           if (runtime.getTask(id).crewMember) throw Object.assign(new Error('Control crew workers through their parent conversation.'), { code: 'CREW_MEMBER', status: 400 });
           const body = await readBody(req);
           const result = await runtime.queueWorkerSteer(id, body.workerId || 'orchestrator', body.message || '');
-          return send(res, 200, { ...result, pantheon: runtime.getPantheonState(id) });
+          return send(res, 200, { ...result, conclave: runtime.getConclaveState(id) });
         }
       }
       const crewMatch=url.pathname.match(/^\/api\/tasks\/([^/]+)\/crew(?:\/(pause|cancel|resume|inspect|candidate|apply))?$/);
@@ -952,7 +952,7 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
       staticFiles['/themes.js'] = ['themes.js','text/javascript'];
       staticFiles['/themes.css'] = ['themes.css','text/css'];
       staticFiles['/mermaid-lite.js'] = ['mermaid-lite.js','text/javascript'];
-      staticFiles['/pantheon.js'] = ['pantheon.js','text/javascript'];
+      staticFiles['/conclave.js'] = ['conclave.js','text/javascript'];
       staticFiles['/brand-wordmark.ttf'] = ['brand-wordmark.ttf', 'font/ttf'];
       if(req.method==='GET'&&staticFiles[url.pathname]) {
         const [filename,mime]=staticFiles[url.pathname],body=await fs.readFile(path.join(publicDir,filename));

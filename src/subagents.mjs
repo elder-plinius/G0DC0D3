@@ -4,7 +4,7 @@ import path from 'node:path';
 import { checkProviderPrivacyAllowed, DEFAULT_PRIVACY_SETTINGS } from './privacy.mjs';
 import { evaluatePermission } from './permissions.mjs';
 import { scoreOverseerSuitability } from './overseer.mjs';
-import { runExternalHarnessSubagent } from './pantheon-roster.mjs';
+import { runExternalHarnessSubagent } from './conclave-roster.mjs';
 import { TOOLS, validateTool } from './tool-schema.mjs';
 
 const SUBAGENT_TOOLS = new Set(['repo.list', 'repo.read', 'repo.search', 'repo.glob', 'git.diff', 'git.log', 'memory.search']);
@@ -67,23 +67,23 @@ async function resolveNoSymlinkDir(rootDir, segments) {
 
 export async function discoverSubagents(task, runtime = null) {
   const agents = new Map(Object.entries(BUILTIN_SUBAGENTS));
-  // Hydrate custom Pantheon Roster agents so agent.spawn(role: '<slug>') works seamlessly!
+  // Hydrate custom Conclave Roster agents so agent.spawn(role: '<slug>') works seamlessly!
   try {
-    const rosterRaw = runtime?.store?.getLocalState?.('pantheon_roster', []);
+    const rosterRaw = runtime?.store?.getLocalState?.('conclave_roster', []);
     if (Array.isArray(rosterRaw)) {
       for (const ag of rosterRaw) {
         if (!ag?.slug) continue;
         agents.set(ag.slug.toLowerCase(), {
           name: ag.slug.toLowerCase(),
           displayName: ag.name || ag.slug,
-          description: ag.description || `Pantheon agent (${ag.name || ag.slug})`,
+          description: ag.description || `Conclave agent (${ag.name || ag.slug})`,
           model: ag.providerId || ag.harnessId || null,
           engineType: ag.engineType || 'api',
           harnessId: ag.harnessId || null,
           harnessCommand: ag.harnessCommand || null,
           autonomy: ag.autonomy || 'read_only',
-          instructions: ag.instructions || `You are ${ag.name || ag.slug}, a Pantheon specialist.`,
-          source: 'pantheon_roster'
+          instructions: ag.instructions || `You are ${ag.name || ag.slug}, a Conclave specialist.`,
+          source: 'conclave_roster'
         });
       }
     }

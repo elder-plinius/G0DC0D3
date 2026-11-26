@@ -6,9 +6,9 @@ import path from 'node:path';
 import { createApp } from '../src/server.mjs';
 import { BrowserPool } from '../src/browser-env.mjs';
 
-test('Pantheon parallel agent.spawn fan-out runs concurrently, detects file overlaps, streams SSE events, and supports steer API', async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'g0d-pantheon-unit-'));
-  const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'g0d-pantheon-repo-'));
+test('Conclave parallel agent.spawn fan-out runs concurrently, detects file overlaps, streams SSE events, and supports steer API', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'g0d-conclave-unit-'));
+  const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'g0d-conclave-repo-'));
   await fs.writeFile(path.join(workDir, 'shared.js'), 'export const x = 42;\n');
 
   let mainTurns = 0;
@@ -16,9 +16,9 @@ test('Pantheon parallel agent.spawn fan-out runs concurrently, detects file over
   let maxConcurrent = 0;
 
   const provider = {
-    id: 'mock:pantheon-worker',
-    label: 'Mock Pantheon Frontier',
-    model: 'mock-pantheon-1',
+    id: 'mock:conclave-worker',
+    label: 'Mock Conclave Frontier',
+    model: 'mock-conclave-1',
     kind: 'scripted',
     tier: 'frontier',
     available: true,
@@ -68,7 +68,7 @@ test('Pantheon parallel agent.spawn fan-out runs concurrently, detects file over
 
   try {
     const task = await app.runtime.createTask({
-      title: 'Parallel Pantheon Test',
+      title: 'Parallel Conclave Test',
       objective: 'Analyze shared.js using parallel specialists.',
       workspace: workDir,
       providers: [provider.id],
@@ -89,16 +89,16 @@ test('Pantheon parallel agent.spawn fan-out runs concurrently, detects file over
     assert.ok(streamed.some(e => e.type === 'subagent.progress'), 'Expected subagent.progress SSE event');
     assert.ok(streamed.some(e => e.type === 'subagent.completed'), 'Expected subagent.completed SSE event');
 
-    // Assert GET /api/tasks/:id/pantheon returns unified state + file overlap detection
-    const pantheon = await fetch(`${root}/api/tasks/${encodeURIComponent(taskId)}/pantheon`).then(r => r.json());
-    assert.equal(pantheon.mode, 'swarm');
-    assert.equal(pantheon.workers.length, 2);
-    assert.equal(pantheon.stats.completedWorkers, 2);
-    assert.ok(pantheon.workers.every(w => w.status === 'completed' && w.files.includes('shared.js')));
-    assert.ok(pantheon.fileConflicts.some(c => c.file === 'shared.js' && c.owners.length === 2), 'Expected shared.js overlap detected');
+    // Assert GET /api/tasks/:id/conclave returns unified state + file overlap detection
+    const conclave = await fetch(`${root}/api/tasks/${encodeURIComponent(taskId)}/conclave`).then(r => r.json());
+    assert.equal(conclave.mode, 'swarm');
+    assert.equal(conclave.workers.length, 2);
+    assert.equal(conclave.stats.completedWorkers, 2);
+    assert.ok(conclave.workers.every(w => w.status === 'completed' && w.files.includes('shared.js')));
+    assert.ok(conclave.fileConflicts.some(c => c.file === 'shared.js' && c.owners.length === 2), 'Expected shared.js overlap detected');
 
-    // Assert POST /api/tasks/:id/pantheon/steer succeeds cleanly
-    const steerRes = await fetch(`${root}/api/tasks/${encodeURIComponent(taskId)}/pantheon/steer`, {
+    // Assert POST /api/tasks/:id/conclave/steer succeeds cleanly
+    const steerRes = await fetch(`${root}/api/tasks/${encodeURIComponent(taskId)}/conclave/steer`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-g0d-request': '1' },
       body: JSON.stringify({ workerId: 'spawn-explore-1', message: 'Focus on edge cases too.' }),
@@ -111,8 +111,8 @@ test('Pantheon parallel agent.spawn fan-out runs concurrently, detects file over
   }
 });
 
-test('Pantheon UI renders Stage, Cards, Timeline, Arena Race, Worker Inspector, and Light theme with 0 errors and 0 inline styles', async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'g0d-pantheon-ui-'));
+test('Conclave UI renders Stage, Cards, Timeline, Arena Race, Worker Inspector, and Light theme with 0 errors and 0 inline styles', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'g0d-conclave-ui-'));
   const stub = {
     id: 'openrouter:anthropic-claude-sonnet-5.5',
     label: 'Claude Sonnet 5.5 · OpenRouter',
@@ -131,28 +131,28 @@ test('Pantheon UI renders Stage, Cards, Timeline, Arena Race, Worker Inspector, 
   });
   const root = await app.listen(0);
   const pool = new BrowserPool();
-  const sid = 'pantheon-ui';
+  const sid = 'conclave-ui';
 
   try {
     await pool.open(sid, { url: root + '/', viewport: { width: 1440, height: 900 }, waitMs: 1100 }, { privacy: { localOnly: false } });
     await pool.evaluate(sid, {
       expression: `(() => {
-        window.__PANTHEON_ERRORS = [];
-        window.addEventListener('error', e => window.__PANTHEON_ERRORS.push(e.message));
-        window.addEventListener('unhandledrejection', e => window.__PANTHEON_ERRORS.push(String(e.reason)));
+        window.__CONCLAVE_ERRORS = [];
+        window.addEventListener('error', e => window.__CONCLAVE_ERRORS.push(e.message));
+        window.addEventListener('unhandledrejection', e => window.__CONCLAVE_ERRORS.push(String(e.reason)));
         return true;
       })()`,
     });
     const dlgs = JSON.parse((await pool.evaluate(sid, { expression: `[...document.querySelectorAll('dialog[open]')].map(d => d.id)` })).result);
     if (dlgs.length) await pool.act(sid, { action: 'press', key: 'Escape', waitMs: 200 }, { privacy: { localOnly: false } });
 
-    // Open Pantheon via header toggle button
-    await pool.act(sid, { action: 'click', selector: '#pantheon-toggle-btn', waitMs: 350 }, { privacy: { localOnly: false } });
+    // Open Conclave via header toggle button
+    await pool.act(sid, { action: 'click', selector: '#conclave-toggle-btn', waitMs: 350 }, { privacy: { localOnly: false } });
     const openCheck = JSON.parse((await pool.evaluate(sid, {
       expression: `(() => ({
-        open: window.G0DPantheon?.isOpen(),
-        inlineStyles: document.querySelectorAll('#pantheon-dock [style]').length,
-        hasPresets: document.querySelectorAll('[data-pantheon-preset]').length,
+        open: window.G0DConclave?.isOpen(),
+        inlineStyles: document.querySelectorAll('#conclave-dock [style]').length,
+        hasPresets: document.querySelectorAll('[data-conclave-preset]').length,
       }))()`,
     })).result);
     assert.equal(openCheck.open, true);
@@ -160,25 +160,25 @@ test('Pantheon UI renders Stage, Cards, Timeline, Arena Race, Worker Inspector, 
     assert.equal(openCheck.hasPresets, 3);
 
     // Click Preview Swarm, switch across Cards & Timeline & inspect a worker
-    await pool.act(sid, { action: 'click', selector: '#pantheon-demo-btn', waitMs: 350 }, { privacy: { localOnly: false } });
-    await pool.act(sid, { action: 'click', selector: '[data-pantheon-lens="cards"]', waitMs: 250 }, { privacy: { localOnly: false } });
-    const cardCount = JSON.parse((await pool.evaluate(sid, { expression: `document.querySelectorAll('.pantheon-card').length` })).result);
+    await pool.act(sid, { action: 'click', selector: '#conclave-demo-btn', waitMs: 350 }, { privacy: { localOnly: false } });
+    await pool.act(sid, { action: 'click', selector: '[data-conclave-lens="cards"]', waitMs: 250 }, { privacy: { localOnly: false } });
+    const cardCount = JSON.parse((await pool.evaluate(sid, { expression: `document.querySelectorAll('.conclave-card').length` })).result);
     assert.equal(cardCount, 3);
 
     // Inspect first worker & steer in demo mode
-    await pool.act(sid, { action: 'click', selector: '[data-pantheon-select]', waitMs: 250 }, { privacy: { localOnly: false } });
-    const inspectorVisible = JSON.parse((await pool.evaluate(sid, { expression: `!document.querySelector('#pantheon-inspector')?.classList.contains('hidden')` })).result);
+    await pool.act(sid, { action: 'click', selector: '[data-conclave-select]', waitMs: 250 }, { privacy: { localOnly: false } });
+    const inspectorVisible = JSON.parse((await pool.evaluate(sid, { expression: `!document.querySelector('#conclave-inspector')?.classList.contains('hidden')` })).result);
     assert.equal(inspectorVisible, true);
 
-    await pool.act(sid, { action: 'click', selector: '[data-pantheon-lens="timeline"]', waitMs: 250 }, { privacy: { localOnly: false } });
-    await pool.act(sid, { action: 'click', selector: '[data-pantheon-lens="stage"]', waitMs: 250 }, { privacy: { localOnly: false } });
+    await pool.act(sid, { action: 'click', selector: '[data-conclave-lens="timeline"]', waitMs: 250 }, { privacy: { localOnly: false } });
+    await pool.act(sid, { action: 'click', selector: '[data-conclave-lens="stage"]', waitMs: 250 }, { privacy: { localOnly: false } });
 
     // Verify Arena Race mode renders cleanly too
-    await pool.evaluate(sid, { expression: `window.G0DPantheon.startDemo(5); true;` });
-    const arenaMode = (await pool.evaluate(sid, { expression: `window.G0DPantheon.getState()?.mode` })).result;
+    await pool.evaluate(sid, { expression: `window.G0DConclave.startDemo(5); true;` });
+    const arenaMode = (await pool.evaluate(sid, { expression: `window.G0DConclave.getState()?.mode` })).result;
     assert.equal(arenaMode, 'arena');
 
-    const errors = JSON.parse((await pool.evaluate(sid, { expression: `window.__PANTHEON_ERRORS || []` })).result);
+    const errors = JSON.parse((await pool.evaluate(sid, { expression: `window.__CONCLAVE_ERRORS || []` })).result);
     assert.deepEqual(errors, []);
   } finally {
     await pool.closeAll();

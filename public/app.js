@@ -1712,12 +1712,12 @@ async function executeSlashCommand(raw) {
     }
     return { handled: true };
   }
-  if (cmd === '/conclave' || cmd === '/pantheon' || cmd === '/swarm') {
+  if (cmd === '/conclave' || cmd === '/swarm') {
     clearInput();
-    if (arg && /^(demo|preview)$/i.test(arg.trim())) window.G0DPantheon?.open({ demo: true });
-    else if (arg && /^(cards|timeline|stage|roster)$/i.test(arg.trim())) window.G0DPantheon?.open({ lens: arg.trim().toLowerCase() });
-    else if (arg && /^(builder|forge)$/i.test(arg.trim())) { window.G0DPantheon?.open({ lens: 'roster' }); window.G0DPantheon?.openBuilder(null); }
-    else window.G0DPantheon?.toggle();
+    if (arg && /^(demo|preview)$/i.test(arg.trim())) window.G0DConclave?.open({ demo: true });
+    else if (arg && /^(cards|timeline|stage|roster)$/i.test(arg.trim())) window.G0DConclave?.open({ lens: arg.trim().toLowerCase() });
+    else if (arg && /^(builder|forge)$/i.test(arg.trim())) { window.G0DConclave?.open({ lens: 'roster' }); window.G0DConclave?.openBuilder(null); }
+    else window.G0DConclave?.toggle();
     return { handled: true };
   }
   if (cmd === '/benchmark') {
@@ -5173,8 +5173,8 @@ function renderCommands() {
       { kind: 'action', title: 'Toggle Plan Mode', detail: draftPlanMode ? 'Start next chat in Build Mode' : 'Start next chat in read-only Plan Mode', keywords: 'plan build /plan /build', run: () => togglePlanMode(null) },
     ]),
     { kind: 'action', title: 'Forge Task Megaprompt (/forge)', detail: 'Synthesize a model-calibrated Megaprompt & acceptance rubric in the composer', keywords: 'forge megaprompt metaprompt metacognition ultra /forge', run: () => { const c = $('#composer-input'); if (c) { c.value = c.value.trim() ? `/forge ${c.value.trim()}` : '/forge '; c.focus(); } } },
-    { kind: 'action', title: 'Forge Conclave Agent (Stats Builder)', detail: 'Build a custom specialist with live benchmark radar stats from any API or CLI harness', keywords: 'conclave pantheon agent builder stats radar roster codex claude hermes grok antigravity', run: () => { window.G0DPantheon?.open({ lens: 'roster' }); window.G0DPantheon?.openBuilder(null); } },
-    { kind: 'action', title: 'Open The Conclave (Multi-Agent Stage)', detail: 'Visualize parallel subagents, Diff Races, and Arena councils (/conclave)', keywords: 'conclave pantheon swarm multi agent subagent crew arena council stage /conclave /pantheon /swarm', run: () => window.G0DPantheon?.open() },
+    { kind: 'action', title: 'Forge Conclave Agent (Stats Builder)', detail: 'Build a custom specialist with live benchmark radar stats from any API or CLI harness', keywords: 'conclave agent builder stats radar roster codex claude hermes grok antigravity', run: () => { window.G0DConclave?.open({ lens: 'roster' }); window.G0DConclave?.openBuilder(null); } },
+    { kind: 'action', title: 'Open The Conclave (Multi-Agent Stage)', detail: 'Visualize parallel subagents, Diff Races, and Arena councils (/conclave)', keywords: 'conclave swarm multi agent subagent crew arena council stage /conclave /swarm', run: () => window.G0DConclave?.open() },
     { kind: 'action', title: 'Open Models & Subscriptions', detail: 'CLI logins, API keys, and local models', keywords: 'claude codex gemini copilot ollama key provider /model', run: () => openSettings('models') },
     ...(window.G0DThemes ? window.G0DThemes.list().map(t => ({
       kind: 'action',
@@ -5335,7 +5335,7 @@ function renderSelected(data, force = false) {
   setVisible('#welcome-links', false);
   setVisible('#task-workspace', true);
   manageStream(task);
-  window.G0DPantheon?.syncTask(task);
+  window.G0DConclave?.syncTask(task);
   const signature = JSON.stringify(data);
   if (!force && signature === detailSignature) return;
   const oldTaskId = $('#selected-id').dataset.fullId;
@@ -5538,10 +5538,10 @@ function manageStream(task) {
               setTimeout(refresh, 350);
             }
           } else if (delta.type === 'permission.requested' || delta.type === 'todos.updated') {
-            window.G0DPantheon?.ingestStreamEvent(delta);
+            window.G0DConclave?.ingestStreamEvent(delta);
             setTimeout(refresh, 150);
-          } else if (delta.type === 'subagent.started' || delta.type === 'subagent.progress' || delta.type === 'subagent.completed' || delta.type === 'pantheon.update' || delta.type === 'pantheon.steered' || delta.type === 'race.dispatched' || delta.type === 'race.result' || delta.type === 'race.completed') {
-            window.G0DPantheon?.ingestStreamEvent(delta);
+          } else if (delta.type === 'subagent.started' || delta.type === 'subagent.progress' || delta.type === 'subagent.completed' || delta.type === 'conclave.update' || delta.type === 'conclave.steered' || delta.type === 'race.dispatched' || delta.type === 'race.result' || delta.type === 'race.completed') {
+            window.G0DConclave?.ingestStreamEvent(delta);
             if (delta.type === 'subagent.completed' || delta.type === 'race.completed') setTimeout(refresh, 250);
           }
         } catch {}
@@ -6342,7 +6342,7 @@ $('#crew-review-dialog').addEventListener('close', () => { crewReview = null; ($
 
 $('#command-open')?.addEventListener('click', openCommands);
 $('#header-command-open')?.addEventListener('click', openCommands);
-$('#pantheon-toggle-btn')?.addEventListener('click', () => window.G0DPantheon?.toggle());
+$('#conclave-toggle-btn')?.addEventListener('click', () => window.G0DConclave?.toggle());
 $('#command-palette-dialog')?.addEventListener('close', () => { if (commandReturnFocus?.isConnected && !commandReturnFocus.closest('[inert]')) commandReturnFocus.focus({ preventScroll: true }); });
 $('#palette-input')?.addEventListener('input', () => { commandIndex = 0; renderCommands(); });
 $('#palette-input')?.addEventListener('keydown', event => {

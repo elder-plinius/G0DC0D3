@@ -73,7 +73,7 @@ export class CrewController {
     const current = this.store.getCrew(id);
     const updated = this.store.putCrew({ ...current, ...patch }, event);
     try {
-      this.runtime._emitStream(updated.parentId, { type: 'pantheon.update', kind: 'crew', crew: this.summary(updated.parentId) });
+      this.runtime._emitStream(updated.parentId, { type: 'conclave.update', kind: 'crew', crew: this.summary(updated.parentId) });
     } catch {}
     return updated;
   }

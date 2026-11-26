@@ -9,12 +9,12 @@ import {
   computeXpLevel,
   estimateWorkerTelemetry,
   runExternalHarnessSubagent
-} from '../src/pantheon-roster.mjs';
+} from '../src/conclave-roster.mjs';
 import { createApp } from '../src/server.mjs';
 import { BrowserPool } from '../src/browser-env.mjs';
 import { HttpProvider } from '../src/providers.mjs';
 
-test('Pantheon Power #1: Bounded non-shell external CLI harness runner + injection guard + fallback', async () => {
+test('Conclave Power #1: Bounded non-shell external CLI harness runner + injection guard + fallback', async () => {
   // Rejects shell metacharacters, path traversal, and raw shells/interpreters
   assert.equal(buildHarnessInvocation(null, 'codex; rm -rf /', 'hi'), null);
   assert.equal(buildHarnessInvocation(null, '/usr/bin/codex', 'hi'), null);
@@ -58,8 +58,8 @@ test('Pantheon Power #1: Bounded non-shell external CLI harness runner + injecti
   assert.equal(missRes.code, 'HARNESS_NOT_FOUND');
 });
 
-test('Pantheon Power #3 & #4: Formations CRUD, Agent XP leveling, Token/Cost & MVP telemetry', async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'g0d-pantheon-power-'));
+test('Conclave Power #3 & #4: Formations CRUD, Agent XP leveling, Token/Cost & MVP telemetry', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'g0d-conclave-power-'));
   const stub = {
     id: 'openrouter:gemini-4-neon',
     label: 'Gemini 4 Neon · OpenRouter',
@@ -76,14 +76,14 @@ test('Pantheon Power #3 & #4: Formations CRUD, Agent XP leveling, Token/Cost & M
 
   try {
     // 1. Starter formations present
-    const fRes = await fetch(`${root}/api/pantheon/formations`);
+    const fRes = await fetch(`${root}/api/conclave/formations`);
     assert.equal(fRes.status, 200);
     const fJson = await fRes.json();
     assert.ok(fJson.formations.some(f => f.id === 'pr-gauntlet'));
     assert.ok(fJson.formations.some(f => f.id === 'deep-audit'));
 
     // 2. Save custom formation + verify persistence + delete
-    const createRes = await fetch(`${root}/api/pantheon/formations`, {
+    const createRes = await fetch(`${root}/api/conclave/formations`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ name: 'Red-Team Blitz', sigil: '⚡', agents: ['explore', 'uncensored'], goal: 'Audit auth boundaries.' })
@@ -93,11 +93,11 @@ test('Pantheon Power #3 & #4: Formations CRUD, Agent XP leveling, Token/Cost & M
     assert.equal(created.formation.id, 'red-team-blitz');
     assert.deepEqual(created.formation.agents, ['explore', 'uncensored']);
 
-    const rosterRes = await fetch(`${root}/api/pantheon/roster`);
+    const rosterRes = await fetch(`${root}/api/conclave/roster`);
     const roster = await rosterRes.json();
     assert.ok(roster.formations.some(f => f.id === 'red-team-blitz'));
 
-    const delRes = await fetch(`${root}/api/pantheon/formations/red-team-blitz`, { method: 'DELETE', headers });
+    const delRes = await fetch(`${root}/api/conclave/formations/red-team-blitz`, { method: 'DELETE', headers });
     assert.equal(delRes.status, 200);
     const delJson = await delRes.json();
     assert.equal(delJson.deleted, true);
@@ -105,15 +105,15 @@ test('Pantheon Power #3 & #4: Formations CRUD, Agent XP leveling, Token/Cost & M
     // 3. Agent XP leveling (4 runs * 25 XP = 100 XP -> Level 2!)
     assert.equal(computeXpLevel({ xp: 0 }).level, 1);
     for (let i = 0; i < 4; i++) {
-      app.runtime.recordPantheonAgentRun('explore', { ok: true, durationMs: 1200 + i * 100 });
+      app.runtime.recordConclaveAgentRun('explore', { ok: true, durationMs: 1200 + i * 100 });
     }
-    const roster2 = await (await fetch(`${root}/api/pantheon/roster`)).json();
+    const roster2 = await (await fetch(`${root}/api/conclave/roster`)).json();
     const atlas = roster2.agents.find(a => a.slug === 'explore');
     assert.equal(atlas.xp.level, 2);
     assert.equal(atlas.xp.xp, 100);
     assert.equal(atlas.xp.runs, 4);
 
-    // 4. Token/Cost estimation + MVP crown in getPantheonState
+    // 4. Token/Cost estimation + MVP crown in getConclaveState
     const tel = estimateWorkerTelemetry({ prompt: 'inspect src/server.mjs', summary: 'Found 3 routes', calls: 2, providerId: 'openrouter:gemini-4-neon', costIndex: 82 });
     assert.ok(tel.approxTokens > 100);
     assert.ok(tel.estimatedCostUsd > 0);
@@ -129,7 +129,7 @@ test('Pantheon Power #3 & #4: Formations CRUD, Agent XP leveling, Token/Cost & M
     app.runtime.store.appendEvent(task.id, 'subagent.started', { workerId: 'w-slow', role: 'reviewer', prompt: 'review', startedAt: t0 });
     app.runtime.store.appendEvent(task.id, 'subagent.completed', { workerId: 'w-slow', role: 'reviewer', ok: true, providerId: stub.id, calls: 1, files: [], tools: [], summary: 'Looks fine.', startedAt: t0, endedAt: t2, durationMs: 7000 });
 
-    const pState = await (await fetch(`${root}/api/tasks/${encodeURIComponent(task.id)}/pantheon`)).json();
+    const pState = await (await fetch(`${root}/api/tasks/${encodeURIComponent(task.id)}/conclave`)).json();
     assert.equal(pState.mode, 'swarm');
     assert.ok(pState.stats.totalTokens > 0);
     assert.ok(pState.stats.totalCostUsd > 0);
@@ -141,8 +141,8 @@ test('Pantheon Power #3 & #4: Formations CRUD, Agent XP leveling, Token/Cost & M
   }
 });
 
-test('Pantheon Power #2: Code Diff Race snapshot surfaces worktree candidates & line stats', async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'g0d-pantheon-diff-'));
+test('Conclave Power #2: Code Diff Race snapshot surfaces worktree candidates & line stats', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'g0d-conclave-diff-'));
   const repoDir = path.join(dir, 'repo');
   await fs.mkdir(repoDir, { recursive: true });
   execFileSync('git', ['init', '-b', 'main'], { cwd: repoDir });
@@ -176,7 +176,7 @@ test('Pantheon Power #2: Code Diff Race snapshot surfaces worktree candidates & 
     const wt = await app.runtime.worktrees.attach(task.id, repoDir);
     await app.runtime.worktrees.build(wt.id, { objective: 'Bump v to 2', files: ['app.js'], providerIds: [stub.id] });
 
-    const pState = await (await fetch(`${root}/api/tasks/${encodeURIComponent(task.id)}/pantheon`)).json();
+    const pState = await (await fetch(`${root}/api/tasks/${encodeURIComponent(task.id)}/conclave`)).json();
     assert.equal(pState.mode, 'diff_race');
     assert.ok(pState.worktreeRace);
     assert.equal(pState.worktreeRace.candidates.length, 1);
@@ -191,7 +191,7 @@ test('Pantheon Power #2: Code Diff Race snapshot surfaces worktree candidates & 
       body: JSON.stringify({ candidateId: pState.worktreeRace.candidates[0].id })
     });
     assert.equal(applyRes.status, 200);
-    const afterState = await (await fetch(`${root}/api/tasks/${encodeURIComponent(task.id)}/pantheon`)).json();
+    const afterState = await (await fetch(`${root}/api/tasks/${encodeURIComponent(task.id)}/conclave`)).json();
     assert.equal(afterState.worktreeRace.candidates[0].status, 'applied');
   } finally {
     await app.close();
@@ -199,8 +199,8 @@ test('Pantheon Power #2: Code Diff Race snapshot surfaces worktree candidates & 
   }
 });
 
-test('Pantheon Power #5: Headless Chromium E2E — Replay 4x scrub, Formations UI, MVP & XP badges, zero inline style=', async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'g0d-pantheon-ui-'));
+test('Conclave Power #5: Headless Chromium E2E — Replay 4x scrub, Formations UI, MVP & XP badges, zero inline style=', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'g0d-conclave-ui-'));
   const stub = {
     id: 'openrouter:gemini-4-neon',
     label: 'Gemini 4 Neon · OpenRouter',
@@ -214,11 +214,11 @@ test('Pantheon Power #5: Headless Chromium E2E — Replay 4x scrub, Formations U
   const app = await createApp({ dataDir: dir, auth: false, providers: new Map([[stub.id, stub]]), cliDiscovery: { probes: [] } });
   const root = await app.listen(0);
   const pool = new BrowserPool();
-  const sid = 'pantheon-power-ui';
+  const sid = 'conclave-power-ui';
 
   try {
     // Seed 5 runs of XP so Atlas displays Lv.2
-    for (let i = 0; i < 5; i++) app.runtime.recordPantheonAgentRun('explore', { ok: true, durationMs: 1800 });
+    for (let i = 0; i < 5; i++) app.runtime.recordConclaveAgentRun('explore', { ok: true, durationMs: 1800 });
 
     await pool.open(sid, { url: root + '/', viewport: { width: 1440, height: 900 }, waitMs: 900 }, { privacy: { localOnly: false } });
     await pool.evaluate(sid, {
@@ -227,15 +227,15 @@ test('Pantheon Power #5: Headless Chromium E2E — Replay 4x scrub, Formations U
     const dlgs = JSON.parse((await pool.evaluate(sid, { expression: `[...document.querySelectorAll('dialog[open]')].map(d => d.id)` })).result);
     if (dlgs.length) await pool.act(sid, { action: 'press', key: 'Escape', waitMs: 200 }, { privacy: { localOnly: false } });
 
-    // Open Pantheon in completed Demo Swarm (tick 4) to test ★ MVP, Est. Cost & Replay 4x
-    await pool.evaluate(sid, { expression: `window.G0DPantheon.open({ demo: true, demoTick: 4 }); true;` });
+    // Open Conclave in completed Demo Swarm (tick 4) to test ★ MVP, Est. Cost & Replay 4x
+    await pool.evaluate(sid, { expression: `window.G0DConclave.open({ demo: true, demoTick: 4 }); true;` });
     await new Promise(r => setTimeout(r, 350));
 
     const stageCheck = JSON.parse((await pool.evaluate(sid, {
       expression: `(() => ({
-        replayVisible: !document.getElementById('pantheon-replay-bar')?.classList.contains('hidden'),
-        costVisible: !document.getElementById('pantheon-stat-cost-wrap')?.classList.contains('hidden'),
-        inlineStyles: document.querySelectorAll('#pantheon-dock [style]').length,
+        replayVisible: !document.getElementById('conclave-replay-bar')?.classList.contains('hidden'),
+        costVisible: !document.getElementById('conclave-stat-cost-wrap')?.classList.contains('hidden'),
+        inlineStyles: document.querySelectorAll('#conclave-dock [style]').length,
       }))()`
     })).result);
     assert.equal(stageCheck.replayVisible, true);
@@ -243,22 +243,22 @@ test('Pantheon Power #5: Headless Chromium E2E — Replay 4x scrub, Formations U
     assert.equal(stageCheck.inlineStyles, 0);
 
     // Click Replay 4x and verify scrub advances cleanly
-    await pool.act(sid, { action: 'click', selector: '#pantheon-replay-toggle', waitMs: 250 }, { privacy: { localOnly: false } });
-    const scrubMid = Number((await pool.evaluate(sid, { expression: `document.getElementById('pantheon-replay-scrub')?.value` })).result);
+    await pool.act(sid, { action: 'click', selector: '#conclave-replay-toggle', waitMs: 250 }, { privacy: { localOnly: false } });
+    const scrubMid = Number((await pool.evaluate(sid, { expression: `document.getElementById('conclave-replay-scrub')?.value` })).result);
     assert.ok(scrubMid >= 0 && scrubMid <= 100);
 
     // Check Cards lens shows ★ MVP badge
-    await pool.act(sid, { action: 'click', selector: '[data-pantheon-lens="cards"]', waitMs: 250 }, { privacy: { localOnly: false } });
-    const hasMvpBadge = JSON.parse((await pool.evaluate(sid, { expression: `Boolean(document.querySelector('.pantheon-mvp-badge'))` })).result);
+    await pool.act(sid, { action: 'click', selector: '[data-conclave-lens="cards"]', waitMs: 250 }, { privacy: { localOnly: false } });
+    const hasMvpBadge = JSON.parse((await pool.evaluate(sid, { expression: `Boolean(document.querySelector('.conclave-mvp-badge'))` })).result);
     assert.equal(hasMvpBadge, true);
 
     // Check Roster lens shows Formations strip, Lv.2 XP pill, and lets user save a custom formation
-    await pool.act(sid, { action: 'click', selector: '[data-pantheon-lens="roster"]', waitMs: 400 }, { privacy: { localOnly: false } });
+    await pool.act(sid, { action: 'click', selector: '[data-conclave-lens="roster"]', waitMs: 400 }, { privacy: { localOnly: false } });
     const rosterCheck = JSON.parse((await pool.evaluate(sid, {
       expression: `(() => ({
         formations: document.querySelectorAll('.roster-formations [data-formation-launch]').length,
         xpPills: [...document.querySelectorAll('.roster-xp-pill')].map(el => el.textContent.trim()),
-        inlineStyles: document.querySelectorAll('#pantheon-dock [style]').length,
+        inlineStyles: document.querySelectorAll('#conclave-dock [style]').length,
       }))()`
     })).result);
     assert.ok(rosterCheck.formations >= 2);
@@ -350,7 +350,7 @@ test('Ultra-Plinian 3-Way Arena Race & arenaSize routing across non-Venice provi
     await app.runtime.run(task.id);
     const done = app.runtime.getTask(task.id);
     assert.equal(done.status, 'completed');
-    const pState = await (await fetch(`${root}/api/tasks/${encodeURIComponent(task.id)}/pantheon`)).json();
+    const pState = await (await fetch(`${root}/api/tasks/${encodeURIComponent(task.id)}/conclave`)).json();
     assert.equal(pState.mode, 'arena');
     assert.equal(pState.arena.contenders.length, 3);
     assert.equal(pState.arena.contenders.filter(c => c.isWinner).length, 1);

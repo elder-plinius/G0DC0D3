@@ -5438,8 +5438,8 @@ body[data-app-mode="godcode"] .composer-options #composer-race {
 }
 
 
-/* ── The Pantheon · Multi-Agent Constellation & Arena Stage ── */
-.header-pantheon-btn {
+/* ── The Conclave · Multi-Agent Constellation & Arena Stage ── */
+.header-conclave-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -5452,17 +5452,17 @@ body[data-app-mode="godcode"] .composer-options #composer-race {
   font-weight: 550;
   transition: border-color .15s ease, color .15s ease, background .15s ease;
 }
-.header-pantheon-btn:hover,
-.header-pantheon-btn.is-open {
+.header-conclave-btn:hover,
+.header-conclave-btn.is-open {
   border-color: color-mix(in srgb, var(--violet) 55%, var(--line));
   background: color-mix(in srgb, var(--violet) 12%, transparent);
   color: var(--text);
 }
-.pantheon-btn-sigil {
+.conclave-btn-sigil {
   color: var(--violet);
   font-size: .88rem;
 }
-.pantheon-btn-count {
+.conclave-btn-count {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -5475,36 +5475,36 @@ body[data-app-mode="godcode"] .composer-options #composer-race {
   font: 600 .68rem/1 var(--mono);
   color: var(--text-secondary);
 }
-.pantheon-btn-count.is-live {
+.conclave-btn-count.is-live {
   background: color-mix(in srgb, var(--violet) 22%, transparent);
   border-color: color-mix(in srgb, var(--violet) 60%, transparent);
   color: var(--violet);
-  animation: pantheonPulse 1.8s ease-in-out infinite;
+  animation: conclavePulse 1.8s ease-in-out infinite;
 }
-@keyframes pantheonPulse {
+@keyframes conclavePulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: .68; transform: scale(1.06); }
 }
 
-body.pantheon-open .app-shell {
+body.conclave-open .app-shell {
   grid-template-columns: var(--sidebar-split-width, 184px) minmax(320px, 1fr) clamp(430px, 44vw, 640px);
 }
-body.pantheon-open.sidebar-collapsed .app-shell {
+body.conclave-open.sidebar-collapsed .app-shell {
   grid-template-columns: minmax(340px, 1fr) clamp(440px, 48vw, 680px);
 }
-body.pantheon-open.sidebar-collapsed :is(.app-header, .workspace) { grid-column: 1; }
-body.pantheon-open .inspector { display: none; }
-body.pantheon-open .app-header {
+body.conclave-open.sidebar-collapsed :is(.app-header, .workspace) { grid-column: 1; }
+body.conclave-open .inspector { display: none; }
+body.conclave-open .app-header {
   grid-column: 2;
   padding-inline: 10px;
   gap: 6px;
   overflow: hidden;
 }
-body.pantheon-open .header-context { display: none; }
-body.pantheon-open .connection > span:last-child { display: none; }
-body.pantheon-open .details-button > span { display: none; }
+body.conclave-open .header-context { display: none; }
+body.conclave-open .connection > span:last-child { display: none; }
+body.conclave-open .details-button > span { display: none; }
 
-.pantheon-dock {
+.conclave-dock {
   position: relative;
   display: flex;
   flex-direction: column;
@@ -5518,13 +5518,13 @@ body.pantheon-open .details-button > span { display: none; }
   overflow: hidden;
   z-index: 25;
 }
-body.pantheon-open.sidebar-collapsed .pantheon-dock {
+body.conclave-open.sidebar-collapsed .conclave-dock {
   grid-column: 2;
 }
-.pantheon-dock.hidden {
+.conclave-dock.hidden {
   display: none;
 }
-.pantheon-dock.is-expanded {
+.conclave-dock.is-expanded {
   position: fixed;
   inset: 18px;
   width: auto;
@@ -5535,15 +5535,15 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   z-index: 80;
 }
 @media (max-width: 1080px) {
-  body.pantheon-open .app-shell,
-  body.pantheon-open.sidebar-collapsed .app-shell {
+  body.conclave-open .app-shell,
+  body.conclave-open.sidebar-collapsed .app-shell {
     grid-template-columns: var(--sidebar-width, 250px) minmax(0, 1fr);
   }
-  body.pantheon-open.sidebar-collapsed .app-shell {
+  body.conclave-open.sidebar-collapsed .app-shell {
     grid-template-columns: minmax(0, 1fr);
   }
-  body.pantheon-open .pantheon-dock,
-  body.pantheon-open.sidebar-collapsed .pantheon-dock {
+  body.conclave-open .conclave-dock,
+  body.conclave-open.sidebar-collapsed .conclave-dock {
     position: fixed;
     inset: 12px;
     width: auto;
@@ -5557,7 +5557,7 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
     z-index: 75;
   }
 }
-.pantheon-header {
+.conclave-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -5567,13 +5567,13 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   background: var(--panel);
   flex-shrink: 0;
 }
-.pantheon-title-wrap {
+.conclave-title-wrap {
   display: flex;
   align-items: center;
   gap: 9px;
   min-width: 0;
 }
-.pantheon-sigil {
+.conclave-sigil {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -5586,17 +5586,17 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   font-size: .95rem;
   flex-shrink: 0;
 }
-.pantheon-title {
+.conclave-title {
   margin: 0;
   font: 700 .78rem/1.2 var(--mono);
   letter-spacing: .09em;
   color: var(--text);
 }
-.pantheon-title-copy {
+.conclave-title-copy {
   min-width: 0;
   overflow: hidden;
 }
-.pantheon-subtitle {
+.conclave-subtitle {
   margin: 2px 0 0;
   font-size: .74rem;
   color: var(--text-muted);
@@ -5605,7 +5605,7 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   text-overflow: ellipsis;
   max-width: 220px;
 }
-.pantheon-mode-pill {
+.conclave-mode-pill {
   padding: 2px 8px;
   border-radius: 999px;
   border: 1px solid var(--line);
@@ -5614,25 +5614,25 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   color: var(--text-secondary);
   white-space: nowrap;
 }
-.pantheon-mode-pill.mode-swarm {
+.conclave-mode-pill.mode-swarm {
   border-color: color-mix(in srgb, var(--violet) 50%, var(--line));
   color: var(--violet);
 }
-.pantheon-mode-pill.mode-crew {
+.conclave-mode-pill.mode-crew {
   border-color: color-mix(in srgb, var(--ok, #34d399) 50%, var(--line));
   color: var(--ok, #34d399);
 }
-.pantheon-mode-pill.mode-arena {
+.conclave-mode-pill.mode-arena {
   border-color: rgba(245, 158, 11, .5);
   color: #f59e0b;
 }
-.pantheon-header-controls {
+.conclave-header-controls {
   display: flex;
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
 }
-.pantheon-lenses {
+.conclave-lenses {
   display: inline-flex;
   padding: 2px;
   border-radius: 8px;
@@ -5640,7 +5640,7 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   background: var(--panel-soft);
   gap: 2px;
 }
-.pantheon-lens {
+.conclave-lens {
   border: 0;
   background: transparent;
   color: var(--text-muted);
@@ -5652,16 +5652,16 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   white-space: nowrap;
   transition: background .15s ease, color .15s ease;
 }
-.pantheon-lens:hover {
+.conclave-lens:hover {
   color: var(--text);
 }
-.pantheon-lens.active {
+.conclave-lens.active {
   background: var(--panel);
   color: var(--text);
   box-shadow: 0 1px 2px rgba(0, 0, 0, .18);
 }
 
-.pantheon-telemetry-bar {
+.conclave-telemetry-bar {
   display: flex;
   align-items: center;
   gap: 14px;
@@ -5670,36 +5670,36 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   background: color-mix(in srgb, var(--panel) 65%, var(--surface));
   flex-shrink: 0;
 }
-.pantheon-stat {
+.conclave-stat {
   display: flex;
   align-items: baseline;
   gap: 5px;
 }
-.pantheon-stat-label {
+.conclave-stat-label {
   font-size: .7rem;
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: .04em;
 }
-.pantheon-stat strong {
+.conclave-stat strong {
   font: 600 .8rem/1 var(--mono);
   color: var(--text);
 }
-.pantheon-telemetry-actions {
+.conclave-telemetry-actions {
   margin-left: auto;
 }
-.pantheon-demo-toggle {
+.conclave-demo-toggle {
   padding: 3px 9px;
   font-size: .74rem;
   border: 1px solid var(--line);
   border-radius: 7px;
 }
-.pantheon-demo-toggle.is-active {
+.conclave-demo-toggle.is-active {
   border-color: color-mix(in srgb, var(--violet) 55%, var(--line));
   color: var(--violet);
 }
 
-.pantheon-approval-strip {
+.conclave-approval-strip {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -5709,14 +5709,14 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   background: rgba(245, 158, 11, .1);
   flex-shrink: 0;
 }
-.pantheon-approval-copy {
+.conclave-approval-copy {
   display: flex;
   align-items: center;
   gap: 8px;
   font-size: .78rem;
   min-width: 0;
 }
-.pantheon-approval-badge {
+.conclave-approval-badge {
   padding: 2px 7px;
   border-radius: 6px;
   background: rgba(245, 158, 11, .2);
@@ -5725,13 +5725,13 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   font-size: .7rem;
   white-space: nowrap;
 }
-.pantheon-approval-btns {
+.conclave-approval-btns {
   display: flex;
   gap: 6px;
   flex-shrink: 0;
 }
 
-.pantheon-stage-body {
+.conclave-stage-body {
   position: relative;
   flex: 1 1 auto;
   min-height: 0;
@@ -5739,25 +5739,25 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   display: flex;
   flex-direction: column;
 }
-.pantheon-view {
+.conclave-view {
   position: relative;
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
 }
-.pantheon-view.hidden {
+.conclave-view.hidden {
   display: none;
 }
-.pantheon-canvas {
+.conclave-canvas {
   width: 100%;
   height: 100%;
   display: block;
 }
-.pantheon-canvas.is-pointer {
+.conclave-canvas.is-pointer {
   cursor: pointer;
 }
-.pantheon-standby-bar {
+.conclave-standby-bar {
   position: absolute;
   left: 16px;
   right: 16px;
@@ -5770,25 +5770,25 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   display: grid;
   gap: 10px;
 }
-.pantheon-standby-bar.hidden {
+.conclave-standby-bar.hidden {
   display: none;
 }
-.pantheon-standby-copy {
+.conclave-standby-copy {
   margin: 0;
   font-size: .8rem;
   color: var(--text-secondary);
   line-height: 1.45;
 }
-.pantheon-presets {
+.conclave-presets {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
-.pantheon-presets .button {
+.conclave-presets .button {
   font-size: .76rem;
   padding: 6px 11px;
 }
-.pantheon-legend {
+.conclave-legend {
   position: absolute;
   left: 12px;
   right: 12px;
@@ -5801,12 +5801,12 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   color: var(--text-muted);
   pointer-events: none;
 }
-.pantheon-legend span {
+.conclave-legend span {
   display: inline-flex;
   align-items: center;
   gap: 5px;
 }
-.pantheon-legend-hint {
+.conclave-legend-hint {
   margin-left: auto;
   font-style: italic;
 }
@@ -5821,16 +5821,16 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
 .p-dot-gold   { background: #fbbf24; }
 .p-dot-sage   { background: var(--ok, #34d399); }
 
-.pantheon-cards-view {
+.conclave-cards-view {
   overflow-y: auto;
   padding: 14px;
 }
-.pantheon-cards-grid {
+.conclave-cards-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 10px;
 }
-.pantheon-card {
+.conclave-card {
   display: flex;
   flex-direction: column;
   gap: 7px;
@@ -5840,19 +5840,19 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   background: var(--panel);
   transition: border-color .15s ease;
 }
-.pantheon-card.is-selected {
+.conclave-card.is-selected {
   border-color: var(--violet);
 }
-.pantheon-card.is-winner {
+.conclave-card.is-winner {
   border-color: rgba(251, 191, 36, .65);
 }
-.pantheon-card-head {
+.conclave-card-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
-.pantheon-role-chip {
+.conclave-role-chip {
   padding: 2px 8px;
   border-radius: 6px;
   background: var(--panel-soft);
@@ -5861,28 +5861,28 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   text-transform: uppercase;
   color: var(--text);
 }
-.pantheon-status-pill {
+.conclave-status-pill {
   padding: 2px 7px;
   border-radius: 999px;
   font: 600 .67rem/1.4 var(--mono);
   background: var(--panel-soft);
   color: var(--text-secondary);
 }
-.pantheon-status-pill.tone-violet { color: var(--violet, #a78bfa); background: color-mix(in srgb, var(--violet, #a78bfa) 14%, transparent); }
-.pantheon-status-pill.tone-sage   { color: var(--ok, #34d399); background: color-mix(in srgb, var(--ok, #34d399) 14%, transparent); }
-.pantheon-status-pill.tone-amber  { color: #f59e0b; background: rgba(245, 158, 11, .14); }
-.pantheon-status-pill.tone-gold   { color: #fbbf24; background: rgba(251, 191, 36, .16); }
-.pantheon-status-pill.tone-coral  { color: #f87171; background: rgba(248, 113, 113, .14); }
-.pantheon-card-model {
+.conclave-status-pill.tone-violet { color: var(--violet, #a78bfa); background: color-mix(in srgb, var(--violet, #a78bfa) 14%, transparent); }
+.conclave-status-pill.tone-sage   { color: var(--ok, #34d399); background: color-mix(in srgb, var(--ok, #34d399) 14%, transparent); }
+.conclave-status-pill.tone-amber  { color: #f59e0b; background: rgba(245, 158, 11, .14); }
+.conclave-status-pill.tone-gold   { color: #fbbf24; background: rgba(251, 191, 36, .16); }
+.conclave-status-pill.tone-coral  { color: #f87171; background: rgba(248, 113, 113, .14); }
+.conclave-card-model {
   font-size: .86rem;
   color: var(--text);
 }
-.pantheon-card-meta {
+.conclave-card-meta {
   margin: 0;
   font: 500 .72rem/1.3 var(--mono);
   color: var(--text-muted);
 }
-.pantheon-card-tail {
+.conclave-card-tail {
   margin: 0;
   font-size: .78rem;
   line-height: 1.45;
@@ -5892,12 +5892,12 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.pantheon-file-chips {
+.conclave-file-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
 }
-.pantheon-file-chip {
+.conclave-file-chip {
   padding: 2px 7px;
   border-radius: 6px;
   background: var(--panel-soft);
@@ -5905,38 +5905,38 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   font: 500 .68rem/1.3 var(--mono);
   color: var(--text-secondary);
 }
-.pantheon-file-chip.is-conflict {
+.conclave-file-chip.is-conflict {
   border-color: rgba(245, 158, 11, .55);
   color: #f59e0b;
 }
-.pantheon-card-foot {
+.conclave-card-foot {
   margin-top: auto;
   padding-top: 4px;
 }
-.pantheon-card-foot .button {
+.conclave-card-foot .button {
   width: 100%;
   font-size: .76rem;
   padding: 5px 10px;
 }
-.pantheon-empty-cards,
-.pantheon-timeline-empty {
+.conclave-empty-cards,
+.conclave-timeline-empty {
   padding: 28px 18px;
   text-align: center;
   font-size: .82rem;
   color: var(--text-muted);
 }
-.pantheon-timeline-view {
+.conclave-timeline-view {
   padding: 12px;
   overflow-y: auto;
 }
-.pantheon-timeline-canvas {
+.conclave-timeline-canvas {
   width: 100%;
   min-height: 260px;
   flex: 1 1 auto;
   cursor: pointer;
 }
 
-.pantheon-inspector {
+.conclave-inspector {
   border-top: 1px solid var(--line);
   background: var(--panel);
   padding: 12px 14px;
@@ -5946,31 +5946,31 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   overflow-y: auto;
   flex-shrink: 0;
 }
-.pantheon-inspector.hidden {
+.conclave-inspector.hidden {
   display: none;
 }
-.pantheon-inspector-head {
+.conclave-inspector-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
-.pantheon-inspector-title {
+.conclave-inspector-title {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
 }
-.pantheon-inspector-meta {
+.conclave-inspector-meta {
   font: 500 .72rem/1.35 var(--mono);
   color: var(--text-muted);
 }
-.pantheon-inspector-files {
+.conclave-inspector-files {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
 }
-.pantheon-inspector-output {
+.conclave-inspector-output {
   margin: 0;
   padding: 9px 11px;
   border-radius: 8px;
@@ -5982,11 +5982,11 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   max-height: 128px;
   overflow-y: auto;
 }
-.pantheon-steer-form {
+.conclave-steer-form {
   display: flex;
   gap: 8px;
 }
-.pantheon-steer-form input {
+.conclave-steer-form input {
   flex: 1 1 auto;
   min-width: 0;
   padding: 7px 10px;
@@ -5996,7 +5996,7 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   color: var(--text);
   font-size: .8rem;
 }
-.pantheon-steer-form .button {
+.conclave-steer-form .button {
   flex-shrink: 0;
   padding: 6px 12px;
   font-size: .78rem;
@@ -6092,8 +6092,8 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
 }
 
 
-/* ── Pantheon Roster & Live RPG Agent Stats Builder ── */
-.pantheon-roster-view {
+/* ── Conclave Roster & Live RPG Agent Stats Builder ── */
+.conclave-roster-view {
   overflow-y: auto;
   padding: 12px 14px 18px;
   gap: 12px;
@@ -6454,8 +6454,8 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   flex: 1 1 auto;
 }
 
-/* ── Pantheon Power Upgrades: Replay 4x, Formations, Diff Race, MVP & XP ── */
-.pantheon-replay-bar {
+/* ── Conclave Power Upgrades: Replay 4x, Formations, Diff Race, MVP & XP ── */
+.conclave-replay-bar {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -6464,32 +6464,32 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   background: var(--panel-soft);
   flex-shrink: 0;
 }
-.pantheon-replay-bar.hidden { display: none; }
-.pantheon-replay-btn {
+.conclave-replay-bar.hidden { display: none; }
+.conclave-replay-btn {
   padding: 3px 10px;
   font: 600 .73rem/1.3 var(--mono);
   white-space: nowrap;
 }
-.pantheon-replay-btn.is-active {
+.conclave-replay-btn.is-active {
   color: #fbbf24;
   border-color: rgba(251, 191, 36, .45);
 }
-.pantheon-replay-scrub {
+.conclave-replay-scrub {
   flex: 1 1 auto;
   accent-color: #fbbf24;
   cursor: pointer;
 }
-.pantheon-replay-time {
+.conclave-replay-time {
   font: 600 .7rem/1 var(--mono);
   color: var(--text-muted);
   white-space: nowrap;
 }
-.pantheon-card-badges {
+.conclave-card-badges {
   display: flex;
   align-items: center;
   gap: 6px;
 }
-.pantheon-mvp-badge {
+.conclave-mvp-badge {
   padding: 2px 7px;
   border-radius: 999px;
   border: 1px solid rgba(251, 191, 36, .55);
@@ -6498,7 +6498,7 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   font: 700 .66rem/1.3 var(--mono);
   letter-spacing: .03em;
 }
-.pantheon-standby-formations {
+.conclave-standby-formations {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -6506,8 +6506,8 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   gap: 6px;
   margin-top: 8px;
 }
-.pantheon-standby-formations.hidden { display: none; }
-.pantheon-sf-label {
+.conclave-standby-formations.hidden { display: none; }
+.conclave-sf-label {
   font: 600 .68rem/1 var(--mono);
   text-transform: uppercase;
   letter-spacing: .06em;
@@ -6519,7 +6519,7 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   gap: 8px;
   flex-wrap: wrap;
 }
-.pantheon-formation-wrap {
+.conclave-formation-wrap {
   display: inline-flex;
   align-items: center;
   border-radius: 999px;
@@ -6527,7 +6527,7 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   background: var(--panel);
   overflow: hidden;
 }
-.pantheon-formation-chip {
+.conclave-formation-chip {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -6539,14 +6539,14 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   font-weight: 500;
   cursor: pointer;
 }
-.pantheon-formation-chip:hover {
+.conclave-formation-chip:hover {
   background: color-mix(in srgb, var(--violet, #a78bfa) 14%, var(--panel));
 }
-.pantheon-formation-chip small {
+.conclave-formation-chip small {
   font: 600 .67rem/1 var(--mono);
   color: var(--text-muted);
 }
-.pantheon-formation-del {
+.conclave-formation-del {
   padding: 4px 7px;
   border: 0;
   border-left: 1px solid var(--line);
@@ -6555,7 +6555,7 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   cursor: pointer;
   font-size: .78rem;
 }
-.pantheon-formation-del:hover {
+.conclave-formation-del:hover {
   color: var(--danger, #f87171);
 }
 .rf-form {
@@ -6604,7 +6604,7 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   border: 1px solid color-mix(in srgb, var(--ok, #34d399) 35%, var(--line));
   background: color-mix(in srgb, var(--ok, #34d399) 10%, var(--panel));
 }
-.pantheon-diff-actions {
+.conclave-diff-actions {
   position: absolute;
   left: 16px;
   right: 16px;
@@ -6618,9 +6618,9 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   background: color-mix(in srgb, var(--panel) 94%, transparent);
   backdrop-filter: blur(10px);
 }
-.pantheon-diff-actions.hidden { display: none; }
-.pantheon-legend.hidden { display: none; }
-.pantheon-stat { white-space: nowrap; }
+.conclave-diff-actions.hidden { display: none; }
+.conclave-legend.hidden { display: none; }
+.conclave-stat { white-space: nowrap; }
 
 /* ── Unified Composer & Header Button Polish (Crisp 28px Rail, Zero Cutoff) ── */
 .composer-shell {
@@ -6757,7 +6757,7 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   color: #3d246e;
 }
 /* Unified 28px top header pills */
-.app-header .header-pantheon-btn,
+.app-header .header-conclave-btn,
 .app-header .header-services-btn,
 .app-header .connection,
 .app-header .header-palette-btn,
@@ -6787,21 +6787,21 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
 }
 
 /* ── Conclave Live Latent Thought Ticker & Compact Telemetry Guard ── */
-.pantheon-telemetry-bar {
+.conclave-telemetry-bar {
   gap: 8px;
   padding: 6px 10px;
   flex-wrap: wrap;
 }
-.pantheon-telemetry-actions {
+.conclave-telemetry-actions {
   margin-left: auto;
   flex-shrink: 0;
 }
-.pantheon-demo-toggle {
+.conclave-demo-toggle {
   padding: 3px 9px;
   font-size: .72rem;
   white-space: nowrap;
 }
-.pantheon-live-ticker {
+.conclave-live-ticker {
   position: absolute;
   left: 14px;
   right: 14px;
@@ -6817,7 +6817,7 @@ body.pantheon-open.sidebar-collapsed .pantheon-dock {
   max-height: 148px;
   overflow-y: auto;
 }
-.pantheon-live-ticker.hidden { display: none; }
+.conclave-live-ticker.hidden { display: none; }
 .plt-row {
   display: grid;
   grid-template-columns: 8px auto auto minmax(0, 1fr) auto;

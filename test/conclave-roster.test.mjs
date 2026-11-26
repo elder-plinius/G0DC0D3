@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { computeAgentStats, EXTERNAL_HARNESSES, normalizeRosterAgent } from '../src/pantheon-roster.mjs';
+import { computeAgentStats, EXTERNAL_HARNESSES, normalizeRosterAgent } from '../src/conclave-roster.mjs';
 import { discoverSubagents } from '../src/subagents.mjs';
 import { createApp } from '../src/server.mjs';
 import { BrowserPool } from '../src/browser-env.mjs';
 
-test('Pantheon Agent Stats Engine computes real benchmark radar stats & OVR across frontier APIs and external harnesses', () => {
+test('Conclave Agent Stats Engine computes real benchmark radar stats & OVR across frontier APIs and external harnesses', () => {
   const geminiStats = computeAgentStats({
     candidate: { id: 'gemini:gemini-4-neon', model: 'gemini-4-neon', label: 'Gemini 4 Neon' },
     primarySpecialty: 'swe_coding',
@@ -37,7 +37,7 @@ test('Pantheon Agent Stats Engine computes real benchmark radar stats & OVR acro
   assert.equal(norm.sigil, '⛨');
 });
 
-test('Pantheon Roster API CRUD, live stats preview, custom agent.spawn hydration, and headless Chromium Builder UI', async () => {
+test('Conclave Roster API CRUD, live stats preview, custom agent.spawn hydration, and headless Chromium Builder UI', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'g0d-roster-e2e-'));
   const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'g0d-roster-repo-'));
   await fs.writeFile(path.join(workDir, 'main.js'), 'export const ok = true;\n');
@@ -73,14 +73,14 @@ test('Pantheon Roster API CRUD, live stats preview, custom agent.spawn hydration
   const pool = new BrowserPool();
 
   try {
-    // 1. GET /api/pantheon/roster returns starter agents, external harnesses, and real engines
-    const initial = await fetch(`${root}/api/pantheon/roster`).then(r => r.json());
+    // 1. GET /api/conclave/roster returns starter agents, external harnesses, and real engines
+    const initial = await fetch(`${root}/api/conclave/roster`).then(r => r.json());
     assert.ok(initial.agents.length >= 3);
     assert.ok(initial.harnesses.length >= 6);
     assert.ok(initial.engines.length === 2);
 
-    // 2. POST /api/pantheon/stats/preview returns real benchmark stats + bestEngine
-    const preview = await fetch(`${root}/api/pantheon/stats/preview`, {
+    // 2. POST /api/conclave/stats/preview returns real benchmark stats + bestEngine
+    const preview = await fetch(`${root}/api/conclave/stats/preview`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-g0d-request': '1' },
       body: JSON.stringify({ providerId: hermes.id, primarySpecialty: 'security_research', secondarySpecialty: 'swe_coding' })
@@ -88,8 +88,8 @@ test('Pantheon Roster API CRUD, live stats preview, custom agent.spawn hydration
     assert.ok(preview.stats.radar.agency >= 90);
     assert.ok(preview.bestEngine?.id);
 
-    // 3. POST /api/pantheon/roster creates a custom agent & hydrates discoverSubagents()
-    const created = await fetch(`${root}/api/pantheon/roster`, {
+    // 3. POST /api/conclave/roster creates a custom agent & hydrates discoverSubagents()
+    const created = await fetch(`${root}/api/conclave/roster`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-g0d-request': '1' },
       body: JSON.stringify({
@@ -108,7 +108,7 @@ test('Pantheon Roster API CRUD, live stats preview, custom agent.spawn hydration
     assert.equal(created.agent.slug, 'valkyrie-red-team');
 
     const discovered = await discoverSubagents({ workspace: workDir }, app.runtime);
-    assert.ok(discovered.has('valkyrie-red-team'), 'Expected forged Pantheon agent to be discoverable by agent.spawn');
+    assert.ok(discovered.has('valkyrie-red-team'), 'Expected forged Conclave agent to be discoverable by agent.spawn');
     assert.equal(discovered.get('valkyrie-red-team').model, hermes.id);
 
     // 4. Headless Chromium UI check: Roster lens, Radar canvases, Harness click -> Builder, Save, Squad Deploy, 0 inline style=, 0 JS errors
@@ -119,15 +119,15 @@ test('Pantheon Roster API CRUD, live stats preview, custom agent.spawn hydration
     const dlgs = JSON.parse((await pool.evaluate('roster-ui', { expression: `[...document.querySelectorAll('dialog[open]')].map(d => d.id)` })).result);
     if (dlgs.length) await pool.act('roster-ui', { action: 'press', key: 'Escape', waitMs: 180 }, { privacy: { localOnly: false } });
 
-    await pool.act('roster-ui', { action: 'click', selector: '#pantheon-toggle-btn', waitMs: 300 }, { privacy: { localOnly: false } });
-    await pool.act('roster-ui', { action: 'click', selector: '[data-pantheon-lens="roster"]', waitMs: 450 }, { privacy: { localOnly: false } });
+    await pool.act('roster-ui', { action: 'click', selector: '#conclave-toggle-btn', waitMs: 300 }, { privacy: { localOnly: false } });
+    await pool.act('roster-ui', { action: 'click', selector: '[data-conclave-lens="roster"]', waitMs: 450 }, { privacy: { localOnly: false } });
 
     const rosterCheck = JSON.parse((await pool.evaluate('roster-ui', {
       expression: `(() => ({
         cards: document.querySelectorAll('.roster-card').length,
         radars: document.querySelectorAll('.roster-mini-radar').length,
         harnesses: document.querySelectorAll('.roster-harness-pill').length,
-        inlineStyles: document.querySelectorAll('#pantheon-dock [style]').length,
+        inlineStyles: document.querySelectorAll('#conclave-dock [style]').length,
       }))()`
     })).result);
     assert.ok(rosterCheck.cards >= 4, `Expected >=4 roster cards including Valkyrie, got ${rosterCheck.cards}`);
@@ -139,10 +139,10 @@ test('Pantheon Roster API CRUD, live stats preview, custom agent.spawn hydration
     await pool.act('roster-ui', { action: 'click', selector: '[data-roster-harness="antigravity"]', waitMs: 350 }, { privacy: { localOnly: false } });
     const builderCheck = JSON.parse((await pool.evaluate('roster-ui', {
       expression: `(() => ({
-        visible: Boolean(document.querySelector('#pantheon-builder')),
+        visible: Boolean(document.querySelector('#conclave-builder')),
         ovr: Number(document.querySelector('#pb-ovr-num')?.textContent || 0),
         nameVal: document.querySelector('#pb-name')?.value || '',
-        inlineStyles: document.querySelectorAll('#pantheon-dock [style]').length,
+        inlineStyles: document.querySelectorAll('#conclave-dock [style]').length,
       }))()`
     })).result);
     assert.equal(builderCheck.visible, true);
@@ -161,7 +161,7 @@ test('Pantheon Roster API CRUD, live stats preview, custom agent.spawn hydration
     assert.deepEqual(errs, []);
 
     // 5. DELETE custom agent cleanly
-    const delRes = await fetch(`${root}/api/pantheon/roster/valkyrie-red-team`, {
+    const delRes = await fetch(`${root}/api/conclave/roster/valkyrie-red-team`, {
       method: 'DELETE',
       headers: { 'x-g0d-request': '1' }
     }).then(r => r.json());

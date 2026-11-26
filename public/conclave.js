@@ -1,6 +1,6 @@
 'use strict';
 
-(function initG0DPantheon() {
+(function initG0DConclave() {
   const ROLE_COLORS = {
     explore: '#60a5fa',
     reviewer: '#a78bfa',
@@ -110,101 +110,101 @@
     return false;
   }
 
-  function dockEl() { return document.getElementById('pantheon-dock'); }
+  function dockEl() { return document.getElementById('conclave-dock'); }
 
   function ensureShell() {
     const dock = dockEl();
-    if (!dock || dock.dataset.pantheonInit) return dock;
-    dock.dataset.pantheonInit = '1';
+    if (!dock || dock.dataset.conclaveInit) return dock;
+    dock.dataset.conclaveInit = '1';
     dock.innerHTML = `
-      <header class="pantheon-header">
-        <div class="pantheon-title-wrap">
-          <span class="pantheon-sigil" aria-hidden="true">✦</span>
-          <div class="pantheon-title-copy">
-            <h2 class="pantheon-title">THE CONCLAVE</h2>
-            <p class="pantheon-subtitle" id="pantheon-subtitle">Multi-Agent Council &amp; Arena Stage</p>
+      <header class="conclave-header">
+        <div class="conclave-title-wrap">
+          <span class="conclave-sigil" aria-hidden="true">✦</span>
+          <div class="conclave-title-copy">
+            <h2 class="conclave-title">THE CONCLAVE</h2>
+            <p class="conclave-subtitle" id="conclave-subtitle">Multi-Agent Council &amp; Arena Stage</p>
           </div>
         </div>
-        <div class="pantheon-header-controls">
-          <div class="pantheon-lenses" role="tablist" aria-label="Conclave views">
-            <button type="button" class="pantheon-lens active" role="tab" aria-selected="true" data-pantheon-lens="stage">✦ Stage</button>
-            <button type="button" class="pantheon-lens" role="tab" aria-selected="false" data-pantheon-lens="cards">▤ Cards</button>
-            <button type="button" class="pantheon-lens" role="tab" aria-selected="false" data-pantheon-lens="timeline">◫ Timeline</button>
-            <button type="button" class="pantheon-lens" role="tab" aria-selected="false" data-pantheon-lens="roster">⛨ Roster</button>
+        <div class="conclave-header-controls">
+          <div class="conclave-lenses" role="tablist" aria-label="Conclave views">
+            <button type="button" class="conclave-lens active" role="tab" aria-selected="true" data-conclave-lens="stage">✦ Stage</button>
+            <button type="button" class="conclave-lens" role="tab" aria-selected="false" data-conclave-lens="cards">▤ Cards</button>
+            <button type="button" class="conclave-lens" role="tab" aria-selected="false" data-conclave-lens="timeline">◫ Timeline</button>
+            <button type="button" class="conclave-lens" role="tab" aria-selected="false" data-conclave-lens="roster">⛨ Roster</button>
           </div>
-          <button type="button" class="icon-button pantheon-expand-btn" id="pantheon-expand" title="Expand or restore Conclave stage" aria-label="Expand Conclave stage" aria-pressed="false">⤢</button>
-          <button type="button" class="icon-button" id="pantheon-close" title="Close Conclave" aria-label="Close Conclave">×</button>
+          <button type="button" class="icon-button conclave-expand-btn" id="conclave-expand" title="Expand or restore Conclave stage" aria-label="Expand Conclave stage" aria-pressed="false">⤢</button>
+          <button type="button" class="icon-button" id="conclave-close" title="Close Conclave" aria-label="Close Conclave">×</button>
         </div>
       </header>
-      <div class="pantheon-telemetry-bar" id="pantheon-telemetry-bar">
-        <span class="pantheon-mode-pill" id="pantheon-mode-pill">Standby</span>
-        <div class="pantheon-stat"><span class="pantheon-stat-label">Active</span><strong id="pantheon-stat-active">0</strong></div>
-        <div class="pantheon-stat"><span class="pantheon-stat-label">Done</span><strong id="pantheon-stat-done">0</strong></div>
-        <div class="pantheon-stat"><span class="pantheon-stat-label">Calls</span><strong id="pantheon-stat-calls">0</strong></div>
-        <div class="pantheon-stat"><span class="pantheon-stat-label">Overlaps</span><strong id="pantheon-stat-conflicts">0</strong></div>
-        <div class="pantheon-stat hidden" id="pantheon-stat-cost-wrap"><span class="pantheon-stat-label">Cost</span><strong id="pantheon-stat-cost">$0.000</strong></div>
-        <div class="pantheon-telemetry-actions">
-          <button type="button" class="button button-quiet pantheon-demo-toggle" id="pantheon-demo-btn" title="Preview an interactive multi-agent constellation">Preview Swarm</button>
+      <div class="conclave-telemetry-bar" id="conclave-telemetry-bar">
+        <span class="conclave-mode-pill" id="conclave-mode-pill">Standby</span>
+        <div class="conclave-stat"><span class="conclave-stat-label">Active</span><strong id="conclave-stat-active">0</strong></div>
+        <div class="conclave-stat"><span class="conclave-stat-label">Done</span><strong id="conclave-stat-done">0</strong></div>
+        <div class="conclave-stat"><span class="conclave-stat-label">Calls</span><strong id="conclave-stat-calls">0</strong></div>
+        <div class="conclave-stat"><span class="conclave-stat-label">Overlaps</span><strong id="conclave-stat-conflicts">0</strong></div>
+        <div class="conclave-stat hidden" id="conclave-stat-cost-wrap"><span class="conclave-stat-label">Cost</span><strong id="conclave-stat-cost">$0.000</strong></div>
+        <div class="conclave-telemetry-actions">
+          <button type="button" class="button button-quiet conclave-demo-toggle" id="conclave-demo-btn" title="Preview an interactive multi-agent constellation">Preview Swarm</button>
         </div>
       </div>
-      <div class="pantheon-replay-bar hidden" id="pantheon-replay-bar" aria-label="Conclave Time-Travel Replay">
-        <button type="button" class="button button-quiet pantheon-replay-btn" id="pantheon-replay-toggle">▶ Replay 4×</button>
-        <input type="range" class="pantheon-replay-scrub" id="pantheon-replay-scrub" min="0" max="100" value="100" aria-label="Scrub replay timeline">
-        <span class="pantheon-replay-time" id="pantheon-replay-time">LIVE</span>
+      <div class="conclave-replay-bar hidden" id="conclave-replay-bar" aria-label="Conclave Time-Travel Replay">
+        <button type="button" class="button button-quiet conclave-replay-btn" id="conclave-replay-toggle">▶ Replay 4×</button>
+        <input type="range" class="conclave-replay-scrub" id="conclave-replay-scrub" min="0" max="100" value="100" aria-label="Scrub replay timeline">
+        <span class="conclave-replay-time" id="conclave-replay-time">LIVE</span>
       </div>
-      <div class="pantheon-approval-strip hidden" id="pantheon-approval-strip" role="alert">
-        <div class="pantheon-approval-copy">
-          <span class="pantheon-approval-badge">Approval Needed</span>
-          <code id="pantheon-approval-tool"></code>
-          <span id="pantheon-approval-reason"></span>
+      <div class="conclave-approval-strip hidden" id="conclave-approval-strip" role="alert">
+        <div class="conclave-approval-copy">
+          <span class="conclave-approval-badge">Approval Needed</span>
+          <code id="conclave-approval-tool"></code>
+          <span id="conclave-approval-reason"></span>
         </div>
-        <div class="pantheon-approval-btns">
-          <button type="button" class="button button-primary" data-pantheon-approve="once">Allow once</button>
-          <button type="button" class="button button-danger" data-pantheon-approve="deny">Deny</button>
+        <div class="conclave-approval-btns">
+          <button type="button" class="button button-primary" data-conclave-approve="once">Allow once</button>
+          <button type="button" class="button button-danger" data-conclave-approve="deny">Deny</button>
         </div>
       </div>
-      <div class="pantheon-stage-body">
-        <section class="pantheon-view pantheon-stage-view" id="pantheon-view-stage" role="tabpanel">
-          <canvas id="pantheon-canvas" class="pantheon-canvas" aria-label="Interactive multi-agent constellation stage"></canvas>
-          <div class="pantheon-standby-bar hidden" id="pantheon-standby-bar">
-            <p class="pantheon-standby-copy">Launch a parallel specialist squad, forge custom benchmarked agents, or race frontier models head-to-head.</p>
-            <div class="pantheon-presets">
-              <button type="button" class="button button-primary" data-pantheon-preset="research">✦ Parallel Research Squad</button>
-              <button type="button" class="button button-secondary" data-pantheon-preset="roster">⛨ Agent Builder &amp; Roster</button>
-              <button type="button" class="button button-secondary" data-pantheon-preset="arena">⚡ Head-to-Head Arena</button>
+      <div class="conclave-stage-body">
+        <section class="conclave-view conclave-stage-view" id="conclave-view-stage" role="tabpanel">
+          <canvas id="conclave-canvas" class="conclave-canvas" aria-label="Interactive multi-agent constellation stage"></canvas>
+          <div class="conclave-standby-bar hidden" id="conclave-standby-bar">
+            <p class="conclave-standby-copy">Launch a parallel specialist squad, forge custom benchmarked agents, or race frontier models head-to-head.</p>
+            <div class="conclave-presets">
+              <button type="button" class="button button-primary" data-conclave-preset="research">✦ Parallel Research Squad</button>
+              <button type="button" class="button button-secondary" data-conclave-preset="roster">⛨ Agent Builder &amp; Roster</button>
+              <button type="button" class="button button-secondary" data-conclave-preset="arena">⚡ Head-to-Head Arena</button>
             </div>
-            <div class="pantheon-standby-formations hidden" id="pantheon-standby-formations"></div>
+            <div class="conclave-standby-formations hidden" id="conclave-standby-formations"></div>
           </div>
-          <div class="pantheon-diff-actions hidden" id="pantheon-diff-actions"></div>
-          <div class="pantheon-live-ticker hidden" id="pantheon-live-ticker" aria-label="Live latent activity feed"></div>
-          <div class="pantheon-legend" id="pantheon-legend">
+          <div class="conclave-diff-actions hidden" id="conclave-diff-actions"></div>
+          <div class="conclave-live-ticker hidden" id="conclave-live-ticker" aria-label="Live latent activity feed"></div>
+          <div class="conclave-legend" id="conclave-legend">
             <span><i class="p-dot p-dot-violet"></i>Streaming</span>
             <span><i class="p-dot p-dot-amber"></i>Tool</span>
             <span><i class="p-dot p-dot-gold"></i>GODMODƎ</span>
             <span><i class="p-dot p-dot-sage"></i>Verified</span>
-            <span class="pantheon-legend-hint">Click any node to inspect or steer</span>
+            <span class="conclave-legend-hint">Click any node to inspect or steer</span>
           </div>
         </section>
-        <section class="pantheon-view pantheon-cards-view hidden" id="pantheon-view-cards" role="tabpanel"></section>
-        <section class="pantheon-view pantheon-timeline-view hidden" id="pantheon-view-timeline" role="tabpanel">
-          <canvas id="pantheon-timeline-canvas" class="pantheon-timeline-canvas" aria-label="Parallel worker execution timeline"></canvas>
-          <div class="pantheon-timeline-empty hidden" id="pantheon-timeline-empty">No worker runs recorded yet. Launch a squad or click <strong>Preview Swarm</strong> above.</div>
+        <section class="conclave-view conclave-cards-view hidden" id="conclave-view-cards" role="tabpanel"></section>
+        <section class="conclave-view conclave-timeline-view hidden" id="conclave-view-timeline" role="tabpanel">
+          <canvas id="conclave-timeline-canvas" class="conclave-timeline-canvas" aria-label="Parallel worker execution timeline"></canvas>
+          <div class="conclave-timeline-empty hidden" id="conclave-timeline-empty">No worker runs recorded yet. Launch a squad or click <strong>Preview Swarm</strong> above.</div>
         </section>
-        <section class="pantheon-view pantheon-roster-view hidden" id="pantheon-view-roster" role="tabpanel"></section>
+        <section class="conclave-view conclave-roster-view hidden" id="conclave-view-roster" role="tabpanel"></section>
       </div>
-      <section class="pantheon-inspector hidden" id="pantheon-inspector" aria-label="Worker inspector">
-        <header class="pantheon-inspector-head">
-          <div class="pantheon-inspector-title">
-            <span class="pantheon-role-chip" id="pi-role">explore</span>
+      <section class="conclave-inspector hidden" id="conclave-inspector" aria-label="Worker inspector">
+        <header class="conclave-inspector-head">
+          <div class="conclave-inspector-title">
+            <span class="conclave-role-chip" id="pi-role">explore</span>
             <strong id="pi-model">Model</strong>
-            <span class="pantheon-status-pill" id="pi-status">Streaming</span>
+            <span class="conclave-status-pill" id="pi-status">Streaming</span>
           </div>
           <button type="button" class="icon-button" id="pi-close" aria-label="Close worker inspector">×</button>
         </header>
-        <div class="pantheon-inspector-meta" id="pi-meta"></div>
-        <div class="pantheon-inspector-files hidden" id="pi-files"></div>
-        <pre class="pantheon-inspector-output" id="pi-output"></pre>
-        <form class="pantheon-steer-form" id="pi-steer-form" autocomplete="off">
+        <div class="conclave-inspector-meta" id="pi-meta"></div>
+        <div class="conclave-inspector-files hidden" id="pi-files"></div>
+        <pre class="conclave-inspector-output" id="pi-output"></pre>
+        <form class="conclave-steer-form" id="pi-steer-form" autocomplete="off">
           <input type="text" id="pi-steer-input" placeholder="Steer this worker or redirect its focus…" aria-label="Steer worker" maxlength="1000">
           <button type="submit" class="button button-primary">Steer →</button>
         </form>
@@ -212,27 +212,27 @@
     `;
 
     dock.addEventListener('click', (e) => {
-      const lensBtn = e.target.closest('[data-pantheon-lens]');
-      if (lensBtn) { setLens(lensBtn.dataset.pantheonLens); return; }
-      if (e.target.closest('#pantheon-close')) { close(); return; }
-      if (e.target.closest('#pantheon-expand')) { toggleExpand(); return; }
+      const lensBtn = e.target.closest('[data-conclave-lens]');
+      if (lensBtn) { setLens(lensBtn.dataset.conclaveLens); return; }
+      if (e.target.closest('#conclave-close')) { close(); return; }
+      if (e.target.closest('#conclave-expand')) { toggleExpand(); return; }
       if (e.target.closest('#pi-close')) { selectWorker(null); return; }
-      if (e.target.closest('#pantheon-demo-btn')) { toggleDemo(); return; }
-      if (e.target.closest('#pantheon-replay-toggle')) { toggleReplay(); return; }
-      const preset = e.target.closest('[data-pantheon-preset]');
-      if (preset) { triggerPreset(preset.dataset.pantheonPreset); return; }
+      if (e.target.closest('#conclave-demo-btn')) { toggleDemo(); return; }
+      if (e.target.closest('#conclave-replay-toggle')) { toggleReplay(); return; }
+      const preset = e.target.closest('[data-conclave-preset]');
+      if (preset) { triggerPreset(preset.dataset.conclavePreset); return; }
       const formLaunch = e.target.closest('[data-formation-launch]');
       if (formLaunch) { deployFormation(formLaunch.dataset.formationLaunch); return; }
       const formDel = e.target.closest('[data-formation-delete]');
       if (formDel) { e.stopPropagation(); deleteFormation(formDel.dataset.formationDelete); return; }
       const adoptBtn = e.target.closest('[data-diff-adopt]');
       if (adoptBtn) { adoptDiffCandidate(adoptBtn.dataset.diffWt, adoptBtn.dataset.diffAdopt); return; }
-      const cardBtn = e.target.closest('[data-pantheon-select]');
-      if (cardBtn) { selectWorker(cardBtn.dataset.pantheonSelect); return; }
+      const cardBtn = e.target.closest('[data-conclave-select]');
+      if (cardBtn) { selectWorker(cardBtn.dataset.conclaveSelect); return; }
       const tickerRow = e.target.closest('[data-ticker-select]');
       if (tickerRow) { selectWorker(tickerRow.dataset.tickerSelect); return; }
-      const approveBtn = e.target.closest('[data-pantheon-approve]');
-      if (approveBtn) { resolveApprovalFromPantheon(approveBtn.dataset.pantheonApprove); return; }
+      const approveBtn = e.target.closest('[data-conclave-approve]');
+      if (approveBtn) { resolveApprovalFromConclave(approveBtn.dataset.conclaveApprove); return; }
       if (e.target.closest('#roster-forge-new')) { openBuilder(null); return; }
       if (e.target.closest('#roster-deploy-squad')) { deploySelectedSquad(); return; }
       if (e.target.closest('#roster-save-formation-toggle')) { formationFormOpen = !formationFormOpen; renderRosterView(); return; }
@@ -286,7 +286,7 @@
     });
 
     dock.addEventListener('input', (e) => {
-      if (e.target.id === 'pantheon-replay-scrub') {
+      if (e.target.id === 'conclave-replay-scrub') {
         replayPlaying = false;
         replayProgress = Math.max(0, Math.min(100, Number(e.target.value) || 0));
         updateReplayBar();
@@ -325,7 +325,7 @@
       }
       if (!currentTaskId) return;
       try {
-        const res = await fetch(`/api/tasks/${encodeURIComponent(currentTaskId)}/pantheon/steer`, {
+        const res = await fetch(`/api/tasks/${encodeURIComponent(currentTaskId)}/conclave/steer`, {
           method: 'POST',
           headers: { 'content-type': 'application/json', 'x-g0d-request': '1' },
           body: JSON.stringify({ workerId: selectedWorkerId, message: msg }),
@@ -333,14 +333,14 @@
         if (!res.ok) throw new Error('Failed to steer worker.');
         const json = await res.json();
         input.value = '';
-        if (json.pantheon) { data = json.pantheon; renderAll(); }
+        if (json.conclave) { data = json.conclave; renderAll(); }
         if (typeof window.toast === 'function') window.toast(`Steer sent to ${selectedWorkerId}.`);
       } catch (err) {
         if (typeof window.toast === 'function') window.toast(err.message || 'Steer failed.');
       }
     });
 
-    const stageCanvas = dock.querySelector('#pantheon-canvas');
+    const stageCanvas = dock.querySelector('#conclave-canvas');
     stageCanvas?.addEventListener('mousemove', (e) => {
       const rect = stageCanvas.getBoundingClientRect();
       const mx = e.clientX - rect.left;
@@ -363,7 +363,7 @@
       }
     });
 
-    const tlCanvas = dock.querySelector('#pantheon-timeline-canvas');
+    const tlCanvas = dock.querySelector('#conclave-timeline-canvas');
     tlCanvas?.addEventListener('click', (e) => {
       const rect = tlCanvas.getBoundingClientRect();
       const mx = e.clientX - rect.left;
@@ -381,7 +381,7 @@
     return dock;
   }
 
-  async function resolveApprovalFromPantheon(decision) {
+  async function resolveApprovalFromConclave(decision) {
     if (!currentTaskId || !data?.pendingApproval) return;
     try {
       const res = await fetch(`/api/tasks/${encodeURIComponent(currentTaskId)}/approval`, {
@@ -496,13 +496,13 @@
           startedAt: new Date(base + 400).toISOString(), endedAt: w2Status === 'completed' ? new Date(base + 9800).toISOString() : null,
           durationMs: w2Status === 'completed' ? 9400 : 2900 + cycle * 1100,
           streamTail: w2Status === 'recovering' ? 'GODMODƎ surge: switching fallback route after transient 429…' : 'Audited SSE cleanup on disconnect and verified zero inline style= CSP compliance.',
-          summary: 'Audited SSE cleanup on disconnect and verified zero inline style= CSP compliance across public/pantheon.js and public/settings.js.',
+          summary: 'Audited SSE cleanup on disconnect and verified zero inline style= CSP compliance across public/conclave.js and public/settings.js.',
         },
         {
           workerId: 'demo-verifier', kind: 'subagent', role: 'verifier',
           modelLabel: 'Hermes 4 405B', status: w3Status,
-          tool: w3Status === 'tool' ? 'repo.read' : '', target: 'test/pantheon.test.mjs',
-          files: ['test/pantheon.test.mjs'], tools: ['repo.read'],
+          tool: w3Status === 'tool' ? 'repo.read' : '', target: 'test/conclave.test.mjs',
+          files: ['test/conclave.test.mjs'], tools: ['repo.read'],
           calls: 1, approxTokens: 980, estimatedCostUsd: 0.0018, isMvp: false,
           startedAt: new Date(base + 900).toISOString(), endedAt: w3Status === 'completed' ? new Date(base + 11200).toISOString() : null,
           durationMs: w3Status === 'completed' ? 10300 : 2200 + cycle * 1200,
@@ -563,7 +563,7 @@
   }
 
   function updateDemoButton() {
-    const btn = document.getElementById('pantheon-demo-btn');
+    const btn = document.getElementById('conclave-demo-btn');
     if (!btn) return;
     btn.textContent = demoMode ? 'Exit Demo' : 'Preview';
     btn.classList.toggle('is-active', demoMode);
@@ -573,7 +573,7 @@
     isExpanded = !isExpanded;
     const dock = dockEl();
     dock?.classList.toggle('is-expanded', isExpanded);
-    const btn = document.getElementById('pantheon-expand');
+    const btn = document.getElementById('conclave-expand');
     if (btn) btn.setAttribute('aria-pressed', String(isExpanded));
     requestAnimationFrame(() => {
       if (activeLens === 'stage') drawStage();
@@ -585,15 +585,15 @@
     activeLens = ['stage', 'cards', 'timeline', 'roster'].includes(lens) ? lens : 'stage';
     const dock = dockEl();
     if (!dock) return;
-    dock.querySelectorAll('[data-pantheon-lens]').forEach(btn => {
-      const on = btn.dataset.pantheonLens === activeLens;
+    dock.querySelectorAll('[data-conclave-lens]').forEach(btn => {
+      const on = btn.dataset.conclaveLens === activeLens;
       btn.classList.toggle('active', on);
       btn.setAttribute('aria-selected', String(on));
     });
-    dock.querySelector('#pantheon-view-stage')?.classList.toggle('hidden', activeLens !== 'stage');
-    dock.querySelector('#pantheon-view-cards')?.classList.toggle('hidden', activeLens !== 'cards');
-    dock.querySelector('#pantheon-view-timeline')?.classList.toggle('hidden', activeLens !== 'timeline');
-    dock.querySelector('#pantheon-view-roster')?.classList.toggle('hidden', activeLens !== 'roster');
+    dock.querySelector('#conclave-view-stage')?.classList.toggle('hidden', activeLens !== 'stage');
+    dock.querySelector('#conclave-view-cards')?.classList.toggle('hidden', activeLens !== 'cards');
+    dock.querySelector('#conclave-view-timeline')?.classList.toggle('hidden', activeLens !== 'timeline');
+    dock.querySelector('#conclave-view-roster')?.classList.toggle('hidden', activeLens !== 'roster');
     if (activeLens === 'stage') { drawStage(); startLoop(); }
     if (activeLens === 'cards') renderCards();
     if (activeLens === 'timeline') drawTimeline();
@@ -630,19 +630,19 @@
   }
 
   function updateReplayBar() {
-    const bar = document.getElementById('pantheon-replay-bar');
+    const bar = document.getElementById('conclave-replay-bar');
     if (!bar) return;
     const show = canReplay() && (activeLens === 'stage' || activeLens === 'timeline');
     bar.classList.toggle('hidden', !show);
     if (!show) return;
-    const btn = document.getElementById('pantheon-replay-toggle');
+    const btn = document.getElementById('conclave-replay-toggle');
     if (btn) {
       btn.textContent = replayPlaying ? '❚❚ Pause' : (replayProgress < 100 ? '▶ Resume 4×' : '▶ Replay 4×');
       btn.classList.toggle('is-active', replayPlaying);
     }
-    const scrub = document.getElementById('pantheon-replay-scrub');
+    const scrub = document.getElementById('conclave-replay-scrub');
     if (scrub) scrub.value = String(Math.round(replayProgress));
-    const timeEl = document.getElementById('pantheon-replay-time');
+    const timeEl = document.getElementById('conclave-replay-time');
     if (timeEl) {
       if (replayProgress >= 100 && !replayPlaying) {
         timeEl.textContent = 'DONE · 4×';
@@ -775,7 +775,7 @@
     }
     isOpenState = true;
     dock.classList.remove('hidden');
-    document.body.classList.add('pantheon-open');
+    document.body.classList.add('conclave-open');
     if (options.lens) setLens(options.lens);
     if (options.demo) startDemo(options.demoTick ?? 1);
     else if (currentTaskId && !demoMode) loadSnapshot(currentTaskId);
@@ -795,7 +795,7 @@
       dock.classList.remove('is-expanded');
     }
     isExpanded = false;
-    document.body.classList.remove('pantheon-open');
+    document.body.classList.remove('conclave-open');
     updateHeaderBadge();
   }
 
@@ -805,37 +805,37 @@
   }
 
   function updateHeaderBadge() {
-    const btn = document.getElementById('pantheon-toggle-btn');
+    const btn = document.getElementById('conclave-toggle-btn');
     if (!btn) return;
     btn.classList.toggle('is-open', isOpenState);
     btn.setAttribute('aria-pressed', String(isOpenState));
-    const badge = btn.querySelector('.pantheon-btn-count');
+    const badge = btn.querySelector('.conclave-btn-count');
     if (!badge) return;
     const active = data?.stats?.activeWorkers || 0;
     const total = data?.stats?.totalWorkers || (data?.arena?.contenders?.length || 0);
     if (active > 0) {
       badge.textContent = String(active);
-      badge.className = 'pantheon-btn-count is-live';
+      badge.className = 'conclave-btn-count is-live';
     } else if (total > 0) {
       badge.textContent = String(total);
-      badge.className = 'pantheon-btn-count';
+      badge.className = 'conclave-btn-count';
     } else {
       badge.textContent = '';
-      badge.className = 'pantheon-btn-count hidden';
+      badge.className = 'conclave-btn-count hidden';
     }
   }
 
   function renderStandbyFormations() {
-    const wrap = document.getElementById('pantheon-standby-formations');
+    const wrap = document.getElementById('conclave-standby-formations');
     if (!wrap) return;
     const formations = rosterData?.formations || [];
     wrap.classList.toggle('hidden', !formations.length);
     if (!formations.length) return;
-    wrap.innerHTML = `<span class="pantheon-sf-label">Formations</span>${formations.slice(0, 4).map(f => `<button type="button" class="pantheon-formation-chip" data-formation-launch="${esc(f.id)}" title="${esc(`${f.name}: ${f.agents.join(', ')}`)}">${esc(f.sigil || '✦')} ${esc(f.name)} <small>${esc(f.agents.length)}</small></button>`).join('')}`;
+    wrap.innerHTML = `<span class="conclave-sf-label">Formations</span>${formations.slice(0, 4).map(f => `<button type="button" class="conclave-formation-chip" data-formation-launch="${esc(f.id)}" title="${esc(`${f.name}: ${f.agents.join(', ')}`)}">${esc(f.sigil || '✦')} ${esc(f.name)} <small>${esc(f.agents.length)}</small></button>`).join('')}`;
   }
 
   function renderLiveTicker() {
-    const el = document.getElementById('pantheon-live-ticker');
+    const el = document.getElementById('conclave-live-ticker');
     if (!el) return;
     const viewData = getEffectiveData();
     const workers = viewData?.workers || [];
@@ -870,14 +870,14 @@
   }
 
   function renderDiffActionsBar() {
-    const bar = document.getElementById('pantheon-diff-actions');
+    const bar = document.getElementById('conclave-diff-actions');
     if (!bar) return;
     const race = data?.worktreeRace;
     const show = Boolean(race?.candidates?.length) && activeLens === 'stage';
     bar.classList.toggle('hidden', !show);
     if (!show) return;
     const applied = race.appliedCandidateId;
-    bar.innerHTML = `<div class="pda-head"><strong>Code Diff Race</strong><span>${esc(race.repository)} · ${esc(race.branch)}</span>${race.lastCheck ? `<span class="pantheon-status-pill tone-${race.lastCheck.ok ? 'sage' : 'coral'}">${race.lastCheck.ok ? 'Checks ✓' : 'Checks ✗'}</span>` : ''}</div><div class="pda-btns">${race.candidates.map(c => {
+    bar.innerHTML = `<div class="pda-head"><strong>Code Diff Race</strong><span>${esc(race.repository)} · ${esc(race.branch)}</span>${race.lastCheck ? `<span class="conclave-status-pill tone-${race.lastCheck.ok ? 'sage' : 'coral'}">${race.lastCheck.ok ? 'Checks ✓' : 'Checks ✗'}</span>` : ''}</div><div class="pda-btns">${race.candidates.map(c => {
       const isApplied = applied === c.id;
       const canAdopt = c.status === 'ready' && !applied;
       return `<button type="button" class="button ${isApplied ? 'button-primary' : 'button-secondary'} pda-btn" data-diff-wt="${esc(race.worktreeId)}" data-diff-adopt="${esc(c.id)}" ${canAdopt ? '' : 'disabled'}>${isApplied ? '✓ Adopted' : c.status === 'failed' ? '✗ Failed' : `✓ Adopt ${esc(c.slot)} (+${c.additions}/-${c.deletions})`}</button>`;
@@ -903,55 +903,55 @@
   }
 
   function renderAll() {
-    if (!dockEl()?.dataset.pantheonInit) return;
+    if (!dockEl()?.dataset.conclaveInit) return;
     const mode = data?.mode || 'standby';
     const modeLabels = { arena: 'Arena Race', crew: 'Coding Crew', swarm: 'Constellation', diff_race: 'Diff Race', standby: 'Standby' };
-    const pill = document.getElementById('pantheon-mode-pill');
+    const pill = document.getElementById('conclave-mode-pill');
     if (pill) {
       pill.textContent = demoMode ? `${modeLabels[mode] || 'Preview'} · Demo` : (modeLabels[mode] || 'Standby');
-      pill.className = `pantheon-mode-pill mode-${mode}`;
+      pill.className = `conclave-mode-pill mode-${mode}`;
     }
-    const sub = document.getElementById('pantheon-subtitle');
+    const sub = document.getElementById('conclave-subtitle');
     if (sub) {
       sub.textContent = data?.title
         ? `${data.title} · ${data.orchestrator?.modelLabel ? shortModel(data.orchestrator.modelLabel) : 'Orchestrator'}`
         : 'Multi-Agent Council & Arena Stage';
     }
     const setT = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = String(v); };
-    setT('pantheon-stat-active', data?.stats?.activeWorkers ?? 0);
-    setT('pantheon-stat-done', data?.stats?.completedWorkers ?? 0);
-    setT('pantheon-stat-calls', data?.stats?.totalCalls ?? 0);
-    setT('pantheon-stat-conflicts', data?.fileConflicts?.length ?? 0);
+    setT('conclave-stat-active', data?.stats?.activeWorkers ?? 0);
+    setT('conclave-stat-done', data?.stats?.completedWorkers ?? 0);
+    setT('conclave-stat-calls', data?.stats?.totalCalls ?? 0);
+    setT('conclave-stat-conflicts', data?.fileConflicts?.length ?? 0);
 
     // Token / Cost telemetry pill
-    const costWrap = document.getElementById('pantheon-stat-cost-wrap');
+    const costWrap = document.getElementById('conclave-stat-cost-wrap');
     if (costWrap) {
       const toks = data?.stats?.totalTokens || 0;
       costWrap.classList.toggle('hidden', toks <= 0);
       if (toks > 0) {
-        setT('pantheon-stat-cost', fmtCost(data?.stats?.totalCostUsd));
+        setT('conclave-stat-cost', fmtCost(data?.stats?.totalCostUsd));
         costWrap.title = `${fmtCost(data?.stats?.totalCostUsd)} estimated · ${fmtTokens(toks)}`;
       }
     }
-    const legendEl = document.getElementById('pantheon-legend');
+    const legendEl = document.getElementById('conclave-legend');
     if (legendEl) legendEl.classList.toggle('hidden', mode === 'diff_race');
 
     // Polish trim: only show Preview Swarm in Standby or while Demo is active
-    const demoBtn = document.getElementById('pantheon-demo-btn');
+    const demoBtn = document.getElementById('conclave-demo-btn');
     if (demoBtn) demoBtn.classList.toggle('hidden', mode !== 'standby' && !demoMode);
 
     // Pending approval strip
-    const apprStrip = document.getElementById('pantheon-approval-strip');
+    const apprStrip = document.getElementById('conclave-approval-strip');
     if (apprStrip) {
       const appr = data?.pendingApproval;
       apprStrip.classList.toggle('hidden', !appr);
       if (appr) {
-        setT('pantheon-approval-tool', appr.tool || 'tool');
-        setT('pantheon-approval-reason', appr.target || appr.reason || 'Confirmation required');
+        setT('conclave-approval-tool', appr.tool || 'tool');
+        setT('conclave-approval-reason', appr.target || appr.reason || 'Confirmation required');
       }
     }
 
-    const standbyBar = document.getElementById('pantheon-standby-bar');
+    const standbyBar = document.getElementById('conclave-standby-bar');
     if (standbyBar) {
       standbyBar.classList.toggle('hidden', mode !== 'standby');
       if (mode === 'standby') {
@@ -971,46 +971,46 @@
   }
 
   function renderCards() {
-    const el = document.getElementById('pantheon-view-cards');
+    const el = document.getElementById('conclave-view-cards');
     if (!el) return;
     if (data?.mode === 'arena' && data?.arena) {
       const arena = data.arena;
-      el.innerHTML = `<div class="pantheon-cards-grid">${(arena.contenders || []).map(c => `
-        <article class="pantheon-card ${c.isWinner ? 'is-winner' : ''}">
-          <header class="pantheon-card-head">
-            <span class="pantheon-role-chip">Contender ${esc(c.slot)}</span>
-            <span class="pantheon-status-pill tone-${c.isWinner ? 'gold' : c.status === 'completed' ? 'sage' : 'violet'}">${esc(c.isWinner ? '♛ Winner' : c.status)}</span>
+      el.innerHTML = `<div class="conclave-cards-grid">${(arena.contenders || []).map(c => `
+        <article class="conclave-card ${c.isWinner ? 'is-winner' : ''}">
+          <header class="conclave-card-head">
+            <span class="conclave-role-chip">Contender ${esc(c.slot)}</span>
+            <span class="conclave-status-pill tone-${c.isWinner ? 'gold' : c.status === 'completed' ? 'sage' : 'violet'}">${esc(c.isWinner ? '♛ Winner' : c.status)}</span>
           </header>
-          <strong class="pantheon-card-model">${esc(c.label)}</strong>
-          <p class="pantheon-card-meta">${fmtMs(c.durationMs)}${c.grade ? ` · Score ${c.grade.total}/15 (F${c.grade.fidelity} C${c.grade.completeness} L${c.grade.clarity})` : ''}</p>
-          ${c.grade?.reason ? `<p class="pantheon-card-tail">${esc(c.grade.reason)}</p>` : ''}
+          <strong class="conclave-card-model">${esc(c.label)}</strong>
+          <p class="conclave-card-meta">${fmtMs(c.durationMs)}${c.grade ? ` · Score ${c.grade.total}/15 (F${c.grade.fidelity} C${c.grade.completeness} L${c.grade.clarity})` : ''}</p>
+          ${c.grade?.reason ? `<p class="conclave-card-tail">${esc(c.grade.reason)}</p>` : ''}
         </article>`).join('')}${arena.judge ? `
-        <article class="pantheon-card">
-          <header class="pantheon-card-head">
-            <span class="pantheon-role-chip">Blind Judge</span>
-            <span class="pantheon-status-pill tone-amber">${esc(arena.judge.status)}</span>
+        <article class="conclave-card">
+          <header class="conclave-card-head">
+            <span class="conclave-role-chip">Blind Judge</span>
+            <span class="conclave-status-pill tone-amber">${esc(arena.judge.status)}</span>
           </header>
-          <strong class="pantheon-card-model">${esc(arena.judge.label)}</strong>
-          <p class="pantheon-card-tail">${esc(arena.note || 'Evaluates drafts blindly for fidelity, completeness, and clarity.')}</p>
+          <strong class="conclave-card-model">${esc(arena.judge.label)}</strong>
+          <p class="conclave-card-tail">${esc(arena.note || 'Evaluates drafts blindly for fidelity, completeness, and clarity.')}</p>
         </article>` : ''}</div>`;
       return;
     }
     if (data?.mode === 'diff_race' && data?.worktreeRace?.candidates?.length) {
       const race = data.worktreeRace;
       const applied = race.appliedCandidateId;
-      el.innerHTML = `<div class="pantheon-cards-grid">${race.candidates.map(c => {
+      el.innerHTML = `<div class="conclave-cards-grid">${race.candidates.map(c => {
         const isApplied = applied === c.id;
         const canAdopt = c.status === 'ready' && !applied;
-        return `<article class="pantheon-card ${isApplied ? 'is-winner' : ''}">
-          <header class="pantheon-card-head">
-            <span class="pantheon-role-chip">Patch ${esc(c.slot)}</span>
-            <span class="pantheon-status-pill tone-${isApplied ? 'gold' : c.status === 'ready' ? 'sage' : c.status === 'failed' ? 'coral' : 'violet'}">${esc(isApplied ? '✓ Adopted' : c.status === 'ready' ? 'Patch Ready' : c.status)}</span>
+        return `<article class="conclave-card ${isApplied ? 'is-winner' : ''}">
+          <header class="conclave-card-head">
+            <span class="conclave-role-chip">Patch ${esc(c.slot)}</span>
+            <span class="conclave-status-pill tone-${isApplied ? 'gold' : c.status === 'ready' ? 'sage' : c.status === 'failed' ? 'coral' : 'violet'}">${esc(isApplied ? '✓ Adopted' : c.status === 'ready' ? 'Patch Ready' : c.status)}</span>
           </header>
-          <strong class="pantheon-card-model">${esc(c.label)}</strong>
-          <p class="pantheon-card-meta">+${c.additions} / -${c.deletions} lines · ${fmtMs(c.elapsedMs)}</p>
-          ${c.error ? `<p class="pantheon-card-tail">${esc(c.error)}</p>` : ''}
-          ${c.files?.length ? `<div class="pantheon-file-chips">${c.files.slice(0, 4).map(f => `<span class="pantheon-file-chip">${esc(f.split('/').pop())}</span>`).join('')}</div>` : ''}
-          <footer class="pantheon-card-foot">
+          <strong class="conclave-card-model">${esc(c.label)}</strong>
+          <p class="conclave-card-meta">+${c.additions} / -${c.deletions} lines · ${fmtMs(c.elapsedMs)}</p>
+          ${c.error ? `<p class="conclave-card-tail">${esc(c.error)}</p>` : ''}
+          ${c.files?.length ? `<div class="conclave-file-chips">${c.files.slice(0, 4).map(f => `<span class="conclave-file-chip">${esc(f.split('/').pop())}</span>`).join('')}</div>` : ''}
+          <footer class="conclave-card-foot">
             <button type="button" class="button ${isApplied ? 'button-primary' : 'button-secondary'}" data-diff-wt="${esc(race.worktreeId)}" data-diff-adopt="${esc(c.id)}" ${canAdopt ? '' : 'disabled'}>${isApplied ? '✓ Winner Adopted' : '✓ Adopt Winner Patch'}</button>
           </footer>
         </article>`;
@@ -1019,37 +1019,37 @@
     }
     const workers = data?.workers || [];
     if (!workers.length) {
-      el.innerHTML = '<div class="pantheon-empty-cards"><p>No active or completed workers yet. Switch to <strong>✦ Stage</strong> to launch a Parallel Research Squad or click <strong>Preview Swarm</strong>.</p></div>';
+      el.innerHTML = '<div class="conclave-empty-cards"><p>No active or completed workers yet. Switch to <strong>✦ Stage</strong> to launch a Parallel Research Squad or click <strong>Preview Swarm</strong>.</p></div>';
       return;
     }
     const conflictFiles = new Set((data?.fileConflicts || []).map(c => c.file));
-    el.innerHTML = `<div class="pantheon-cards-grid">${workers.map(w => {
+    el.innerHTML = `<div class="conclave-cards-grid">${workers.map(w => {
       const st = statusInfo(w.status);
       const selected = w.workerId === selectedWorkerId;
       const files = (w.files || []).slice(0, 4);
       const snippet = w.streamTail || w.summary || w.prompt || 'Awaiting output…';
       const costBits = w.approxTokens ? ` · ${fmtTokens(w.approxTokens)} · ${fmtCost(w.estimatedCostUsd)}` : '';
-      return `<article class="pantheon-card ${selected ? 'is-selected' : ''} ${w.isMvp ? 'is-winner' : ''} tone-${st.tone}">
-        <header class="pantheon-card-head">
-          <div class="pantheon-card-badges">
-            <span class="pantheon-role-chip">${esc(w.role)}</span>
-            ${w.isMvp ? '<span class="pantheon-mvp-badge">★ MVP</span>' : ''}
+      return `<article class="conclave-card ${selected ? 'is-selected' : ''} ${w.isMvp ? 'is-winner' : ''} tone-${st.tone}">
+        <header class="conclave-card-head">
+          <div class="conclave-card-badges">
+            <span class="conclave-role-chip">${esc(w.role)}</span>
+            ${w.isMvp ? '<span class="conclave-mvp-badge">★ MVP</span>' : ''}
           </div>
-          <span class="pantheon-status-pill tone-${st.tone}">${esc(w.tool && st.active ? w.tool : st.label)}</span>
+          <span class="conclave-status-pill tone-${st.tone}">${esc(w.tool && st.active ? w.tool : st.label)}</span>
         </header>
-        <strong class="pantheon-card-model">${esc(shortModel(w.modelLabel || w.providerId || 'Auto'))}</strong>
-        <p class="pantheon-card-meta">${esc(`${w.calls || 0} call${w.calls === 1 ? '' : 's'} · ${fmtMs(w.durationMs)}${costBits}`)}</p>
-        <p class="pantheon-card-tail">${esc(snippet.slice(0, 180))}</p>
-        ${files.length ? `<div class="pantheon-file-chips">${files.map(f => `<span class="pantheon-file-chip ${conflictFiles.has(f) ? 'is-conflict' : ''}">${esc(f.split('/').pop())}</span>`).join('')}</div>` : ''}
-        <footer class="pantheon-card-foot">
-          <button type="button" class="button button-secondary" data-pantheon-select="${esc(w.workerId)}">${selected ? 'Inspecting' : 'Inspect & Steer'}</button>
+        <strong class="conclave-card-model">${esc(shortModel(w.modelLabel || w.providerId || 'Auto'))}</strong>
+        <p class="conclave-card-meta">${esc(`${w.calls || 0} call${w.calls === 1 ? '' : 's'} · ${fmtMs(w.durationMs)}${costBits}`)}</p>
+        <p class="conclave-card-tail">${esc(snippet.slice(0, 180))}</p>
+        ${files.length ? `<div class="conclave-file-chips">${files.map(f => `<span class="conclave-file-chip ${conflictFiles.has(f) ? 'is-conflict' : ''}">${esc(f.split('/').pop())}</span>`).join('')}</div>` : ''}
+        <footer class="conclave-card-foot">
+          <button type="button" class="button button-secondary" data-conclave-select="${esc(w.workerId)}">${selected ? 'Inspecting' : 'Inspect & Steer'}</button>
         </footer>
       </article>`;
     }).join('')}</div>`;
   }
 
   function renderInspector() {
-    const panel = document.getElementById('pantheon-inspector');
+    const panel = document.getElementById('conclave-inspector');
     if (!panel) return;
     const worker = (data?.workers || []).find(w => w.workerId === selectedWorkerId);
     if (!worker) {
@@ -1062,13 +1062,13 @@
     setT('pi-role', worker.role || 'worker');
     setT('pi-model', worker.modelLabel || worker.providerId || 'Auto');
     const stEl = document.getElementById('pi-status');
-    if (stEl) { stEl.textContent = worker.tool && st.active ? `${st.label} · ${worker.tool}` : st.label; stEl.className = `pantheon-status-pill tone-${st.tone}`; }
+    if (stEl) { stEl.textContent = worker.tool && st.active ? `${st.label} · ${worker.tool}` : st.label; stEl.className = `conclave-status-pill tone-${st.tone}`; }
     setT('pi-meta', `${worker.kind === 'crew' ? 'Coding Crew' : worker.viaHarness ? 'External CLI Harness' : 'Specialist Subagent'} · ${worker.calls || 0} calls · ${fmtMs(worker.durationMs)}${worker.approxTokens ? ` · ${fmtTokens(worker.approxTokens)} (${fmtCost(worker.estimatedCostUsd)})` : ''}${worker.isMvp ? ' · ★ MVP' : ''}${worker.tools?.length ? ` · Tools: ${[...new Set(worker.tools)].join(', ')}` : ''}`);
     const filesEl = document.getElementById('pi-files');
     if (filesEl) {
       const files = worker.files || [];
       filesEl.classList.toggle('hidden', files.length === 0);
-      filesEl.innerHTML = files.map(f => `<span class="pantheon-file-chip">${esc(f)}</span>`).join('');
+      filesEl.innerHTML = files.map(f => `<span class="conclave-file-chip">${esc(f)}</span>`).join('');
     }
     setT('pi-output', worker.summary || worker.streamTail || worker.prompt || 'Working…');
   }
@@ -1094,7 +1094,7 @@
   }
 
   function drawStage() {
-    const canvas = document.getElementById('pantheon-canvas');
+    const canvas = document.getElementById('conclave-canvas');
     const prep = prepCanvas(canvas);
     if (!prep) return;
     const { ctx, w, h } = prep;
@@ -1725,8 +1725,8 @@
   }
 
   function drawTimeline() {
-    const canvas = document.getElementById('pantheon-timeline-canvas');
-    const emptyEl = document.getElementById('pantheon-timeline-empty');
+    const canvas = document.getElementById('conclave-timeline-canvas');
+    const emptyEl = document.getElementById('conclave-timeline-empty');
     const viewData = getEffectiveData();
     const workers = viewData?.workers || [];
     if (emptyEl) emptyEl.classList.toggle('hidden', workers.length > 0);
@@ -1829,7 +1829,7 @@
     if (!taskId || demoMode) return;
     const token = ++fetchToken;
     try {
-      const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/pantheon`);
+      const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/conclave`);
       if (!res.ok || token !== fetchToken) return;
       data = await res.json();
       renderAll();
@@ -1885,12 +1885,12 @@
       renderAll();
       return;
     }
-    if (delta.type === 'pantheon.update' || delta.type === 'race.dispatched' || delta.type === 'race.result' || delta.type === 'race.completed' || delta.type === 'permission.requested') {
+    if (delta.type === 'conclave.update' || delta.type === 'race.dispatched' || delta.type === 'race.result' || delta.type === 'race.completed' || delta.type === 'permission.requested') {
       loadSnapshot(currentTaskId);
     }
   }
 
-  // ── Pantheon Agent Stats Builder & Cross-Harness Roster ──
+  // ── Conclave Agent Stats Builder & Cross-Harness Roster ──
   function drawRadarChart(canvas, stats, { compact = false } = {}) {
     if (!canvas || !stats?.radar) return;
     const w = compact ? 92 : 196;
@@ -1995,7 +1995,7 @@
       return true;
     }
     try {
-      const res = await fetch('/api/pantheon/roster');
+      const res = await fetch('/api/conclave/roster');
       if (!res.ok) return false;
       rosterData = await res.json();
       renderRosterView();
@@ -2082,7 +2082,7 @@
   async function refreshBuilderStats() {
     if (!builderDraft) return;
     try {
-      const res = await fetch('/api/pantheon/stats/preview', {
+      const res = await fetch('/api/conclave/stats/preview', {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-g0d-request': '1' },
         body: JSON.stringify({
@@ -2132,7 +2132,7 @@
       return;
     }
     try {
-      const res = await fetch('/api/pantheon/roster', {
+      const res = await fetch('/api/conclave/roster', {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-g0d-request': '1' },
         body: JSON.stringify(builderDraft),
@@ -2151,7 +2151,7 @@
 
   async function deleteRosterAgent(slug) {
     try {
-      const res = await fetch(`/api/pantheon/roster/${encodeURIComponent(slug)}`, {
+      const res = await fetch(`/api/conclave/roster/${encodeURIComponent(slug)}`, {
         method: 'DELETE',
         headers: { 'x-g0d-request': '1' },
       });
@@ -2214,7 +2214,7 @@
     }
     const slugs = selectedSquad.size ? [...selectedSquad] : (rosterData?.agents || []).slice(0, 3).map(a => a.slug);
     try {
-      const res = await fetch('/api/pantheon/formations', {
+      const res = await fetch('/api/conclave/formations', {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-g0d-request': '1' },
         body: JSON.stringify({ name, sigil: '⚔', agents: slugs, goal: (goalEl?.value || '').trim() }),
@@ -2233,7 +2233,7 @@
 
   async function deleteFormation(id) {
     try {
-      const res = await fetch(`/api/pantheon/formations/${encodeURIComponent(id)}`, {
+      const res = await fetch(`/api/conclave/formations/${encodeURIComponent(id)}`, {
         method: 'DELETE',
         headers: { 'x-g0d-request': '1' },
       });
@@ -2289,10 +2289,10 @@
   }
 
   function renderRosterView() {
-    const el = document.getElementById('pantheon-view-roster');
+    const el = document.getElementById('conclave-view-roster');
     if (!el) return;
     if (!rosterData) {
-      el.innerHTML = '<div class="pantheon-empty-cards"><p>Loading Conclave Roster &amp; real benchmark matrix…</p></div>';
+      el.innerHTML = '<div class="conclave-empty-cards"><p>Loading Conclave Roster &amp; real benchmark matrix…</p></div>';
       return;
     }
     const agents = rosterData.agents || [];
@@ -2307,7 +2307,7 @@
       : '';
 
     const builderHtml = builderOpen && builderDraft ? `
-      <section class="pb-panel" id="pantheon-builder" aria-label="Agent Stats Builder">
+      <section class="pb-panel" id="conclave-builder" aria-label="Agent Stats Builder">
         <header class="pb-head">
           <div>
             <h3>⚒ Forge Conclave Agent</h3>
@@ -2407,7 +2407,7 @@
       <div class="roster-formations" aria-label="Saved 1-click formations">
         <span class="roster-strip-label">Formations</span>
         <div class="roster-harness-pills">
-          ${formations.map(f => `<span class="pantheon-formation-wrap"><button type="button" class="pantheon-formation-chip" data-formation-launch="${esc(f.id)}" title="${esc(`${f.name}: ${f.agents.join(', ')}`)}">${esc(f.sigil || '✦')} ${esc(f.name)} <small>${esc(f.agents.length)}</small></button>${f.custom && !f.builtin ? `<button type="button" class="pantheon-formation-del" data-formation-delete="${esc(f.id)}" aria-label="Delete formation ${esc(f.name)}">×</button>` : ''}</span>`).join('')}
+          ${formations.map(f => `<span class="conclave-formation-wrap"><button type="button" class="conclave-formation-chip" data-formation-launch="${esc(f.id)}" title="${esc(`${f.name}: ${f.agents.join(', ')}`)}">${esc(f.sigil || '✦')} ${esc(f.name)} <small>${esc(f.agents.length)}</small></button>${f.custom && !f.builtin ? `<button type="button" class="conclave-formation-del" data-formation-delete="${esc(f.id)}" aria-label="Delete formation ${esc(f.name)}">×</button>` : ''}</span>`).join('')}
         </div>
       </div>
       <div class="roster-harnesses" aria-label="External harnesses and bridges">
@@ -2417,7 +2417,7 @@
         </div>
       </div>
       ${builderHtml}
-      <div class="roster-grid" id="pantheon-roster-grid">
+      <div class="roster-grid" id="conclave-roster-grid">
         ${agents.map(ag => {
           const inSquad = selectedSquad.has(ag.slug);
           const r = ag.stats?.radar || {};
@@ -2448,9 +2448,9 @@
               </div>
             </div>
             <div class="roster-tags">
-              <span class="pantheon-file-chip">${esc(ag.primarySpecialty.replace(/_/g, ' '))}</span>
-              <span class="pantheon-file-chip">${esc(ag.autonomy === 'external_harness' ? 'harness' : ag.autonomy === 'workspace_builder' ? 'builder' : 'read-only')}</span>
-              <span class="pantheon-status-pill tone-${ag.ready ? 'sage' : 'amber'}">${ag.ready ? 'Ready' : 'Bridge'}</span>
+              <span class="conclave-file-chip">${esc(ag.primarySpecialty.replace(/_/g, ' '))}</span>
+              <span class="conclave-file-chip">${esc(ag.autonomy === 'external_harness' ? 'harness' : ag.autonomy === 'workspace_builder' ? 'builder' : 'read-only')}</span>
+              <span class="conclave-status-pill tone-${ag.ready ? 'sage' : 'amber'}">${ag.ready ? 'Ready' : 'Bridge'}</span>
             </div>
             <footer class="roster-card-foot">
               <button type="button" class="button ${inSquad ? 'button-primary' : 'button-secondary'}" data-roster-squad="${esc(ag.slug)}">${inSquad ? '✓ In Squad' : '+ Squad'}</button>
@@ -2472,7 +2472,7 @@
     });
   }
 
-  window.G0DConclave = window.G0DPantheon = {
+  window.G0DConclave = {
     open,
     close,
     toggle,
