@@ -1014,6 +1014,10 @@ export class HttpProvider {
       body={model:this.model,messages:redactInjected(injectedC.messages),max_tokens:maxOutputTokens,...(tools.length?{tools:tools.map(t=>({type:'function',function:{name:aliases.forward.get(t.name),description:t.description,parameters:toolParamsForWire(t.parameters)}}))}:{})};
     }
     Object.assign(body,generation);
+    if (this.protocol === 'openai-responses' && Object.hasOwn(generation, 'max_tokens')) {
+      body.max_output_tokens = generation.max_tokens;
+      delete body.max_tokens;
+    }
     const taskEffort = String(context.task?.effort || 'medium').toLowerCase();
     const isReasoningModel = Boolean(this.modelMetadata?.supportsReasoning) || /(?:o1|o3|o4|gpt-5|gpt-6|gemini[-_.]?(?:2\.5|3|4)|deepseek-r1|qwq|thinking|reasoning)/i.test(String(this.model || ''));
     if (isReasoningModel && taskEffort !== 'medium') {
@@ -1594,10 +1598,67 @@ export class HttpProvider {
   }
 }
 
+export function normalizeCliSettings(kind, raw = {}) {
+  const input = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const k = String(kind || '').toLowerCase();
+  if (k === 'codex' || k === 'codex-cli') {
+    const reasoningEffort = ['low', 'medium', 'high', 'xhigh'].includes(input.reasoningEffort) ? input.reasoningEffort : null;
+    const serviceTier = ['fast', 'flex'].includes(input.serviceTier) ? input.serviceTier : null;
+    const verbosity = ['low', 'medium', 'high'].includes(input.verbosity) ? input.verbosity : null;
+    return { reasoningEffort, serviceTier, verbosity };
+  }
+  if (k === 'claude' || k === 'claude-code') {
+    const effort = ['low', 'medium', 'high', 'max'].includes(input.effort) ? input.effort : null;
+    return { effort };
+  }
+  return {};
+}
+
+export function buildCodexExecArgs({ schemaPath, cwd, model = null, taskEffort = 'medium', cliSettings = {} } = {}) {
+  const settings = normalizeCliSettings('codex', cliSettings);
+  const taskEff = String(taskEffort || 'medium').toLowerCase();
+  const effectiveReasoning = settings.reasoningEffort
+    || (taskEff === 'fast' ? 'low' : taskEff === 'high' ? 'high' : taskEff === 'max' ? 'xhigh' : null);
+  const args = [
+    'exec', '--ephemeral', '--ignore-user-config', '--sandbox', 'read-only',
+    '--skip-git-repo-check', '--json', '--color', 'never',
+    '--output-schema', schemaPath, '--cd', cwd,
+    '-c', 'approval_policy="never"', '-c', 'web_search="disabled"'
+  ];
+  if (effectiveReasoning) args.push('-c', `model_reasoning_effort="${effectiveReasoning}"`);
+  if (settings.serviceTier) args.push('-c', `service_tier="${settings.serviceTier}"`);
+  if (settings.verbosity) args.push('-c', `model_verbosity="${settings.verbosity}"`);
+  for (const feature of ['shell_tool', 'unified_exec', 'apps', 'plugins', 'hooks', 'multi_agent', 'browser_use', 'computer_use', 'image_generation', 'in_app_browser', 'goals', 'memories', 'workspace_dependencies']) {
+    args.push('--disable', feature);
+  }
+  if (model) args.push('--model', model);
+  args.push('-');
+  return args;
+}
+
+export function buildClaudeExecArgs({ schemaJson, systemPrompt, model = null, taskEffort = 'medium', cliSettings = {}, includeEffort = true } = {}) {
+  const settings = normalizeCliSettings('claude', cliSettings);
+  const taskEff = String(taskEffort || 'medium').toLowerCase();
+  const effectiveEffort = settings.effort
+    || (taskEff === 'fast' ? 'low' : taskEff === 'high' ? 'high' : taskEff === 'max' ? 'max' : null);
+  const args = [
+    '--print', '--output-format', 'stream-json', '--verbose',
+    '--no-session-persistence', '--tools', '', '--disable-slash-commands', '--no-chrome',
+    '--permission-mode', 'dontAsk', '--setting-sources', '',
+    '--settings', JSON.stringify({ disableAllHooks: true, enabledPlugins: {} }),
+    '--strict-mcp-config', '--mcp-config', JSON.stringify({ mcpServers: {} }),
+    '--max-turns', '3', '--json-schema', schemaJson,
+    '--system-prompt', systemPrompt
+  ];
+  if (model) args.push('--model', model);
+  if (includeEffort && effectiveEffort) args.push('--effort', effectiveEffort);
+  return args;
+}
+
 /** Experimental bridge: CLI turns are visible, underlying CLI transport retries are opaque. */
 export class CodexProvider {
-  constructor({id='codex-cli',label='Codex CLI · live experimental bridge',binary=process.env.G0D_CODEX_BINARY||'codex',timeoutMs=120000,model,environment=process.env,tier='frontier'}={}) {
-    Object.assign(this,{id,label,binary,timeoutMs,model,tier:inferProviderTier({id,model,tier})});cliEnvironments.set(this,cliEnvironment(environment));this.kind='codex';this.available=true;
+  constructor({id='codex-cli',label='Codex CLI · live experimental bridge',binary=process.env.G0D_CODEX_BINARY||'codex',timeoutMs=120000,model,environment=process.env,tier='frontier',subscriptionId='codex-cli',cliSettings={}}={}) {
+    Object.assign(this,{id,label,binary,timeoutMs,model,subscriptionId,cliSettings:normalizeCliSettings('codex',cliSettings),tier:inferProviderTier({id,model,tier})});cliEnvironments.set(this,cliEnvironment(environment));this.kind='codex';this.available=true;
     this.accounting='CLI turns and reported tokens; underlying provider attempts are opaque';
     this.capabilities=providerCapabilities(false,'bridge');
     this.children=new Set();this.closed=false;this.closePromise=null;
@@ -1622,11 +1683,13 @@ export class CodexProvider {
     try {
     const schema=path.join(schemaDir,'decision.schema.json');
     await fs.writeFile(schema,JSON.stringify(decisionSchema(tools)),{mode:0o600});
-    const args=['exec','--ephemeral','--ignore-user-config','--sandbox','read-only','--skip-git-repo-check','--json','--color','never','--output-schema',schema,'--cd',context.task?.workspace || schemaDir,
-      '-c','approval_policy="never"','-c','web_search="disabled"'];
-    for(const feature of ['shell_tool','unified_exec','apps','plugins','hooks','multi_agent','browser_use','computer_use','image_generation','in_app_browser','goals','memories','workspace_dependencies'])args.push('--disable',feature);
-    if(this.model)args.push('--model',this.model);
-    args.push('-');
+    const args = buildCodexExecArgs({
+      schemaPath: schema,
+      cwd: context.task?.workspace || schemaDir,
+      model: this.model || null,
+      taskEffort: context.task?.effort || 'medium',
+      cliSettings: this.cliSettings
+    });
     const prompt=compilePrompt({...context,tools})+`\n\nThis is a planner-only bridge. DO NOT invoke any Codex tools. Return only the JSON schema next-action envelope.\n`+
       `For tool actions set type="tool", calls=[{id:"a stable unique identifier",name:"repo.write",arguments:"a JSON string of arguments"}], text="", finish="continue".\n`+
       `Available tools: ${JSON.stringify(tools)}\n`+
@@ -1700,9 +1763,10 @@ export class CodexProvider {
 
 /** Subscription-authenticated Claude Code planner. CLI owns authentication; the broker owns effects. */
 export class ClaudeCodeProvider extends CodexProvider {
-  constructor({id='claude-code',label='Claude Code · CLI default',binary=process.env.G0D_CLAUDE_BINARY||'claude',timeoutMs=120000,model,environment=process.env}={}) {
-    super({id,label,binary,timeoutMs,model,environment});
+  constructor({id='claude-code',label='Claude Code · CLI default',binary=process.env.G0D_CLAUDE_BINARY||'claude',timeoutMs=120000,model,environment=process.env,subscriptionId='claude-code',cliSettings={}}={}) {
+    super({id,label,binary,timeoutMs,model,environment,subscriptionId});
     this.kind='claude';
+    this.cliSettings=normalizeCliSettings('claude',cliSettings);
     this.accounting='CLI turns and reported tokens; underlying provider attempts are opaque';
   }
   async turn(context,{signal,turnTimeoutMs,privacy=DEFAULT_PRIVACY_SETTINGS,onOutbound,extraSecrets}={}) {
@@ -1722,15 +1786,28 @@ export class ClaudeCodeProvider extends CodexProvider {
       if(this.closed)throw Object.assign(new Error('Claude Code provider is closed'),{code:'PROVIDER_CLOSED',retryable:false});
       // --bare intentionally is not used: it disables subscription OAuth and keychain auth.
       // Empty setting sources, hooks and integrations keep task-side configuration out.
-      const args=['--print','--output-format','stream-json','--verbose',
-        '--no-session-persistence','--tools','','--disable-slash-commands','--no-chrome',
-        '--permission-mode','dontAsk','--setting-sources','',
-        '--settings',JSON.stringify({disableAllHooks:true,enabledPlugins:{}}),
-        '--strict-mcp-config','--mcp-config',JSON.stringify({mcpServers:{}}),
-        '--max-turns','3','--json-schema',JSON.stringify(decisionSchema(tools)),
-        '--system-prompt',compileInstructions(context)+'\nThis is a planner-only bridge. Do not invoke native tools. Return one next-action decision. The outer local tool broker executes the described calls.'];
-      if(this.model)args.push('--model',this.model);
-      const output=await runClaudePlanner(this,{args,cwd:working,signal,turnTimeoutMs,input:compileTaskContext({...context,tools})});
+      const schemaJson = JSON.stringify(decisionSchema(tools));
+      const systemPrompt = compileInstructions(context)+'\nThis is a planner-only bridge. Do not invoke native tools. Return one next-action decision. The outer local tool broker executes the described calls.';
+      const args = buildClaudeExecArgs({
+        schemaJson,
+        systemPrompt,
+        model: this.model || null,
+        taskEffort: context.task?.effort || 'medium',
+        cliSettings: this.cliSettings,
+        includeEffort: true
+      });
+      const input = compileTaskContext({...context,tools});
+      let output;
+      try {
+        output = await runClaudePlanner(this,{args,cwd:working,signal,turnTimeoutMs,input});
+      } catch (err) {
+        if (args.includes('--effort') && /unknown option|unrecognized|invalid option/i.test(String(err?.message || ''))) {
+          const fallbackArgs = buildClaudeExecArgs({ schemaJson, systemPrompt, model: this.model || null, taskEffort: context.task?.effort || 'medium', cliSettings: this.cliSettings, includeEffort: false });
+          output = await runClaudePlanner(this,{args:fallbackArgs,cwd:working,signal,turnTimeoutMs,input});
+        } else {
+          throw err;
+        }
+      }
       const events=output.split('\n').filter(line=>line.trim()).map(line=>{
         try{return JSON.parse(line);}catch{throw Object.assign(new Error('Claude Code returned invalid event JSON'),{code:'tool_protocol'});}
       });
@@ -1863,8 +1940,8 @@ function runSubprocessPlanner(owner, { args, cwd, signal, turnTimeoutMs, input, 
 
 /** Subscription-authenticated Google Gemini CLI planner. CLI owns OAuth; the broker owns effects. */
 export class GeminiCliProvider extends CodexProvider {
-  constructor({ id = 'gemini-cli', label = 'Gemini CLI · CLI default', binary = process.env.G0D_GEMINI_BINARY || 'gemini', timeoutMs = 120000, model, environment = process.env } = {}) {
-    super({ id, label, binary, timeoutMs, model, environment });
+  constructor({ id = 'gemini-cli', label = 'Gemini CLI · CLI default', binary = process.env.G0D_GEMINI_BINARY || 'gemini', timeoutMs = 120000, model, environment = process.env, subscriptionId = 'gemini-cli', cliSettings = {} } = {}) {
+    super({ id, label, binary, timeoutMs, model, environment, subscriptionId, cliSettings });
     this.kind = 'gemini-cli';
     this.tier = inferProviderTier({ id, model: model || 'gemini-2.5-pro' });
     this.accounting = 'CLI turns and reported stats; underlying provider attempts are opaque';
@@ -1916,8 +1993,8 @@ export class GeminiCliProvider extends CodexProvider {
 
 /** Subscription-authenticated GitHub Copilot CLI planner. CLI owns GitHub auth; the broker owns effects. */
 export class CopilotCliProvider extends CodexProvider {
-  constructor({ id = 'copilot-cli', label = 'GitHub Copilot · CLI default', binary = process.env.G0D_COPILOT_BINARY || 'copilot', timeoutMs = 120000, model, environment = process.env } = {}) {
-    super({ id, label, binary, timeoutMs, model, environment });
+  constructor({ id = 'copilot-cli', label = 'GitHub Copilot · CLI default', binary = process.env.G0D_COPILOT_BINARY || 'copilot', timeoutMs = 120000, model, environment = process.env, subscriptionId = 'copilot-cli', cliSettings = {} } = {}) {
+    super({ id, label, binary, timeoutMs, model, environment, subscriptionId, cliSettings });
     this.kind = 'copilot-cli';
     this.tier = inferProviderTier({ id, model: model || 'gpt-5' });
     this.accounting = 'CLI turns; underlying provider attempts are opaque';

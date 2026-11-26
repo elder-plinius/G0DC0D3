@@ -144,7 +144,12 @@ test('model controls persist through restart and reach the actual HTTP payload w
 
 test('invalid or unsupported hyperparameters are rejected before a provider call', () => {
   for(const bad of [{temperature:3},{seed:1.5},{top_p:NaN},{unknown:1},{max_tokens:0},{top_k:-1},{min_p:1.1}])assert.throws(()=>modelParameters(bad));
-  assert.throws(()=>parametersFor({protocol:'anthropic'},{temperature:.5}),{code:'UNSUPPORTED_PARAMETERS'});
+  assert.deepEqual(parametersFor({protocol:'anthropic'},{temperature:.5,top_p:.9,max_tokens:2048}),{temperature:.5,top_p:.9,max_tokens:2048});
+  assert.throws(()=>parametersFor({protocol:'anthropic'},{temperature:1.5}),{code:'INVALID_PARAMETERS'});
+  assert.throws(()=>parametersFor({protocol:'anthropic'},{seed:42}),{code:'UNSUPPORTED_PARAMETERS'});
+  assert.deepEqual(parametersFor({protocol:'openai-responses'},{temperature:.7,top_p:.95,max_tokens:4096}),{temperature:.7,top_p:.95,max_tokens:4096});
+  assert.throws(()=>parametersFor({protocol:'openai-responses'},{frequency_penalty:.5}),{code:'UNSUPPORTED_PARAMETERS'});
+  assert.throws(()=>parametersFor({kind:'codex'},{temperature:.5}),{code:'UNSUPPORTED_PARAMETERS'});
   assert.throws(()=>parametersFor({protocol:'openai-chat',maxOutputTokensCeiling:100},{max_tokens:200}),{code:'INVALID_PARAMETERS'});
   assert.throws(()=>parametersFor({protocol:'openai-chat',baseUrl:'https://example.com'},{top_k:40}),{code:'UNSUPPORTED_PARAMETERS'});
 });

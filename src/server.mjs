@@ -85,12 +85,12 @@ async function readBody(req, maxBytes = 65536) {
   catch {throw Object.assign(new Error('Expected a JSON object'),{status:400});}
 }
 
-export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(projectDir,'.g0dc0d3'),providers,evaluator=evaluateTask,auth=true,keychain,fetchCatalog,fetchOpenRouterCatalog,cliDiscovery={}}={}) {
+export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(projectDir,'.g0dc0d3'),providers,evaluator=evaluateTask,auth=true,keychain,fetchCatalog,fetchOpenRouterCatalog,fetchProviderCatalog,cliDiscovery={}}={}) {
   dataDir=path.resolve(dataDir);
   const configuredProviders = !providers;
   providers ||= new Map([...createScriptedProviders(),...environmentProviders()]);
   if (configuredProviders) await loadProviderReferences({dataDir,providers});
-  const providerSettings = await createProviderSettings(providers, keychain, { dataDir });
+  const providerSettings = await createProviderSettings(providers, keychain, { dataDir, ...(fetchProviderCatalog ? { fetchImpl: fetchProviderCatalog } : {}) });
   const redact = value => redactDiagnostics(value, [...environmentSecrets(), ...providerSettings.secrets]);
   const cliConnections = await createCliConnections({...cliDiscovery,dataDir,providers});
   const modelCatalog = await createModelCatalog({dataDir, ...(fetchOpenRouterCatalog ? { fetchImpl: fetchOpenRouterCatalog } : {})});
@@ -420,6 +420,41 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
           warning: refreshed.warning
         });
       }
+      if(req.method==='GET' && url.pathname==='/api/providers/catalog') {
+        const provider = (url.searchParams.get('provider') || '').trim().toLowerCase();
+        const result = await providerSettings.listLiveModels(provider, {
+          privacy: runtime.getPrivacy().settings,
+          onOutbound: entry => runtime.outboundAudit.record(entry),
+          force: url.searchParams.get('refresh') === '1',
+        });
+        const models = (result.models || []).map(entry => {
+          const id = `${result.provider}:${entry.id.replaceAll('/', '-')}`;
+          const label = `${entry.name || entry.id} · ${result.label}`;
+          const pseudoProvider = { id, model: entry.id, label, baseUrl: result.endpoint, protocol: result.protocol, kind: 'http' };
+          return {
+            id,
+            model: entry.id,
+            name: entry.name || entry.id,
+            label,
+            registered: Boolean(entry.registered),
+            curated: Boolean(entry.curated),
+            source: entry.source || 'live',
+            meta: classifyModel(pseudoProvider, { catalog: modelCatalog }),
+          };
+        });
+        return send(res, 200, {
+          connected: result.connected,
+          disabled: Boolean(result.disabled),
+          provider: result.provider,
+          label: result.label,
+          models,
+          registered: result.registered || [],
+          count: models.length,
+          fetchedAt: result.fetchedAt,
+          stale: result.stale,
+          warning: result.warning,
+        });
+      }
       if(req.method==='GET' && url.pathname==='/api/providers/parameters') {
         const ids=[...new Set((url.searchParams.get('ids') || '').split(',').filter(Boolean))];
         if(!ids.length || ids.length>10) return send(res,400,{error:'Choose one to ten models.'});
@@ -433,6 +468,7 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
       if(req.method==='POST' && url.pathname==='/api/setup')return send(res,200,{setup:setup.acknowledge(await readBody(req))});
       if(req.method==='GET' && url.pathname==='/api/providers/connections')return send(res,200,await cliConnections.status({refresh:url.searchParams.get('refresh')==='1'}));
       if(req.method==='POST' && url.pathname==='/api/providers/connections')return send(res,200,await cliConnections.connect(await readBody(req)));
+      if(req.method==='PATCH' && url.pathname==='/api/providers/connections')return send(res,200,await cliConnections.updateSettings(await readBody(req)));
       if(req.method==='DELETE' && url.pathname==='/api/providers/connections')return send(res,200,await cliConnections.disconnect(await readBody(req)));
       if(req.method==='POST' && url.pathname==='/api/providers/key') {
         const result = await providerSettings.connect(await readBody(req));

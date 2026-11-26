@@ -1045,7 +1045,7 @@ function selectModelsSubtab(subtab) {
         emptyEl = document.createElement('div');
         emptyEl.id = 'models-catalog-empty';
         emptyEl.className = 'settings-card';
-        emptyEl.innerHTML = '<div class="settings-card-head"><h4>No browsable catalogs connected yet</h4><p>Connect an <strong>OpenRouter</strong> or <strong>Venice</strong> API key in <strong>Connections &amp; Keys</strong> to browse 450+ models, or add a second provider to configure automatic fallback ordering.</p></div><button type="button" class="button button-secondary" data-models-subtab="connections">Go to Connections &amp; Keys</button>';
+        emptyEl.innerHTML = '<div class="settings-card-head"><h4>No browsable catalogs connected yet</h4><p>Connect an <strong>OpenAI</strong>, <strong>Anthropic</strong>, <strong>OpenRouter</strong>, or <strong>Venice</strong> API key in <strong>Connections &amp; Keys</strong> to browse and pin available models.</p></div><button type="button" class="button button-secondary" data-models-subtab="connections">Go to Connections &amp; Keys</button>';
         $('#settings-pane-models')?.append(emptyEl);
       }
       emptyEl.hidden = false;
@@ -1193,7 +1193,7 @@ async function selectSettingsPane(pane, options = {}) {
     if (options.subtab) selectModelsSubtab(options.subtab);
     else selectModelsSubtab(modelsSubtab);
     renderModelSettings();
-    await Promise.all([loadModelConnections(), loadVeniceCatalog(), typeof loadOpenRouterCatalog === 'function' ? loadOpenRouterCatalog() : Promise.resolve(), typeof loadServices === 'function' ? loadServices() : Promise.resolve(), typeof loadModelGroups === 'function' ? loadModelGroups() : Promise.resolve(), typeof loadOverseer === 'function' ? loadOverseer() : Promise.resolve(), typeof loadUltraRouter === 'function' ? loadUltraRouter() : Promise.resolve()]);
+    await Promise.all([loadModelConnections(), loadVeniceCatalog(), typeof loadOpenRouterCatalog === 'function' ? loadOpenRouterCatalog() : Promise.resolve(), typeof loadDirectProviderCatalog === 'function' ? loadDirectProviderCatalog('openai') : Promise.resolve(), typeof loadDirectProviderCatalog === 'function' ? loadDirectProviderCatalog('anthropic') : Promise.resolve(), typeof loadServices === 'function' ? loadServices() : Promise.resolve(), typeof loadModelGroups === 'function' ? loadModelGroups() : Promise.resolve(), typeof loadOverseer === 'function' ? loadOverseer() : Promise.resolve(), typeof loadUltraRouter === 'function' ? loadUltraRouter() : Promise.resolve()]);
     selectModelsSubtab(modelsSubtab);
   }
   if (pane === 'tools') { await Promise.all([loadPermissionsSettings(), loadHooksSettings(), loadBrowserSettings()]); }

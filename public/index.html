@@ -445,6 +445,28 @@
       <input id="openrouter-filter" type="search" placeholder="Search all OpenRouter models (e.g. claude, deepseek, kimi, qwen, grok, free)…" aria-label="Filter OpenRouter models" autocomplete="off" spellcheck="false">
       <div id="openrouter-list" class="openrouter-list" role="region" aria-label="OpenRouter models"></div>
     </section>
+    <section id="openai-browser" class="settings-card openrouter-browser direct-catalog-browser" data-model-subtab="catalog" hidden>
+      <div class="openrouter-browser-head">
+        <div>
+          <h3>OpenAI API Catalog</h3>
+          <p class="field-help" id="openai-count" role="status"></p>
+        </div>
+        <button type="button" class="button button-quiet" id="openai-refresh">Refresh catalog</button>
+      </div>
+      <input id="openai-filter" type="search" placeholder="Search your OpenAI account models (e.g. gpt-5.4, codex, o3, o4-mini)…" aria-label="Filter OpenAI models" autocomplete="off" spellcheck="false">
+      <div id="openai-list" class="openrouter-list" role="region" aria-label="OpenAI models"></div>
+    </section>
+    <section id="anthropic-browser" class="settings-card openrouter-browser direct-catalog-browser" data-model-subtab="catalog" hidden>
+      <div class="openrouter-browser-head">
+        <div>
+          <h3>Anthropic API Catalog</h3>
+          <p class="field-help" id="anthropic-count" role="status"></p>
+        </div>
+        <button type="button" class="button button-quiet" id="anthropic-refresh">Refresh catalog</button>
+      </div>
+      <input id="anthropic-filter" type="search" placeholder="Search your Anthropic account models (e.g. opus, sonnet, haiku)…" aria-label="Filter Anthropic models" autocomplete="off" spellcheck="false">
+      <div id="anthropic-list" class="openrouter-list" role="region" aria-label="Anthropic models"></div>
+    </section>
     <section id="venice-browser" class="settings-card" data-model-subtab="catalog" hidden>
       <h3>Venice backup</h3>
       <p class="field-help" id="venice-count" role="status"></p>

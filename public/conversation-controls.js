@@ -208,7 +208,7 @@ $('#composer-parameters').addEventListener('click', () => {
     ? (runningNow
         ? 'Inferencing now — saved changes take effect automatically on the next turn or sent message.'
         : 'Applies to the next requests in this chat. Your system prompt and model route remain selected.')
-    : 'Default controls for new chats on this device. Use a compatible Chat Completions model.';
+    : 'Default controls for new chats on this device. Supported by OpenAI, Anthropic, OpenRouter, Venice, Gemini, and local API models (CLI subscriptions use the Effort control and subscription settings).';
   $('#generation-error').textContent = '';
   generationControls.sync();
   $('#generation-dialog').showModal();

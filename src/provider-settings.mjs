@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { accessSync, constants as fsConstants, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { HttpProvider } from './providers.mjs';
+import { checkProviderPrivacyAllowed, DEFAULT_PRIVACY_SETTINGS } from './privacy.mjs';
 
 const profiles = {
   venice: { label: 'Venice', protocol: 'openai-chat', endpoint: 'https://api.venice.ai/api/v1', apiKeyEnv: 'VENICE_API_KEY', defaults: ['venice-uncensored-1-2'] },
@@ -26,11 +27,27 @@ const profiles = {
       'x-ai/grok-4.7',
     ],
   },
-  anthropic: { label: 'Anthropic', protocol: 'anthropic', endpoint: 'https://api.anthropic.com/v1', apiKeyEnv: 'ANTHROPIC_API_KEY', defaults: ['claude-sonnet-4-6', 'claude-opus-4-6'] },
-  openai: { label: 'OpenAI', protocol: 'openai-responses', endpoint: 'https://api.openai.com/v1', apiKeyEnv: 'OPENAI_API_KEY', defaults: ['gpt-5.4', 'o3'] },
+  anthropic: {
+    label: 'Anthropic',
+    protocol: 'anthropic',
+    endpoint: 'https://api.anthropic.com/v1',
+    apiKeyEnv: 'ANTHROPIC_API_KEY',
+    defaults: ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
+  },
+  openai: {
+    label: 'OpenAI',
+    protocol: 'openai-responses',
+    endpoint: 'https://api.openai.com/v1',
+    apiKeyEnv: 'OPENAI_API_KEY',
+    defaults: ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'o3', 'o4-mini'],
+  },
   gemini: { label: 'Gemini API', protocol: 'openai-chat', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai', apiKeyEnv: 'GEMINI_API_KEY', defaults: ['gemini-4-neon', 'gemini-3-pro', 'gemini-2.5-pro', 'gemini-2.5-flash'] },
   nous: { label: 'Nous Portal', protocol: 'openai-chat', endpoint: 'https://inference-api.nousresearch.com/v1', apiKeyEnv: 'NOUS_API_KEY', defaults: ['Hermes-4-405B', 'Hermes-4-70B'] },
 };
+
+const OPENAI_EXCLUDED_MODEL_RE = /^(?:text-embedding|whisper|tts-|dall-e|gpt-image|chatgpt-image|omni-moderation|text-moderation|babbage|davinci|ada|curie|sora|ft:)|(?:embedding|moderation|realtime|audio-preview|transcribe|tts|whisper|dall-e|image-1)/i;
+const DIRECT_CATALOG_TTL_MS = 15 * 60 * 1000;
+const DIRECT_CATALOG_PROVIDERS = new Set(['openai', 'anthropic']);
 
 export function nativeKeychain(executable, dataDir) {
   if (process.platform !== 'darwin' || !path.isAbsolute(executable)) throw new Error('Invalid native Keychain helper.');
@@ -115,11 +132,12 @@ export function linuxSecretToolKeychain(dataDir, { binary } = {}) {
 
 export const MAX_MODELS_PER_PROVIDER = 128;
 
-export async function createProviderSettings(providers, keychain, { dataDir } = {}) {
+export async function createProviderSettings(providers, keychain, { dataDir, fetchImpl = globalThis.fetch } = {}) {
   const secrets = new Set();
   const savedModels = new Map();
   const savedKeys = new Map();
   const disabledProfiles = new Set();
+  const catalogCache = new Map();
   const togglesFile = dataDir ? path.join(dataDir, 'provider-toggles.json') : null;
   let pending = Promise.resolve();
 
@@ -409,6 +427,250 @@ export async function createProviderSettings(providers, keychain, { dataDir } = 
       });
       pending = operation.catch(() => {});
       return operation;
+    },
+    async listLiveModels(rawProvider, { privacy = DEFAULT_PRIVACY_SETTINGS, onOutbound, force = false } = {}) {
+      const provider = typeof rawProvider === 'string' ? rawProvider.trim().toLowerCase() : '';
+      if (!DIRECT_CATALOG_PROVIDERS.has(provider)) {
+        throw Object.assign(new Error('Direct model catalog supports openai or anthropic.'), { status: 400 });
+      }
+      const profile = profiles[provider];
+      if (disabledProfiles.has(provider)) {
+        return {
+          connected: false,
+          disabled: true,
+          provider,
+          label: profile.label,
+          endpoint: profile.endpoint,
+          protocol: profile.protocol,
+          models: [],
+          registered: [],
+          count: 0,
+          fetchedAt: null,
+          stale: false,
+          warning: '',
+        };
+      }
+      const registered = profileModelsFromProviders(provider);
+      const registeredSet = new Set(registered);
+      const apiKey = savedKeys.get(provider) || (profile.apiKeyEnv ? String(process.env[profile.apiKeyEnv] || '').trim() : '');
+      const connected = Boolean(apiKey) || registered.length > 0;
+      if (!connected) {
+        return {
+          connected: false,
+          disabled: false,
+          provider,
+          label: profile.label,
+          endpoint: profile.endpoint,
+          protocol: profile.protocol,
+          models: [],
+          registered: [],
+          count: 0,
+          fetchedAt: null,
+          stale: false,
+          warning: '',
+        };
+      }
+      const buildMerged = (liveRows = []) => {
+        const seen = new Set();
+        const curatedOrder = new Map(profile.defaults.map((id, i) => [id, i]));
+        const out = [];
+        const add = (id, displayName = null, created = null, source = 'live') => {
+          if (typeof id !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9:._/+~-]{0,159}$/.test(id)) return;
+          if (seen.has(id)) return;
+          seen.add(id);
+          out.push({
+            id,
+            name: (typeof displayName === 'string' && displayName.trim()) ? displayName.trim().slice(0, 160) : id,
+            created: Number.isFinite(created) ? created : null,
+            registered: registeredSet.has(id),
+            curated: curatedOrder.has(id),
+            source,
+          });
+        };
+        for (const row of liveRows) {
+          const id = typeof row?.id === 'string' ? row.id.trim() : '';
+          if (!id) continue;
+          if (provider === 'openai' && OPENAI_EXCLUDED_MODEL_RE.test(id) && !registeredSet.has(id)) continue;
+          const created = typeof row.created === 'number'
+            ? row.created
+            : (typeof row.created_at === 'string' ? Math.floor(Date.parse(row.created_at) / 1000) : null);
+          add(id, row.display_name || row.name || id, Number.isFinite(created) ? created : null, 'live');
+        }
+        for (const id of profile.defaults) add(id, id, null, 'curated');
+        for (const id of registered) add(id, id, null, 'registered');
+        out.sort((a, b) => {
+          if (a.registered !== b.registered) return a.registered ? -1 : 1;
+          const aCur = curatedOrder.has(a.id) ? curatedOrder.get(a.id) : 9999;
+          const bCur = curatedOrder.has(b.id) ? curatedOrder.get(b.id) : 9999;
+          if (aCur !== bCur) return aCur - bCur;
+          if ((b.created || 0) !== (a.created || 0)) return (b.created || 0) - (a.created || 0);
+          return a.id.localeCompare(b.id);
+        });
+        return out;
+      };
+
+      const cached = catalogCache.get(provider);
+      if (privacy?.localOnly) {
+        const models = buildMerged(cached?.rows || []);
+        onOutbound?.({
+          providerId: `catalog:${provider}`,
+          host: new URL(profile.endpoint).hostname,
+          protocol: 'catalog-sync',
+          zdrClass: 'standard',
+          zdrFlags: [],
+          secretsRedacted: 0,
+          blocked: true,
+          reason: `Local-only mode paused ${profile.label} model catalog refresh.`,
+        });
+        return {
+          connected: true,
+          disabled: false,
+          provider,
+          label: profile.label,
+          endpoint: profile.endpoint,
+          protocol: profile.protocol,
+          models,
+          registered,
+          count: models.length,
+          fetchedAt: cached?.fetchedAt || null,
+          stale: true,
+          warning: `Local-only inference is enabled. Showing cached/curated ${profile.label} models.`,
+        };
+      }
+
+      if (!force && cached && Date.now() < cached.expiresAt) {
+        const models = buildMerged(cached.rows);
+        return {
+          connected: true,
+          disabled: false,
+          provider,
+          label: profile.label,
+          endpoint: profile.endpoint,
+          protocol: profile.protocol,
+          models,
+          registered,
+          count: models.length,
+          fetchedAt: cached.fetchedAt,
+          stale: false,
+          warning: '',
+        };
+      }
+
+      if (!apiKey || typeof fetchImpl !== 'function') {
+        const models = buildMerged(cached?.rows || []);
+        return {
+          connected: true,
+          disabled: false,
+          provider,
+          label: profile.label,
+          endpoint: profile.endpoint,
+          protocol: profile.protocol,
+          models,
+          registered,
+          count: models.length,
+          fetchedAt: cached?.fetchedAt || null,
+          stale: true,
+          warning: !apiKey
+            ? `Showing curated and registered ${profile.label} models. Save an API key to fetch your full live account catalog.`
+            : 'Fetch API unavailable for live model catalog.',
+        };
+      }
+
+      const gate = checkProviderPrivacyAllowed({ id: `${provider}:catalog`, label: `${profile.label} Model Catalog`, baseUrl: profile.endpoint }, privacy);
+      if (!gate.allowed) {
+        const models = buildMerged(cached?.rows || []);
+        onOutbound?.({
+          providerId: `catalog:${provider}`,
+          host: new URL(profile.endpoint).hostname,
+          protocol: 'catalog-sync',
+          zdrClass: gate.posture.zdrClass,
+          zdrFlags: [],
+          secretsRedacted: 0,
+          blocked: true,
+          reason: gate.message,
+        });
+        return {
+          connected: true,
+          disabled: false,
+          provider,
+          label: profile.label,
+          endpoint: profile.endpoint,
+          protocol: profile.protocol,
+          models,
+          registered,
+          count: models.length,
+          fetchedAt: cached?.fetchedAt || null,
+          stale: true,
+          warning: gate.message,
+        };
+      }
+
+      const url = provider === 'anthropic'
+        ? `${profile.endpoint}/models?limit=100`
+        : `${profile.endpoint}/models`;
+      const headers = provider === 'anthropic'
+        ? { accept: 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' }
+        : { accept: 'application/json', authorization: `Bearer ${apiKey}` };
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 12000);
+      try {
+        onOutbound?.({
+          providerId: `catalog:${provider}`,
+          host: new URL(profile.endpoint).hostname,
+          protocol: 'catalog-sync',
+          zdrClass: gate.posture.zdrClass,
+          zdrFlags: ['readonly-model-list'],
+          secretsRedacted: 0,
+          blocked: false,
+          reason: null,
+        });
+        const response = await fetchImpl(url, {
+          method: 'GET',
+          headers,
+          redirect: 'error',
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          throw new Error(`${profile.label} models endpoint returned HTTP ${response.status}.`);
+        }
+        const payload = await response.json();
+        const rows = Array.isArray(payload?.data) ? payload.data : [];
+        const fetchedAt = new Date().toISOString();
+        catalogCache.set(provider, { rows, fetchedAt, expiresAt: Date.now() + DIRECT_CATALOG_TTL_MS });
+        const models = buildMerged(rows);
+        return {
+          connected: true,
+          disabled: false,
+          provider,
+          label: profile.label,
+          endpoint: profile.endpoint,
+          protocol: profile.protocol,
+          models,
+          registered,
+          count: models.length,
+          fetchedAt,
+          stale: false,
+          warning: '',
+        };
+      } catch (error) {
+        const models = buildMerged(cached?.rows || []);
+        return {
+          connected: true,
+          disabled: false,
+          provider,
+          label: profile.label,
+          endpoint: profile.endpoint,
+          protocol: profile.protocol,
+          models,
+          registered,
+          count: models.length,
+          fetchedAt: cached?.fetchedAt || null,
+          stale: true,
+          warning: `Could not refresh live ${profile.label} models (${error?.name === 'AbortError' ? 'timed out' : (error?.message || 'network error')}). Showing curated & connected models.`,
+        };
+      } finally {
+        clearTimeout(timer);
+      }
     },
   };
 }
