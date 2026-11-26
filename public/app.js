@@ -202,7 +202,7 @@ function applyAppMode(mode, { persist = true, notify = false, switchView = false
       ? 'What are we building<span class="welcome-punctuation">?</span>'
       : 'What can we do<span class="welcome-punctuation">?</span>';
   }
-  setVisible('#welcome-godcode-sub', isCode);
+  setVisible('#welcome-godcode-sub', false);
   renderStarterSuggestions();
   syncAdaptiveCompactUI();
   if (!isCode) {
