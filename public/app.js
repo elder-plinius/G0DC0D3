@@ -450,7 +450,7 @@ function syncAdaptiveCompactUI() {
   const shell = $('#composer-shell');
   if (shell) {
     const w = shell.getBoundingClientRect().width;
-    const widthThreshold = appMode === 'godcode' ? 790 : 560;
+    const widthThreshold = appMode === 'godcode' ? 620 : 520;
     const manuallySquished = manualComposerHeight !== null && manualComposerHeight <= 72;
     const isCompact = (w > 0 && w < widthThreshold) || manuallySquished;
     const wasCompact = shell.classList.contains('composer-compact');
@@ -3282,12 +3282,12 @@ function conversationWork(events, openDetails) {
 function renderTimeline(events, total, task) {
   const panel = $('#panel-timeline');
   const openDetails = new Set($$('details[open][data-disclosure]', panel).map((element) => element.dataset.disclosure));
-  const expandedCodeBlocks = new Set();
+  const codeBlockStates = new Map();
   panel.querySelectorAll('.message[data-message]').forEach(msgEl => {
     const mKey = msgEl.dataset.message;
     msgEl.querySelectorAll('.message-code-block').forEach((blk, idx) => {
-      if (!blk.classList.contains('is-collapsed') && blk.querySelector('[data-collapse-code]')) {
-        expandedCodeBlocks.add(`${mKey}::${idx}`);
+      if (blk.querySelector('[data-collapse-code]')) {
+        codeBlockStates.set(`${mKey}::${idx}`, blk.classList.contains('is-collapsed'));
       }
     });
   });
@@ -3426,14 +3426,18 @@ function renderTimeline(events, total, task) {
     messages.push(`<div class="report-refusal-bar">${showKeepRolling ? `<button type="button" class="button button-primary report-refusal-btn" data-continue-output="${escapeHTML(task.id)}" title="Continue seamlessly from where the output stopped">Keep rolling →</button>` : ''}${replyProv ? `<button type="button" class="button button-quiet report-refusal-btn" data-model-pref="pin" data-pref-id="${escapeHTML(replyProv)}" title="Pin ${escapeHTML(replyLabel)} higher in your waterfall">★ Prefer</button><button type="button" class="button button-quiet report-refusal-btn" data-model-pref="demote" data-pref-id="${escapeHTML(replyProv)}" title="Demote ${escapeHTML(replyLabel)} lower in your waterfall">⊘ Demote</button>` : ''}<button type="button" class="button button-quiet report-refusal-btn" data-report-refusal="${escapeHTML(task.id)}" title="Flag the last reply as a missed refusal to trigger G0DM0D3 retry/switch and train local refusal detection">↻ Missed refusal? Retry / Switch</button></div>`);
   }
   panel.innerHTML = `<div class="conversation">${messages.join('')}</div>`;
-  if (expandedCodeBlocks.size) {
+  if (codeBlockStates.size) {
     panel.querySelectorAll('.message[data-message]').forEach(msgEl => {
       const mKey = msgEl.dataset.message;
       msgEl.querySelectorAll('.message-code-block').forEach((blk, idx) => {
-        if (expandedCodeBlocks.has(`${mKey}::${idx}`)) {
-          blk.classList.remove('is-collapsed');
-          const btn = blk.querySelector('[data-collapse-code]');
-          if (btn) { btn.setAttribute('aria-expanded', 'true'); btn.textContent = 'Collapse'; }
+        const key = `${mKey}::${idx}`;
+        if (!codeBlockStates.has(key)) return;
+        const shouldCollapse = codeBlockStates.get(key);
+        blk.classList.toggle('is-collapsed', shouldCollapse);
+        const btn = blk.querySelector('[data-collapse-code]');
+        if (btn) {
+          btn.setAttribute('aria-expanded', String(!shouldCollapse));
+          btn.textContent = shouldCollapse ? 'Expand' : 'Collapse';
         }
       });
     });
