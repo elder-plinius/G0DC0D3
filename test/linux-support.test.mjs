@@ -39,6 +39,9 @@ test('Linux bwrapCommandArgs enforces PID/IPC/UTS/network namespaces, clearenv, 
   assert.ok(closedArgs.includes('--unshare-net'));
   assert.ok(closedArgs.includes('--die-with-parent'));
   assert.ok(closedArgs.includes('--clearenv'));
+  const roRootIdx = closedArgs.indexOf('--remount-ro');
+  assert.ok(roRootIdx > 0 && closedArgs[roRootIdx + 1] === '/');
+  assert.equal(closedArgs.includes('/tmp'), false, 'Command sandbox must not mount a writable /tmp tmpfs over ancestor dirs');
   // Symlinks preserved cleanly for Ubuntu usr-merged rootfs
   const symIdx = closedArgs.indexOf('--symlink');
   assert.equal(closedArgs[symIdx + 1], 'usr/bin');
@@ -76,6 +79,8 @@ test('Linux bwrapWorkerArgs is strictly read-only, offline, and binds only exact
   assert.ok(args.includes('--die-with-parent'));
   assert.equal(args.includes('--bind'), false, 'Read-only worker must have zero writable binds');
   assert.equal(args.includes('--tmpfs'), false, 'Read-only worker must have zero writable tmpfs mounts');
+  const roWorkerIdx = args.indexOf('--remount-ro');
+  assert.ok(roWorkerIdx > 0 && args[roWorkerIdx + 1] === '/', 'Read-only worker must remount / read-only');
   assert.equal(args.includes('/usr/bin'), false, 'Read-only worker must not bind /usr/bin shell utilities');
   assert.ok(args.includes('/opt/app/src/probe-worker.mjs'));
   assert.ok(args.includes('--disable-proto=throw'));
