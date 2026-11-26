@@ -22,3 +22,10 @@ G0DC0D3 ships with zero external npm runtime dependencies and bundles only the f
 
 - **Files**: `public/lysios-mark-canonical-ink.svg`, `public/lysios-mark-reverse-white.svg`
 - **Source**: First-party G0DM0D3 / G0DC0D3 brand marks.
+
+## 4. Node.js Runtime (Prebuilt Standalone Releases Only)
+
+- **Applies to**: Prebuilt macOS `.dmg` and Linux `.deb` / `.tar.gz` release archives (not committed to the source repository).
+- **Upstream**: https://nodejs.org / https://github.com/nodejs/node
+- **Copyright**: Copyright OpenJS Foundation and Node.js contributors
+- **License**: MIT License (https://raw.githubusercontent.com/nodejs/node/main/LICENSE)

@@ -1,0 +1,246 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to publish (e.g. v0.2.1; defaults to package.json version)'
+        required: false
+        default: ''
+      prerelease:
+        description: 'Mark GitHub Release as prerelease'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  verify:
+    name: Gate · Tests & Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Linux bubblewrap sandbox
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --ro-bind / / -- true
+
+      - name: Run test & smoke suite
+        run: npm test && npm run smoke
+
+  build-macos:
+    name: Package macOS (${{ matrix.arch }})
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            os: macos-14
+          - arch: x64
+            os: macos-15-intel
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Resolve release version
+        id: meta
+        run: |
+          raw="${{ github.event.inputs.tag || github.ref_name }}"
+          ver="${raw#v}"
+          if [ -z "$ver" ] || [ "$ver" = "main" ]; then
+            ver="$(node -p "JSON.parse(require('node:fs').readFileSync('package.json','utf8')).version")"
+          fi
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+
+      - name: Import Apple Developer ID certificate (when configured)
+        if: ${{ secrets.MACOS_CERT_P12_BASE64 != '' && secrets.MACOS_CERT_PASSWORD != '' && secrets.MACOS_SIGN_IDENTITY != '' }}
+        env:
+          CERT_B64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          CERT_PASS: ${{ secrets.MACOS_CERT_PASSWORD }}
+          KEYCHAIN_PASS: ${{ secrets.MACOS_KEYCHAIN_PASSWORD || 'ephemeral-release-keychain' }}
+        run: |
+          keychain="$RUNNER_TEMP/g0d-signing.keychain-db"
+          cert_file="$RUNNER_TEMP/dev-id.p12"
+          echo "$CERT_B64" | base64 --decode > "$cert_file"
+          security create-keychain -p "$KEYCHAIN_PASS" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$KEYCHAIN_PASS" "$keychain"
+          security import "$cert_file" -P "$CERT_PASS" -A -t cert -f pkcs12 -k "$keychain"
+          security list-keychain -d user -s "$keychain"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -k "$KEYCHAIN_PASS" "$keychain"
+          rm -f "$cert_file"
+
+      - name: Build self-contained macOS .dmg
+        env:
+          G0D_VERSION: ${{ steps.meta.outputs.version }}
+          G0D_ARCH: ${{ matrix.arch }}
+          G0D_CODESIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY || '-' }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          chmod +x scripts/package-macos.sh
+          sh scripts/package-macos.sh
+
+      - name: Clean up ephemeral signing keychain
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/g0d-signing.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/dev-id.p12"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-macos-${{ matrix.arch }}
+          path: dist/release/*.dmg
+          if-no-files-found: error
+
+  build-linux:
+    name: Package Linux (${{ matrix.arch }})
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            os: ubuntu-latest
+          - arch: arm64
+            os: ubuntu-24.04-arm
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Resolve release version
+        id: meta
+        run: |
+          raw="${{ github.event.inputs.tag || github.ref_name }}"
+          ver="${raw#v}"
+          if [ -z "$ver" ] || [ "$ver" = "main" ]; then
+            ver="$(node -p "JSON.parse(require('node:fs').readFileSync('package.json','utf8')).version")"
+          fi
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+
+      - name: Build self-contained Linux .tar.gz and .deb
+        env:
+          G0D_VERSION: ${{ steps.meta.outputs.version }}
+          G0D_ARCH: ${{ matrix.arch }}
+        run: |
+          chmod +x scripts/package-linux.sh
+          sh scripts/package-linux.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-linux-${{ matrix.arch }}
+          path: |
+            dist/release/*.tar.gz
+            dist/release/*.deb
+          if-no-files-found: error
+
+  publish:
+    name: Publish Signed GitHub Release & SLSA Provenance
+    needs: [build-macos, build-linux]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Resolve tag & version
+        id: meta
+        run: |
+          raw="${{ github.event.inputs.tag || github.ref_name }}"
+          if [ -z "$raw" ] || [ "$raw" = "main" ]; then
+            ver="$(node -p "JSON.parse(require('node:fs').readFileSync('package.json','utf8')).version")"
+            tag="v$ver"
+          else
+            tag="$raw"
+            ver="${raw#v}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+
+      - name: Generate SHA256SUMS.txt
+        working-directory: release-assets
+        run: |
+          sha256sum *.dmg *.deb *.tar.gz > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Generate GitHub Sigstore Build Provenance Attestations
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            release-assets/*.dmg
+            release-assets/*.deb
+            release-assets/*.tar.gz
+            release-assets/SHA256SUMS.txt
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          PRERELEASE: ${{ github.event.inputs.prerelease == true && 'true' || 'false' }}
+        run: |
+          notes_file="$RUNNER_TEMP/release-notes.md"
+          cat > "$notes_file" <<EOF
+          ## GODCODƎ / GODMODƎ ${TAG}
+
+          Self-contained builds with Node.js 22 bundled — zero npm dependencies, zero telemetry.
+
+          ### Downloads
+          - **macOS (Apple Silicon):** \`G0DM0D3-${VERSION}-macos-arm64.dmg\`
+          - **macOS (Intel):** \`G0DM0D3-${VERSION}-macos-x64.dmg\`
+          - **Linux Debian / Ubuntu (x64 / arm64):** \`g0dm0d3_${VERSION}_amd64.deb\` / \`g0dm0d3_${VERSION}_arm64.deb\`
+          - **Linux Portable Archive (x64 / arm64):** \`g0dm0d3-${VERSION}-linux-x64.tar.gz\` / \`g0dm0d3-${VERSION}-linux-arm64.tar.gz\`
+
+          ### Verify Integrity & Build Provenance
+          \`\`\`sh
+          # Verify SHA-256 checksum
+          shasum -a 256 -c SHA256SUMS.txt --ignore-missing   # macOS
+          sha256sum -c SHA256SUMS.txt --ignore-missing       # Linux
+
+          # Verify GitHub Sigstore SLSA build provenance
+          gh attestation verify <downloaded-file> --repo ${{ github.repository }}
+          \`\`\`
+          EOF
+
+          extra=""
+          if [ "$PRERELEASE" = "true" ]; then extra="--prerelease"; fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" release-assets/* --clobber
+          else
+            # shellcheck disable=SC2086
+            gh release create "$TAG" release-assets/* --title "G0DC0D3 $TAG" --notes-file "$notes_file" $extra
+          fi
