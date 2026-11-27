@@ -33,6 +33,7 @@ import { resolveWorkflow, listWorkflows, WORKFLOW_NAMES } from './workflows.mjs'
 import { discoverSkills, saveUserSkill, deleteUserSkill } from './skills.mjs';
 import { PERMISSION_PRESETS } from './permissions.mjs';
 import { discoverHooks } from './hooks.mjs';
+import { discoverAcpHarnesses } from './acp-client.mjs';
 import { createPreviewRegistry } from './preview.mjs';
 import { extractPdfText } from './web-fetch.mjs';
 import { promptNeedsLiveTools } from './ultra-router.mjs';
@@ -559,6 +560,31 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
       if(req.method==='DELETE' && url.pathname==='/api/providers/models') {
         const result = await providerSettings.removeModels(await readBody(req));
         return send(res,200,{...result,connectedApiProviders:providerSettings.connectedProfiles(),providers:[...providers.values()].map(({id,label,kind,available=true,tier='standard'})=>({id,label,kind,available,tier}))});
+      }
+      if(req.method==='GET' && url.pathname==='/api/acp/status') {
+        const harnesses = (await discoverAcpHarnesses({ env: cliDiscovery?.environment || process.env })).map(h => ({
+          id: h.id,
+          acpId: h.acpId,
+          label: h.label,
+          binary: path.basename(String(h.binary || '')),
+          args: h.args,
+          installed: h.installed,
+          protocol: h.protocol,
+          defaultModel: h.defaultModel,
+        }));
+        const activeSessions = runtime.getAcpStatus().map(s => ({
+          providerId: s.providerId,
+          harnessId: s.harnessId,
+          model: s.model,
+          mode: s.mode,
+          lastUsedAt: s.lastUsedAt,
+        }));
+        return send(res, 200, {
+          ok: true,
+          protocol: 'acp-v1',
+          harnesses,
+          activeSessions,
+        });
       }
       if(req.method==='GET' && url.pathname==='/api/providers/local') {
         return send(res,200,localProviders.list());

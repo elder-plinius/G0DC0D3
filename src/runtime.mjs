@@ -1400,6 +1400,20 @@ export class Runtime {
     const provider = this.selectedProvider(task.providerId, task.workspaceKind);
     return buildContext({ task, provider, history: this.getRecentEvents(id), totalHistoryCount: task.eventSeq, files: snapshot.files, snapshotHash: snapshot.snapshotHash, learning: this.getLearning(), memories: this._memoriesForTask(task), transparency: task.fixtureId ? null : this.getTransparencyConfig() });
   }
+  getAcpStatus() {
+    const activeSessions = [];
+    for (const provider of new Set(this.providers.values())) {
+      if (typeof provider?.acpStatus === 'function') {
+        const sessions = provider.acpStatus();
+        if (Array.isArray(sessions)) {
+          for (const sess of sessions) {
+            activeSessions.push({ providerId: provider.id, ...sess });
+          }
+        }
+      }
+    }
+    return activeSessions;
+  }
   getLearning() { return this.store.getLearning(); }
   resetLearning() { return this.store.resetLearning(); }
   run(id) {

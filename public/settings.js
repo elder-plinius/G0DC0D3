@@ -870,6 +870,77 @@ document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" clas
 </dialog>`);
 $('#settings-pane-models').append($('#model-controls'));
 $('#model-controls').hidden = false;
+{
+  const acpCard = document.createElement('section');
+  acpCard.id = 'acp-status-card';
+  acpCard.className = 'settings-card acp-status-card';
+  acpCard.dataset.modelSubtab = 'connections';
+  acpCard.innerHTML = `<div class="settings-card-head acp-card-head">
+    <div>
+      <h4>ACP Multi-Harness Coordination <span class="acp-proto-badge">ACP v1</span></h4>
+      <p>Persistent JSON-RPC stdio transport for live token/reasoning streaming, zero per-turn startup tax, and G0DC0D3-mediated Seatbelt &amp; workspace permissions across subscription CLIs.</p>
+    </div>
+    <button type="button" class="button button-secondary acp-refresh-btn" id="acp-refresh-btn">Refresh ACP</button>
+  </div>
+  <div id="acp-harness-list" class="acp-harness-grid" role="list" aria-label="ACP-capable harnesses"></div>
+  <p id="acp-sessions-summary" class="field-help acp-sessions-summary">Checking installed ACP harnesses…</p>`;
+  $('#model-controls')?.append(acpCard);
+}
+
+let acpStatusCache = null;
+let acpStatusInFlight = null;
+let acpStatusReqSeq = 0;
+async function refreshAcpStatus({ force = false } = {}) {
+  const listEl = $('#acp-harness-list');
+  const sumEl = $('#acp-sessions-summary');
+  const btnEl = $('#acp-refresh-btn');
+  if (!listEl || !sumEl) return;
+  if (acpStatusCache && !force) return;
+  if (acpStatusInFlight && !force) return acpStatusInFlight;
+  const reqId = ++acpStatusReqSeq;
+  if (btnEl) {
+    btnEl.disabled = true;
+    btnEl.textContent = 'Refreshing…';
+  }
+  const run = (async () => {
+    try {
+      const data = await api('/api/acp/status');
+      if (reqId !== acpStatusReqSeq) return;
+      const harnesses = Array.isArray(data?.harnesses) ? data.harnesses : [];
+      const active = Array.isArray(data?.activeSessions) ? data.activeSessions : [];
+      listEl.innerHTML = harnesses.map(h => {
+        const stateCls = h.installed ? 'is-ready' : 'is-missing';
+        const stateTxt = h.installed ? 'ACP Ready' : 'Not installed';
+        const args = Array.isArray(h.args) ? h.args : [];
+        return `<div class="acp-harness-chip ${stateCls}" role="listitem">
+        <div class="acp-harness-top">
+          <strong>${escapeHTML(h.label || h.id || 'ACP Harness')}</strong>
+          <span class="acp-pill ${stateCls}">${stateTxt}</span>
+        </div>
+        <code class="acp-harness-cmd">${escapeHTML([h.binary, ...args].filter(Boolean).join(' '))}</code>
+      </div>`;
+      }).join('');
+      const installedCount = harnesses.filter(h => h.installed).length;
+      sumEl.textContent = `${installedCount}/${harnesses.length} ACP harnesses detected · ${active.length} live persistent session${active.length === 1 ? '' : 's'} active.`;
+      acpStatusCache = data;
+    } catch (err) {
+      if (reqId === acpStatusReqSeq) {
+        sumEl.textContent = `Could not query ACP status: ${err?.message || 'error'}`;
+      }
+    } finally {
+      if (reqId === acpStatusReqSeq) {
+        acpStatusInFlight = null;
+        if (btnEl) {
+          btnEl.disabled = false;
+          btnEl.textContent = 'Refresh ACP';
+        }
+      }
+    }
+  })();
+  acpStatusInFlight = run;
+  return run;
+}
+$('#acp-refresh-btn')?.addEventListener('click', () => refreshAcpStatus({ force: true }));
 
 let settingsTaskId = null;
 let settingsReturnFocus = null;
@@ -1405,6 +1476,7 @@ function selectModelsSubtab(subtab) {
   $$('#model-controls > [data-model-subtab]').forEach(el => {
     el.classList.toggle('model-subtab-hidden', el.dataset.modelSubtab !== modelsSubtab);
   });
+  if (modelsSubtab === 'connections') refreshAcpStatus();
   let emptyEl = $('#models-catalog-empty');
   if (modelsSubtab === 'catalog') {
     const visibleCatalogCards = $$('#model-controls > [data-model-subtab="catalog"]').filter(el => !el.hidden && !el.classList.contains('hidden') && !el.classList.contains('model-subtab-hidden'));
@@ -1575,7 +1647,7 @@ async function selectSettingsPane(pane, options = {}) {
     if (options.subtab) selectModelsSubtab(options.subtab);
     else selectModelsSubtab(modelsSubtab);
     renderModelSettings();
-    await Promise.all([loadModelConnections(), loadVeniceCatalog(), typeof loadOpenRouterCatalog === 'function' ? loadOpenRouterCatalog() : Promise.resolve(), ...(typeof loadDirectProviderCatalog === 'function' ? ['openai', 'anthropic', 'xai', 'gemini', 'meta'].map(p => loadDirectProviderCatalog(p)) : []), typeof loadServices === 'function' ? loadServices() : Promise.resolve(), typeof loadModelGroups === 'function' ? loadModelGroups() : Promise.resolve(), typeof loadOverseer === 'function' ? loadOverseer() : Promise.resolve(), typeof loadUltraRouter === 'function' ? loadUltraRouter() : Promise.resolve()]);
+    await Promise.all([loadModelConnections(), refreshAcpStatus({ force: true }), loadVeniceCatalog(), typeof loadOpenRouterCatalog === 'function' ? loadOpenRouterCatalog() : Promise.resolve(), ...(typeof loadDirectProviderCatalog === 'function' ? ['openai', 'anthropic', 'xai', 'gemini', 'meta'].map(p => loadDirectProviderCatalog(p)) : []), typeof loadServices === 'function' ? loadServices() : Promise.resolve(), typeof loadModelGroups === 'function' ? loadModelGroups() : Promise.resolve(), typeof loadOverseer === 'function' ? loadOverseer() : Promise.resolve(), typeof loadUltraRouter === 'function' ? loadUltraRouter() : Promise.resolve()]);
     selectModelsSubtab(modelsSubtab);
   }
   if (pane === 'tools') { await Promise.all([loadPermissionsSettings(), loadHooksSettings(), loadBrowserSettings()]); }

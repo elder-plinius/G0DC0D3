@@ -271,7 +271,7 @@ EOF
 esac
 `, { mode: 0o755 });
 
-    const provider = new AntigravityCliProvider({ binary: fakeAgy, model: 'gemini-4-neon-medium' });
+    const provider = new AntigravityCliProvider({ binary: fakeAgy, model: 'gemini-4-neon-medium', useAcp: false });
     try {
       const baseTask = { id: 'task-kv-1', title: 'KV', objective: 'Build feature', constraints: [], status: 'running', calls: 1, recoveries: 0, contractVersion: 1 };
       const bigContent = 'export const data = "' + 'x'.repeat(2000) + '";\n';

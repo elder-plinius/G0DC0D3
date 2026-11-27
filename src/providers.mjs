@@ -4,6 +4,7 @@ import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { TOOLS } from './broker.mjs';
+import { STRICT_DEFAULT_PRESET } from './permissions.mjs';
 import { resolveCatalogEntry } from './model-catalog.mjs';
 import { classifyProviderFailure } from './outcomes.mjs';
 import { compilePrompt, compileInstructions, compileTaskContext, buildToolPlaybook, effortInstructions, PROMPT_VERSION, PERSONAS, resolvePersona } from './prompts.mjs';
@@ -22,6 +23,12 @@ import {
   redactOutboundValue,
   redactOutboundText
 } from './privacy.mjs';
+import {
+  AcpClient,
+  AcpSessionPool,
+  createAcpPermissionHandler,
+  createAcpSandboxHandlers
+} from './acp-client.mjs';
 
 export { compilePrompt, compileInstructions, compileTaskContext, inspectPrompt, PROMPT_VERSION, PERSONAS } from './prompts.mjs';
 
@@ -2231,20 +2238,76 @@ function buildAntigravityDeltaPayload(context, cached) {
 
 /** Subscription-authenticated Google Antigravity CLI (agy) planner. CLI owns Google auth; the broker owns effects. */
 export class AntigravityCliProvider extends CodexProvider {
-  constructor({ id = 'antigravity-cli', label = 'Google Antigravity (agy) · CLI default', binary = process.env.G0D_ANTIGRAVITY_BINARY || 'agy', timeoutMs = 180000, model, environment = process.env, subscriptionId = 'antigravity-cli', cliSettings = {} } = {}) {
+  constructor({ id = 'antigravity-cli', label = 'Google Antigravity (agy) · CLI default', binary = process.env.G0D_ANTIGRAVITY_BINARY || 'agy', timeoutMs = 180000, model, environment = process.env, subscriptionId = 'antigravity-cli', cliSettings = {}, useAcp } = {}) {
     super({ id, label, binary, timeoutMs, model, environment, subscriptionId, cliSettings });
     this.kind = 'antigravity-cli';
     this.tier = inferProviderTier({ id, model: model || 'gemini-4-neon-high' });
     this.accounting = 'Antigravity CLI turns and reported usage; underlying provider attempts are opaque';
     this.sessions = new Map();
     this.inFlightSessions = new Set();
+    this.acpPool = new AcpSessionPool({ maxClients: 8 });
+    this._acpUnsupported = false;
+    this._acpEverSucceeded = false;
+    const transportPref = String(cliSettings?.transport || '').toLowerCase();
+    const envFlag = environment?.G0D_AGY_ACP ?? process.env.G0D_AGY_ACP;
+    if (typeof useAcp === 'boolean') this.acpEnabled = useAcp;
+    else if (transportPref === 'subprocess' || envFlag === '0') this.acpEnabled = false;
+    else if (transportPref === 'acp' || envFlag === '1') this.acpEnabled = true;
+    else this.acpEnabled = path.basename(String(binary || '')) === 'agy';
   }
-  close() {
+  acpStatus() {
+    return this.acpPool.status();
+  }
+  async close() {
+    this.closed = true;
     this.sessions.clear();
     this.inFlightSessions.clear();
+    await this.acpPool.closeAll().catch(() => {});
     return super.close();
   }
-  async draft(messages = [], signal, _maxTokens = 1000, _params = {}, { privacy = DEFAULT_PRIVACY_SETTINGS, onOutbound, extraSecrets } = {}) {
+  async _acquireAcpSession(poolKey, { env, model, effort, signal } = {}) {
+    if (this.closed) throw Object.assign(new Error('Antigravity CLI provider is closed.'), { code: 'PROVIDER_CLOSED', retryable: false });
+    const existing = this.acpPool.get(poolKey);
+    if (existing && existing.client.isAlive() && existing.model === (model || null)) {
+      return existing;
+    }
+    if (existing) await this.acpPool.drop(poolKey);
+    const working = await fs.mkdtemp(path.join(tmpdir(), 'g0d-agy-acp-'));
+    const client = new AcpClient({
+      binary: this.binary,
+      args: ['acp', '--disable-telemetry'],
+      cwd: working,
+      env,
+      capabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+      permissionHandler: createAcpPermissionHandler({ mode: 'planner' }),
+    });
+    const origClose = client.close.bind(client);
+    client.close = async () => {
+      try { await origClose(); } finally { await fs.rm(working, { recursive: true, force: true }).catch(() => {}); }
+    };
+    try {
+      if (signal?.aborted) throw Object.assign(new Error('Antigravity ACP cancelled.'), { code: 'cancelled', retryable: false });
+      const sess = await client.createSession({ cwd: working, model: model || this.model || null, mode: 'plan', effort, signal });
+      if (this.closed || signal?.aborted) {
+        await client.close().catch(() => {});
+        throw Object.assign(new Error(this.closed ? 'Antigravity CLI provider is closed.' : 'Antigravity ACP cancelled.'), { code: this.closed ? 'PROVIDER_CLOSED' : 'cancelled', retryable: false });
+      }
+      const entry = {
+        client,
+        sessionId: sess.sessionId,
+        harnessId: 'antigravity-cli',
+        model: model || this.model || null,
+        mode: 'planner',
+        working,
+      };
+      this.acpPool.set(poolKey, entry);
+      return entry;
+    } catch (err) {
+      await client.close().catch(() => {});
+      throw err;
+    }
+  }
+  async draft(messages = [], signal, _maxTokens = 1000, _params = {}, { privacy = DEFAULT_PRIVACY_SETTINGS, onOutbound, extraSecrets, onDelta } = {}) {
     if (this.closed) return { type: 'error', code: 'PROVIDER_CLOSED', message: 'Antigravity CLI provider is closed.', retryable: false };
     if (signal?.aborted) return { type: 'error', code: 'cancelled', message: 'Antigravity CLI request cancelled.', retryable: false };
     const gate = checkProviderPrivacyAllowed(this, privacy);
@@ -2253,14 +2316,55 @@ export class AntigravityCliProvider extends CodexProvider {
       return { type: 'error', code: gate.code, message: gate.message, retryable: false };
     }
     const cleaned = privacy.redactOutboundSecrets === false ? { value: messages, count: 0 } : redactOutboundValue(messages, extraSecrets || environmentSecrets());
-    onOutbound?.({ providerId: this.id, host: 'cli:antigravity', protocol: this.kind, zdrClass: gate.posture.zdrClass, zdrFlags: ['cli:telemetry-disabled'], secretsRedacted: cleaned.count, blocked: false });
+    const useAcpNow = Boolean(this.acpEnabled && !this._acpUnsupported);
+    onOutbound?.({ providerId: this.id, host: useAcpNow ? 'acp:antigravity' : 'cli:antigravity', protocol: useAcpNow ? 'acp-v1' : this.kind, zdrClass: gate.posture.zdrClass, zdrFlags: ['cli:telemetry-disabled'], secretsRedacted: cleaned.count, blocked: false });
     const promptText = [
       'CRITICAL: Planner/advisory text-only call. DO NOT invoke any Antigravity CLI built-in tools.',
       ...(Array.isArray(cleaned.value) ? cleaned.value.map(m => `${String(m?.role || 'user').toUpperCase()}:\n${String(m?.content || '')}`) : [String(cleaned.value || '')])
     ].join('\n\n');
+    const env = antigravitySubscriptionEnvironment(cliEnvironments.get(this));
+
+    if (useAcpNow) {
+      const draftKey = `draft:${randomUUID().slice(0, 8)}`;
+      try {
+        const entry = await this._acquireAcpSession(draftKey, { env, model: this.model, effort: this.cliSettings?.reasoningEffort, signal });
+        try {
+          const res = await entry.client.prompt({
+            sessionId: entry.sessionId,
+            text: promptText,
+            signal,
+            timeoutMs: 90000,
+            onDelta,
+          });
+          if (res.toolCalls.length > 0) {
+            return { type: 'error', code: 'tool_protocol', message: 'Planner-only Antigravity ACP draft attempted an internal tool call; response rejected.', retryable: true };
+          }
+          this._acpEverSucceeded = true;
+          return {
+            type: 'message',
+            text: res.text,
+            reasoning: res.reasoning || undefined,
+            finish: 'done',
+            usage: res.usage,
+            model: this.model || 'antigravity-cli-default',
+            transport: 'acp-v1',
+          };
+        } finally {
+          await this.acpPool.drop(draftKey);
+        }
+      } catch (err) {
+        if (this.closed || signal?.aborted || ['cancelled', 'PROVIDER_CLOSED', 'ETIMEDOUT', 'quota_exhausted', 'rate_limit'].includes(err?.code)) {
+          return { type: 'error', code: signal?.aborted ? 'cancelled' : (err?.code || 'acp_error'), message: err?.message || 'Antigravity ACP draft interrupted.', retryable: Boolean(err?.retryable), ...(err?.retryAfterMs ? { retryAfterMs: err.retryAfterMs } : {}) };
+        }
+        // Only permanently disable ACP if it has never succeeded on this binary and handshake failed.
+        if (!this._acpEverSucceeded && (err?.code === 'acp_init_failed' || err?.code === 'provider_configuration')) {
+          this._acpUnsupported = true;
+        }
+      }
+    }
+
     const working = await fs.mkdtemp(path.join(tmpdir(), 'g0d-agy-draft-'));
     try {
-      const env = antigravitySubscriptionEnvironment(cliEnvironments.get(this));
       const args = ['--output-format', 'json', '--disable-slash-commands', '--sandbox'];
       if (this.model) args.push('--model', this.model);
       const output = await runSubprocessPlanner(this, { args, cwd: working, signal, timeoutOverrideMs: 60000, input: promptText, env, label: 'Antigravity' });
@@ -2277,6 +2381,7 @@ export class AntigravityCliProvider extends CodexProvider {
         if (typeof parsed.response === 'string') text = parsed.response;
         else if (typeof parsed.text === 'string') text = parsed.text;
       }
+      if (onDelta && text) onDelta({ type: 'text', text });
       return { type: 'message', text, finish: 'done', usage: parsed?.usage || null, model: this.model || 'antigravity-cli-default' };
     } catch (err) {
       return { type: 'error', code: err?.code || 'provider_error', message: err?.message || 'Antigravity CLI draft failed.', retryable: Boolean(err?.retryable) };
@@ -2284,7 +2389,7 @@ export class AntigravityCliProvider extends CodexProvider {
       await fs.rm(working, { recursive: true, force: true });
     }
   }
-  async turn(context, { signal, turnTimeoutMs, privacy = DEFAULT_PRIVACY_SETTINGS, onOutbound, extraSecrets } = {}) {
+  async turn(context, { signal, turnTimeoutMs, privacy = DEFAULT_PRIVACY_SETTINGS, onOutbound, extraSecrets, onDelta } = {}) {
     if (this.closed) throw Object.assign(new Error('Antigravity CLI provider is closed'), { code: 'PROVIDER_CLOSED', retryable: false });
     if (signal?.aborted) throw Object.assign(new Error('Antigravity CLI bridge cancelled'), { code: 'cancelled' });
     const gate = checkProviderPrivacyAllowed(this, privacy);
@@ -2294,7 +2399,8 @@ export class AntigravityCliProvider extends CodexProvider {
     }
     const cleaned = privacy.redactOutboundSecrets === false ? { value: context, count: 0 } : redactOutboundValue(context, extraSecrets || environmentSecrets());
     context = cleaned.value;
-    onOutbound?.({ providerId: this.id, host: 'cli:antigravity', protocol: this.kind, zdrClass: gate.posture.zdrClass, zdrFlags: ['cli:telemetry-disabled'], secretsRedacted: cleaned.count, blocked: false });
+    const tryAcpInit = Boolean(this.acpEnabled && !this._acpUnsupported);
+    onOutbound?.({ providerId: this.id, host: tryAcpInit ? 'acp:antigravity' : 'cli:antigravity', protocol: tryAcpInit ? 'acp-v1' : this.kind, zdrClass: gate.posture.zdrClass, zdrFlags: tryAcpInit ? ['acp:persistent-stdio', 'cli:telemetry-disabled'] : ['cli:telemetry-disabled'], secretsRedacted: cleaned.count, blocked: false });
     const tools = context.tools ?? canonicalTools;
     const taskId = typeof context.task?.id === 'string' && context.task.id ? context.task.id : null;
     const history = Array.isArray(context.history) ? context.history : [];
@@ -2315,34 +2421,36 @@ export class AntigravityCliProvider extends CodexProvider {
     const canManageSession = Boolean(taskId && history.length > 0 && maxEventSeq > 0 && !this.inFlightSessions.has(taskId));
     if (canManageSession) this.inFlightSessions.add(taskId);
 
-    const cached = canManageSession ? this.sessions.get(taskId) : null;
-    const followupsAppendOnly = Boolean(
-      cached
-      && followups.length >= (cached.followupsCount || 0)
-      && followupsPrefixHash(cached.followupsCount || 0) === cached.followupsHash
-    );
-    const canReuseSession = Boolean(
-      canManageSession
-      && cached
-      && validConvId(cached.conversationId)
-      && cached.strategy === strategy
-      && contractVersion >= cached.contractVersion
-      && followupsAppendOnly
-      && cached.recoveries === recoveries
-      && cached.toolSig === toolSig
-      && cached.contractSig === contractSig
-      && cached.lastEventSeq > 0
-      && maxEventSeq >= cached.lastEventSeq
-      && compactedBeforeSeq <= cached.lastEventSeq
-    );
-    if (canManageSession && cached && !canReuseSession) {
-      this.sessions.delete(taskId);
-    }
-
-    const turnStartedAt = Date.now();
-    const turnBudgetMs = Number.isFinite(turnTimeoutMs) && turnTimeoutMs > 0 ? Math.max(this.timeoutMs, turnTimeoutMs) : this.timeoutMs;
-    const working = await fs.mkdtemp(path.join(tmpdir(), 'g0d-agy-planner-'));
+    let working = null;
     try {
+      const cached = canManageSession ? this.sessions.get(taskId) : null;
+      const followupsAppendOnly = Boolean(
+        cached
+        && followups.length >= (cached.followupsCount || 0)
+        && followupsPrefixHash(cached.followupsCount || 0) === cached.followupsHash
+      );
+      const canReuseSession = Boolean(
+        canManageSession
+        && cached
+        && validConvId(cached.conversationId)
+        && cached.strategy === strategy
+        && contractVersion >= cached.contractVersion
+        && followupsAppendOnly
+        && cached.recoveries === recoveries
+        && cached.toolSig === toolSig
+        && cached.contractSig === contractSig
+        && cached.lastEventSeq > 0
+        && maxEventSeq >= cached.lastEventSeq
+        && compactedBeforeSeq <= cached.lastEventSeq
+      );
+      if (canManageSession && cached && !canReuseSession) {
+        this.sessions.delete(taskId);
+        await this.acpPool.drop(`task:${taskId}`).catch(() => {});
+      }
+
+      const turnStartedAt = Date.now();
+      const turnBudgetMs = Number.isFinite(turnTimeoutMs) && turnTimeoutMs > 0 ? Math.max(this.timeoutMs, turnTimeoutMs) : this.timeoutMs;
+      working = await fs.mkdtemp(path.join(tmpdir(), 'g0d-agy-planner-'));
       if (this.closed) throw Object.assign(new Error('Antigravity CLI provider is closed'), { code: 'PROVIDER_CLOSED', retryable: false });
       const env = antigravitySubscriptionEnvironment(cliEnvironments.get(this));
       const buildArgs = conversationId => {
@@ -2397,30 +2505,117 @@ export class AntigravityCliProvider extends CodexProvider {
         return { decision, usage, nextConversationId };
       };
 
-      let result;
-      if (canReuseSession) {
+      const invokeViaAcp = async (reuseWarm, timeoutOverrideMs = null) => {
+        const poolKey = canManageSession ? `task:${taskId}` : `ephem:${randomUUID().slice(0, 8)}`;
+        if (!reuseWarm) await this.acpPool.drop(poolKey).catch(() => {});
+        const entry = await this._acquireAcpSession(poolKey, {
+          env,
+          model: this.model,
+          effort: this.cliSettings?.reasoningEffort || context.task?.effort,
+          signal,
+        });
+        // Strictly verify same transport AND same live AcpClient instance before sending a delta!
+        const useDelta = Boolean(
+          reuseWarm
+          && cached
+          && cached.transport === 'acp-v1'
+          && cached.client === entry.client
+          && entry.sessionId === cached.conversationId
+        );
+        const promptText = useDelta ? buildAntigravityDeltaPayload(context, cached) : buildFullPayload();
+        const images = Array.isArray(context.visualObservations)
+          ? context.visualObservations.slice(0, 8).map(obs => {
+              const m = String(obs?.dataUrl || '').match(/^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/=]+)$/);
+              if (!m || m[2].length > 14 * 1024 * 1024) return null;
+              return { mimeType: m[1], data: m[2] };
+            }).filter(Boolean)
+          : [];
         try {
-          result = await invokeAndParse(cached.conversationId);
-        } catch (err) {
-          this.sessions.delete(taskId);
-          const remainingMs = turnBudgetMs - (Date.now() - turnStartedAt);
-          if (err?.code === 'cancelled' || err?.code === 'PROVIDER_CLOSED' || err?.code === 'ETIMEDOUT' || signal?.aborted || this.closed || remainingMs < 15000) throw err;
-          // Warm session expired or errored — fall back transparently to a fresh full-context turn within remaining timeout budget.
-          result = await invokeAndParse(null, remainingMs);
+          const res = await entry.client.prompt({
+            sessionId: entry.sessionId,
+            text: promptText,
+            images,
+            signal,
+            timeoutMs: timeoutOverrideMs || turnBudgetMs,
+            onDelta: onDelta ? (evt => { if (evt?.type === 'reasoning') onDelta(evt); }) : null,
+          });
+          if (res.toolCalls.length > 0) {
+            await this.acpPool.drop(poolKey).catch(() => {});
+            throw Object.assign(new Error('Planner-only Antigravity ACP bridge attempted an internal tool call; response rejected'), { code: 'tool_protocol' });
+          }
+          const decision = parsePlannerDecisionEnvelope(res.text, tools, 'Antigravity ACP');
+          this._acpEverSucceeded = true;
+          return {
+            decision,
+            reasoning: res.reasoning || undefined,
+            usage: res.usage,
+            nextConversationId: entry.sessionId,
+            transport: 'acp-v1',
+            client: entry.client,
+          };
+        } finally {
+          if (!canManageSession) await this.acpPool.drop(poolKey).catch(() => {});
         }
-      } else {
-        result = await invokeAndParse(null);
+      };
+
+      let result;
+      const tryAcp = Boolean(this.acpEnabled && !this._acpUnsupported);
+      if (tryAcp) {
+        try {
+          const canReuseAcp = Boolean(canReuseSession && cached?.transport === 'acp-v1');
+          if (canReuseAcp) {
+            try {
+              result = await invokeViaAcp(true);
+            } catch (err) {
+              this.sessions.delete(taskId);
+              await this.acpPool.drop(`task:${taskId}`).catch(() => {});
+              const remainingMs = turnBudgetMs - (Date.now() - turnStartedAt);
+              if (err?.code === 'cancelled' || err?.code === 'PROVIDER_CLOSED' || err?.code === 'ETIMEDOUT' || err?.code === 'quota_exhausted' || err?.code === 'rate_limit' || signal?.aborted || this.closed || remainingMs < 15000) throw err;
+              result = await invokeViaAcp(false, remainingMs);
+            }
+          } else {
+            result = await invokeViaAcp(false);
+          }
+        } catch (acpErr) {
+          if (acpErr?.code === 'cancelled' || acpErr?.code === 'PROVIDER_CLOSED' || acpErr?.code === 'ETIMEDOUT' || acpErr?.code === 'quota_exhausted' || acpErr?.code === 'rate_limit' || signal?.aborted || this.closed) {
+            throw acpErr;
+          }
+          // Only latch _acpUnsupported when ACP has never succeeded on this binary and handshake failed.
+          if (!this._acpEverSucceeded && (acpErr?.code === 'acp_init_failed' || acpErr?.code === 'provider_configuration')) {
+            this._acpUnsupported = true;
+          }
+          result = null;
+        }
+      }
+
+      if (!result) {
+        const canReuseSubprocess = Boolean(canReuseSession && this.sessions.has(taskId) && cached?.transport !== 'acp-v1');
+        if (canReuseSubprocess) {
+          try {
+            result = await invokeAndParse(cached.conversationId);
+          } catch (err) {
+            this.sessions.delete(taskId);
+            const remainingMs = turnBudgetMs - (Date.now() - turnStartedAt);
+            if (err?.code === 'cancelled' || err?.code === 'PROVIDER_CLOSED' || err?.code === 'ETIMEDOUT' || signal?.aborted || this.closed || remainingMs < 15000) throw err;
+            result = await invokeAndParse(null, remainingMs);
+          }
+        } else {
+          result = await invokeAndParse(null);
+        }
       }
 
       if (canManageSession) {
         if (result.decision.finish === 'refusal' || !validConvId(result.nextConversationId)) {
           this.sessions.delete(taskId);
+          await this.acpPool.drop(`task:${taskId}`).catch(() => {});
         } else {
           const fileSnapshots = new Map(
             (context.files || []).map(f => [f.path, { sha256: f.sha256, hasContent: typeof f.content === 'string' }])
           );
           this.sessions.set(taskId, {
             conversationId: result.nextConversationId,
+            transport: result.transport || 'subprocess',
+            client: result.client || null,
             lastEventSeq: maxEventSeq,
             followupsCount: followups.length,
             followupsHash: followupsPrefixHash(followups.length),
@@ -2431,7 +2626,6 @@ export class AntigravityCliProvider extends CodexProvider {
             toolSig,
             contractSig,
           });
-          // Bound session cache size to prevent unbounded growth in long-lived servers
           if (this.sessions.size > 200) {
             const oldestKey = this.sessions.keys().next().value;
             if (oldestKey && oldestKey !== taskId) this.sessions.delete(oldestKey);
@@ -2439,10 +2633,311 @@ export class AntigravityCliProvider extends CodexProvider {
         }
       }
 
-      return { ...result.decision, usage: result.usage, model: this.model || 'antigravity-cli-default', evidenceKind: 'live_antigravity_cli', accounting: this.accounting };
+      return {
+        ...result.decision,
+        ...(result.reasoning ? { reasoning: result.reasoning } : {}),
+        usage: result.usage,
+        model: this.model || 'antigravity-cli-default',
+        evidenceKind: result.transport === 'acp-v1' ? 'live_antigravity_acp' : 'live_antigravity_cli',
+        ...(result.transport ? { transport: result.transport } : {}),
+        accounting: this.accounting,
+      };
     } finally {
       if (canManageSession) this.inFlightSessions.delete(taskId);
-      await fs.rm(working, { recursive: true, force: true });
+      if (working) await fs.rm(working, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+}
+
+/**
+ * Universal Agent Client Protocol (ACP v1) Multi-Harness Provider.
+ * Connects G0DC0D3 to any ACP-capable CLI harness (agy acp, claude-code-acp, codex-acp,
+ * gemini --experimental-acp, opencode acp) over persistent JSON-RPC 2.0 stdio with
+ * G0DC0D3-mediated workspace fs/*, Seatbelt/bwrap terminal/*, and permission enforcement.
+ */
+export class AcpHarnessProvider {
+  constructor({
+    id = 'acp:antigravity',
+    harnessId = 'antigravity-cli',
+    label = 'ACP Multi-Harness Provider',
+    binary = process.env.G0D_ANTIGRAVITY_BINARY || 'agy',
+    args = ['acp', '--disable-telemetry'],
+    model = null,
+    delegated = true,
+    timeoutMs = 180000,
+    environment = process.env,
+    tier = 'frontier',
+    subscriptionId = 'acp',
+    cliSettings = {},
+  } = {}) {
+    Object.assign(this, {
+      id,
+      harnessId,
+      label,
+      binary,
+      args: Array.isArray(args) ? [...args] : [],
+      model,
+      delegated: Boolean(delegated),
+      timeoutMs,
+      subscriptionId,
+      cliSettings: cliSettings || {},
+      kind: 'acp',
+      protocol: 'acp-v1',
+      tier: inferProviderTier({ id, model, tier }),
+      available: true,
+      accounting: 'Persistent ACP v1 stdio harness session with G0DC0D3-mediated fs/terminal/permission controls',
+      capabilities: providerCapabilities(true, 'acp'),
+      closed: false,
+    });
+    cliEnvironments.set(this, cliEnvironment(environment));
+    this.acpPool = new AcpSessionPool({ maxClients: 8 });
+    this.inFlightSessions = new Set();
+  }
+
+  acpStatus() {
+    return this.acpPool.status();
+  }
+
+  async close() {
+    this.closed = true;
+    this.inFlightSessions.clear();
+    await this.acpPool.closeAll().catch(() => {});
+  }
+
+  _scopedHarnessEnv() {
+    const base = { ...(cliEnvironments.get(this) || {}), ...CLI_NO_TELEMETRY_ENV };
+    const harnessConfigKeep = {
+      'codex-cli': new Set(['CODEX_HOME']),
+      'claude-code': new Set(['CLAUDE_CONFIG_DIR']),
+      'gemini-cli': new Set(['GEMINI_CONFIG_DIR', 'GOOGLE_CLOUD_PROJECT', 'GOOGLE_CLOUD_LOCATION']),
+      'antigravity-cli': new Set(['GOOGLE_CLOUD_PROJECT', 'GOOGLE_CLOUD_LOCATION']),
+      'opencode': new Set([]),
+    };
+    const keep = harnessConfigKeep[this.harnessId] || new Set();
+    for (const key of ['CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CONFIG_DIR', 'GH_CONFIG_DIR', 'COPILOT_CONFIG_DIR']) {
+      if (!keep.has(key)) delete base[key];
+    }
+    return this.harnessId === 'antigravity-cli' ? antigravitySubscriptionEnvironment(base) : base;
+  }
+
+  async _createClient({ workspace, execution, planMode, permissionRules, privacy = DEFAULT_PRIVACY_SETTINGS, extraSecrets = null, onPermissionDecision, onFileModified, onTerminalEvent }) {
+    const env = this._scopedHarnessEnv();
+    const effectiveCwd = workspace || await fs.mkdtemp(path.join(tmpdir(), 'g0d-acp-cwd-'));
+    const tempOwned = !workspace;
+    const effectiveRules = Array.isArray(permissionRules) && permissionRules.length > 0 ? permissionRules : STRICT_DEFAULT_PRESET;
+    const sandboxHandlers = this.delegated && workspace
+      ? createAcpSandboxHandlers({ workspace, execution, planMode, permissionRules: effectiveRules, privacy, extraSecrets, onFileModified, onTerminalEvent })
+      : null;
+    const permissionHandler = createAcpPermissionHandler({
+      mode: this.delegated && workspace ? 'delegated' : 'planner',
+      workspace: workspace || null,
+      planMode: Boolean(planMode),
+      permissionRules: effectiveRules,
+      privacy,
+      onPermissionDecision,
+    });
+    const client = new AcpClient({
+      binary: this.binary,
+      args: this.args,
+      cwd: effectiveCwd,
+      env,
+      capabilities: this.delegated && workspace
+        ? { fs: { readTextFile: true, writeTextFile: !planMode }, terminal: Boolean(execution?.enabled && !planMode) }
+        : { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+      permissionHandler,
+      sandboxHandlers,
+    });
+    if (tempOwned) {
+      const origClose = client.close.bind(client);
+      client.close = async () => {
+        try { await origClose(); } finally { await fs.rm(effectiveCwd, { recursive: true, force: true }).catch(() => {}); }
+      };
+    }
+    return { client, effectiveCwd, sandboxHandlers };
+  }
+
+  async draft(messages = [], signal, _maxTokens = 2000, _params = {}, { privacy = DEFAULT_PRIVACY_SETTINGS, onOutbound, extraSecrets, onDelta } = {}) {
+    if (this.closed) return { type: 'error', code: 'PROVIDER_CLOSED', message: 'ACP harness provider is closed.', retryable: false };
+    if (signal?.aborted) return { type: 'error', code: 'cancelled', message: 'ACP request cancelled.', retryable: false };
+    const gate = checkProviderPrivacyAllowed(this, privacy);
+    if (!gate.allowed) {
+      onOutbound?.({ providerId: this.id, host: `acp:${this.harnessId}`, protocol: 'acp-v1', zdrClass: gate.posture.zdrClass, zdrFlags: [], secretsRedacted: 0, blocked: true, reason: gate.message });
+      return { type: 'error', code: gate.code, message: gate.message, retryable: false };
+    }
+    const cleaned = privacy.redactOutboundSecrets === false ? { value: messages, count: 0 } : redactOutboundValue(messages, extraSecrets || environmentSecrets());
+    onOutbound?.({ providerId: this.id, host: `acp:${this.harnessId}`, protocol: 'acp-v1', zdrClass: gate.posture.zdrClass, zdrFlags: ['acp:persistent-stdio', 'cli:telemetry-disabled'], secretsRedacted: cleaned.count, blocked: false });
+    const promptText = (Array.isArray(cleaned.value) ? cleaned.value : [{ role: 'user', content: String(cleaned.value || '') }])
+      .map(m => `${String(m?.role || 'user').toUpperCase()}:\n${String(m?.content || '')}`)
+      .join('\n\n');
+    const { client, effectiveCwd } = await this._createClient({ workspace: null, planMode: true, privacy, extraSecrets });
+    try {
+      const sess = await client.createSession({ cwd: effectiveCwd, model: this.model, mode: 'plan', effort: this.cliSettings?.reasoningEffort, signal });
+      const res = await client.prompt({
+        sessionId: sess.sessionId,
+        text: promptText,
+        signal,
+        timeoutMs: Math.min(this.timeoutMs, 120000),
+        onDelta,
+      });
+      if (res.toolCalls.length > 0) {
+        return { type: 'error', code: 'tool_protocol', message: 'Planner-only ACP draft attempted an internal tool call; response rejected.', retryable: true };
+      }
+      return {
+        type: 'message',
+        text: res.text,
+        reasoning: res.reasoning || undefined,
+        finish: 'done',
+        usage: res.usage,
+        model: this.model || this.harnessId,
+        transport: 'acp-v1',
+      };
+    } catch (err) {
+      return { type: 'error', code: err?.code || 'acp_error', message: err?.message || 'ACP draft failed.', retryable: Boolean(err?.retryable), ...(err?.retryAfterMs ? { retryAfterMs: err.retryAfterMs } : {}) };
+    } finally {
+      await client.close().catch(() => {});
+    }
+  }
+
+  async turn(context, { signal, turnTimeoutMs, privacy = DEFAULT_PRIVACY_SETTINGS, onOutbound, extraSecrets, onDelta } = {}) {
+    if (this.closed) throw Object.assign(new Error('ACP harness provider is closed'), { code: 'PROVIDER_CLOSED', retryable: false });
+    if (signal?.aborted) throw Object.assign(new Error('ACP harness cancelled'), { code: 'cancelled', retryable: false });
+    const gate = checkProviderPrivacyAllowed(this, privacy);
+    if (!gate.allowed) {
+      onOutbound?.({ providerId: this.id, host: `acp:${this.harnessId}`, protocol: 'acp-v1', zdrClass: gate.posture.zdrClass, zdrFlags: [], secretsRedacted: 0, blocked: true, reason: gate.message });
+      return { type: 'error', code: gate.code, message: gate.message, retryable: false };
+    }
+    const cleaned = privacy.redactOutboundSecrets === false ? { value: context, count: 0 } : redactOutboundValue(context, extraSecrets || environmentSecrets());
+    context = cleaned.value;
+    onOutbound?.({ providerId: this.id, host: `acp:${this.harnessId}`, protocol: 'acp-v1', zdrClass: gate.posture.zdrClass, zdrFlags: ['acp:persistent-stdio', 'cli:telemetry-disabled'], secretsRedacted: cleaned.count, blocked: false });
+
+    const task = context.task || {};
+    const hasDurableTaskId = typeof task.id === 'string' && task.id.length > 0;
+    const poolKey = hasDurableTaskId ? `${this.id}:${task.id}` : `${this.id}:ephem-${randomUUID().slice(0, 8)}`;
+    const isEphemeral = !hasDurableTaskId || this.inFlightSessions.has(poolKey);
+    const effectiveKey = isEphemeral ? `${this.id}:ephem-${randomUUID().slice(0, 8)}` : poolKey;
+    this.inFlightSessions.add(effectiveKey);
+
+    try {
+      const workspace = task.workspace || null;
+      const planMode = Boolean(task.planMode);
+      const execution = task.execution || { enabled: false, network: false, timeoutMs: 30000 };
+      const effectiveRules = Array.isArray(task.permissionRules) && task.permissionRules.length > 0
+        ? task.permissionRules
+        : STRICT_DEFAULT_PRESET;
+      const securityDigest = createHash('sha256').update(JSON.stringify({
+        workspace,
+        planMode,
+        recoveries: task.recoveries || 0,
+        execution,
+        effectiveRules,
+        privacy: { localOnly: Boolean(privacy?.localOnly), redactOutboundSecrets: privacy?.redactOutboundSecrets !== false, scopeAllow: privacy?.scopeAllow || [], scopeDeny: privacy?.scopeDeny || [] },
+        model: this.model || null,
+        effort: task.effort || this.cliSettings?.reasoningEffort || null,
+        objective: task.objective || '',
+        constraints: task.constraints || [],
+        contractVersion: task.contractVersion || 1,
+      })).digest('hex');
+
+      let entry = isEphemeral ? null : this.acpPool.get(effectiveKey);
+      if (entry && entry.securityDigest !== securityDigest) {
+        await this.acpPool.drop(effectiveKey);
+        entry = null;
+      }
+
+      if (!entry) {
+        const { client, effectiveCwd, sandboxHandlers } = await this._createClient({
+          workspace,
+          execution,
+          planMode,
+          permissionRules: effectiveRules,
+          privacy,
+          extraSecrets,
+        });
+        try {
+          // Never put the child harness in 'auto' unless delegated + execution enabled + explicit wildcard allow;
+          // otherwise use 'plan' (read-only/planner) or 'default' so every action routes through G0DC0D3 permission mediation.
+          const hasExplicitWildcardAllow = effectiveRules.some(r => r?.tool === '*' && r?.action === 'allow');
+          const mode = (!this.delegated || planMode)
+            ? 'plan'
+            : (execution?.enabled && hasExplicitWildcardAllow ? 'auto' : 'default');
+          const sess = await client.createSession({
+            cwd: effectiveCwd,
+            model: this.model,
+            mode,
+            effort: task.effort || this.cliSettings?.reasoningEffort,
+            signal,
+          });
+          if (this.closed || signal?.aborted) {
+            await client.close().catch(() => {});
+            throw Object.assign(new Error(this.closed ? 'ACP harness provider is closed' : 'ACP harness cancelled'), { code: this.closed ? 'PROVIDER_CLOSED' : 'cancelled', retryable: false });
+          }
+          entry = {
+            client,
+            sessionId: sess.sessionId,
+            harnessId: this.harnessId,
+            model: this.model,
+            mode: this.delegated ? 'delegated' : 'planner',
+            workspace,
+            planMode,
+            securityDigest,
+            sandboxHandlers,
+            turnCount: 0,
+            followupsCount: 0,
+          };
+          this.acpPool.set(effectiveKey, entry);
+        } catch (err) {
+          await client.close().catch(() => {});
+          throw err;
+        }
+      }
+
+      const followups = Array.isArray(task.followups) ? task.followups : [];
+      const newFollowups = followups.slice(entry.followupsCount || 0).map(f => String(f?.message || '')).filter(Boolean);
+      const promptText = entry.turnCount === 0
+        ? [
+            task.objective || '',
+            task.constraints?.length ? `Constraints:\n- ${task.constraints.join('\n- ')}` : '',
+            task.overseerGuidance ? `Overseer Guidance: ${task.overseerGuidance}` : '',
+          ].filter(Boolean).join('\n\n')
+        : [
+            newFollowups.length ? newFollowups.join('\n\n') : 'Continue and complete the objective.',
+            task.overseerGuidance ? `Overseer Guidance: ${task.overseerGuidance}` : '',
+          ].filter(Boolean).join('\n\n');
+
+      let res;
+      try {
+        res = await entry.client.prompt({
+          sessionId: entry.sessionId,
+          text: promptText,
+          signal,
+          timeoutMs: Number.isFinite(turnTimeoutMs) && turnTimeoutMs > 0 ? Math.max(this.timeoutMs, turnTimeoutMs) : this.timeoutMs,
+          onDelta,
+          onToolCall: tc => onDelta?.({ type: 'tool_status', tool: tc.name, status: tc.status, title: tc.title }),
+        });
+      } catch (err) {
+        await this.acpPool.drop(effectiveKey).catch(() => {});
+        throw err;
+      }
+      entry.turnCount += 1;
+      entry.followupsCount = followups.length;
+
+      const refused = detectRefusal({ type: 'message', text: res.text });
+      return {
+        type: 'message',
+        text: res.text,
+        ...(res.reasoning ? { reasoning: res.reasoning } : {}),
+        finish: refused ? 'refusal' : 'done',
+        usage: res.usage,
+        model: this.model || this.harnessId,
+        transport: 'acp-v1',
+        acpToolCalls: res.toolCalls,
+        ttftMs: res.ttftMs,
+        evidenceKind: 'live_acp_harness',
+        accounting: this.accounting,
+      };
+    } finally {
+      this.inFlightSessions.delete(effectiveKey);
+      if (isEphemeral) await this.acpPool.drop(effectiveKey).catch(() => {});
     }
   }
 }

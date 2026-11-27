@@ -4,7 +4,7 @@ const ALLOWED_KEYS = new Set(['tool', 'pattern', 'action', 'reason', 'argsHash']
 const MAX_RULES = 50;
 const error = (code, message) => Object.assign(new Error(message), { code });
 
-const HARD_DENY_SHELL_RULES = Object.freeze([
+export const HARD_DENY_SHELL_RULES = Object.freeze([
   Object.freeze({ tool: 'process.run', pattern: '*rm -rf /*', action: 'deny', reason: 'Block destructive root deletion' }),
   Object.freeze({ tool: 'process.run', pattern: '*rm -fr /*', action: 'deny', reason: 'Block destructive root deletion' }),
   Object.freeze({ tool: 'process.run', pattern: '*rm -rf ~*', action: 'deny', reason: 'Block destructive home deletion' }),
