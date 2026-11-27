@@ -652,11 +652,11 @@ async function stageParityAndSubscriptions(rootDir) {
   const inproc = createInProcessDispatcher(app);
   const mutHeaders = { 'content-type': 'application/json', 'x-g0d-request': '1' };
   try {
-    // Subscription hub lists all 4 coding CLI subscriptions
+    // Subscription hub lists all 5 coding CLI subscriptions
     const conns = await inproc.request({ url: '/api/providers/connections' });
     assert.equal(conns.status, 200);
     const ids = (conns.json.connections || []).map(c => c.id);
-    for (const expected of ['claude-code', 'codex-cli', 'gemini-cli', 'copilot-cli']) {
+    for (const expected of ['claude-code', 'codex-cli', 'antigravity-cli', 'gemini-cli', 'copilot-cli']) {
       assert.ok(ids.includes(expected), `missing subscription definition ${expected}`);
     }
 
@@ -697,7 +697,7 @@ async function stageParityAndSubscriptions(rootDir) {
     assert.equal(tr.status, 200);
     assert.ok(tr.json.transcript.includes('# '));
 
-    return '4 subscription CLIs, FTS5 memory CRUD, skills CRUD, permission presets, commit/fork/transcript';
+    return '5 subscription CLIs, FTS5 memory CRUD, skills CRUD, permission presets, commit/fork/transcript';
   } finally {
     await app.close();
   }
@@ -714,7 +714,7 @@ async function main() {
     { id: '4-plan-build', name: 'Plan Mode -> Build -> Git -> /undo -> /compact', fn: () => stagePlanBuildUndoCompact(rootDir) },
     { id: '5-http-sse', name: 'HTTP server, auth, SSE, APIs & static assets', fn: () => stageHttpServer(rootDir) },
     { id: '6-cli', name: 'CLI help, fixtures, run --plan, and chat REPL', fn: () => stageCli(rootDir) },
-    { id: '7-parity-subs', name: 'Harness parity (Memory, Skills, Permissions, Fork, Transcript) & 4 Subscription CLIs', fn: () => stageParityAndSubscriptions(rootDir) }
+    { id: '7-parity-subs', name: 'Harness parity (Memory, Skills, Permissions, Fork, Transcript) & 5 Subscription CLIs', fn: () => stageParityAndSubscriptions(rootDir) }
   ];
 
   const startedAt = performance.now();

@@ -589,11 +589,26 @@ export class CronScheduler {
     const jobs = this.store.listScheduledJobs();
     const enabled = jobs.filter(j => j.enabled);
     const nextTimes = enabled.map(j => Date.parse(j.nextRunAt || '')).filter(Number.isFinite).sort((a, b) => a - b);
+    const completedJobs = jobs
+      .map(j => ({ j, ts: Date.parse(j.lastRunAt || '') }))
+      .filter(x => Number.isFinite(x.ts))
+      .sort((a, b) => b.ts - a.ts);
+    const recentRuns = completedJobs.slice(0, 8).map(({ j }) => ({
+      runId: j.lastRunId || `${j.id}:${j.lastRunAt}:${j.lastStatus || 'completed'}`,
+      jobId: j.id,
+      jobName: j.name || 'Scheduled job',
+      status: j.lastStatus || 'completed',
+      taskId: j.lastTaskId || null,
+      finishedAt: j.lastRunAt,
+    }));
+    const latestRun = recentRuns[0] || null;
     return {
       total: jobs.length,
       enabled: enabled.length,
       running: this._running.size,
       nextRunAt: nextTimes.length ? new Date(nextTimes[0]).toISOString() : null,
+      latestRun,
+      recentRuns,
     };
   }
 
@@ -760,10 +775,11 @@ export class CronScheduler {
             this.store.putScheduledJob({
               ...latest,
               runCount: nextCount,
+              lastRunId: finalRun.id,
               lastRunAt: finalRun.finishedAt,
               lastStatus: finalRun.status,
               lastError: finalRun.error,
-              lastTaskId: finalRun.taskId || latest.lastTaskId || null,
+              lastTaskId: finalRun.taskId || null,
               enabled: hitMax ? false : latest.enabled,
               nextRunAt: hitMax ? null : latest.nextRunAt,
               updatedAt: finalRun.finishedAt,

@@ -55,7 +55,7 @@ const profiles = {
     protocol: 'openai-chat',
     endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai',
     apiKeyEnv: 'GEMINI_API_KEY',
-    defaults: ['gemini-4-neon', 'gemini-4-pro', 'gemini-3-pro', 'gemini-2.5-pro', 'gemini-2.5-flash'],
+    defaults: ['gemini-4-neon', 'gemini-4-pro', 'gemini-3.8-flash', 'gemini-3-pro', 'gemini-2.5-pro', 'gemini-2.5-flash'],
   },
   meta: {
     label: 'Meta AI (Muse / Llama)',

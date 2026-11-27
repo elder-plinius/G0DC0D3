@@ -95,18 +95,19 @@ export const EXTERNAL_HARNESSES = Object.freeze([
     shortName: 'Gemini',
     command: 'gemini',
     providerPrefix: 'gemini-cli:',
-    providerRegex: /^gemini:|gemini[-_.]?[234]/i,
+    providerRegex: /^(?:gemini|gemini-cli):/i,
     benchmarkProbe: { id: 'gemini-cli:gemini-4-neon', model: 'gemini-4-neon', label: 'Gemini 4 Neon · Gemini' },
     description: 'Google Gemini CLI & direct Gemini 4 Neon / Pro models.'
   },
   {
     id: 'antigravity',
-    name: 'Antigravity (agy)',
+    name: 'Google Antigravity (agy)',
     shortName: 'Antigravity',
     command: 'agy',
-    providerPrefix: 'antigravity:',
-    benchmarkProbe: { id: 'gemini:gemini-4-neon', model: 'gemini-4-neon', label: 'Gemini 4 Neon · Antigravity' },
-    description: 'Google Antigravity agentic IDE & CLI harness.'
+    providerPrefix: 'antigravity-cli:',
+    providerRegex: /^antigravity-cli(?::|$)/i,
+    benchmarkProbe: { id: 'antigravity-cli:gemini-4-neon-high', model: 'gemini-4-neon-high', label: 'Gemini 4 Neon (High) · Antigravity' },
+    description: 'Google Antigravity CLI (agy) — Gemini 4 Neon, Carbon, Argon & Hydrogen.'
   },
   {
     id: 'hermes',
@@ -522,8 +523,13 @@ export function buildHarnessInvocation(harnessId, harnessCommand, fullPrompt) {
   if (harnessId === 'gemini-cli' || cmdName === 'gemini') {
     return { binName: cmdName, args: ['-p', '--', fullPrompt], stdinText: '', envKind: 'gemini' };
   }
-  if (harnessId === 'antigravity' || cmdName === 'agy') {
-    return { binName: cmdName, args: ['-p', '--', fullPrompt], stdinText: '', envKind: 'gemini' };
+  if (harnessId === 'antigravity' || harnessId === 'antigravity-cli' || cmdName === 'agy') {
+    return {
+      binName: cmdName,
+      args: ['--print', 'Read the advisory brief from stdin and respond concisely without editing files.', '--disable-slash-commands', '--sandbox'],
+      stdinText: fullPrompt,
+      envKind: 'gemini'
+    };
   }
   if (harnessId === 'copilot-cli' || cmdName === 'copilot') {
     return { binName: cmdName, args: ['-p', '--', fullPrompt], stdinText: '', envKind: 'copilot' };

@@ -1611,6 +1611,10 @@ export function normalizeCliSettings(kind, raw = {}) {
     const effort = ['low', 'medium', 'high', 'max'].includes(input.effort) ? input.effort : null;
     return { effort };
   }
+  if (k === 'antigravity' || k === 'antigravity-cli') {
+    const reasoningEffort = ['low', 'medium', 'high', 'xhigh', 'max'].includes(input.reasoningEffort) ? input.reasoningEffort : null;
+    return { reasoningEffort };
+  }
   return {};
 }
 
@@ -1849,6 +1853,12 @@ export function geminiSubscriptionEnvironment(environment=process.env) {
   return env;
 }
 
+export function antigravitySubscriptionEnvironment(environment=process.env) {
+  const env=cliEnvironment(environment);
+  for(const key of ['GEMINI_API_KEY','GOOGLE_API_KEY','GOOGLE_APPLICATION_CREDENTIALS','GOOGLE_GENAI_USE_VERTEXAI','ANTHROPIC_API_KEY','OPENAI_API_KEY'])delete env[key];
+  return env;
+}
+
 export function copilotSubscriptionEnvironment(environment=process.env) {
   const env=cliEnvironment(environment);
   for(const key of ['OPENAI_API_KEY','ANTHROPIC_API_KEY','GEMINI_API_KEY','GOOGLE_API_KEY'])delete env[key];
@@ -1987,6 +1997,65 @@ export class GeminiCliProvider extends CodexProvider {
       }
       const decision = parsePlannerDecisionEnvelope(envelopeText, tools, 'Gemini CLI');
       return { ...decision, usage, model: this.model || 'gemini-cli-default', evidenceKind: 'live_gemini_cli', accounting: this.accounting };
+    } finally { await fs.rm(working, { recursive: true, force: true }); }
+  }
+}
+
+/** Subscription-authenticated Google Antigravity CLI (agy) planner. CLI owns Google auth; the broker owns effects. */
+export class AntigravityCliProvider extends CodexProvider {
+  constructor({ id = 'antigravity-cli', label = 'Google Antigravity (agy) · CLI default', binary = process.env.G0D_ANTIGRAVITY_BINARY || 'agy', timeoutMs = 180000, model, environment = process.env, subscriptionId = 'antigravity-cli', cliSettings = {} } = {}) {
+    super({ id, label, binary, timeoutMs, model, environment, subscriptionId, cliSettings });
+    this.kind = 'antigravity-cli';
+    this.tier = inferProviderTier({ id, model: model || 'gemini-4-neon-high' });
+    this.accounting = 'Antigravity CLI turns and reported usage; underlying provider attempts are opaque';
+  }
+  async turn(context, { signal, turnTimeoutMs, privacy = DEFAULT_PRIVACY_SETTINGS, onOutbound, extraSecrets } = {}) {
+    if (this.closed) throw Object.assign(new Error('Antigravity CLI provider is closed'), { code: 'PROVIDER_CLOSED', retryable: false });
+    if (signal?.aborted) throw Object.assign(new Error('Antigravity CLI bridge cancelled'), { code: 'cancelled' });
+    const gate = checkProviderPrivacyAllowed(this, privacy);
+    if (!gate.allowed) {
+      onOutbound?.({ providerId: this.id, host: 'cli:antigravity', protocol: this.kind, zdrClass: gate.posture.zdrClass, zdrFlags: [], secretsRedacted: 0, blocked: true, reason: gate.message });
+      return { type: 'error', code: gate.code, message: gate.message, retryable: false };
+    }
+    const cleaned = privacy.redactOutboundSecrets === false ? { value: context, count: 0 } : redactOutboundValue(context, extraSecrets || environmentSecrets());
+    context = cleaned.value;
+    onOutbound?.({ providerId: this.id, host: 'cli:antigravity', protocol: this.kind, zdrClass: gate.posture.zdrClass, zdrFlags: ['cli:telemetry-disabled'], secretsRedacted: cleaned.count, blocked: false });
+    const tools = context.tools ?? canonicalTools;
+    const working = await fs.mkdtemp(path.join(tmpdir(), 'g0d-agy-planner-'));
+    try {
+      if (this.closed) throw Object.assign(new Error('Antigravity CLI provider is closed'), { code: 'PROVIDER_CLOSED', retryable: false });
+      const directive = 'Read the complete planner prompt from stdin. Return ONLY one valid raw JSON object matching the next-action decision envelope (no markdown fences, no commentary). Do not invoke any Antigravity CLI tools.';
+      const args = ['--print', directive, '--output-format', 'json', '--disable-slash-commands', '--sandbox'];
+      if (this.model) args.push('--model', this.model);
+      const effort = this.cliSettings?.reasoningEffort;
+      if (effort && ['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) args.push('--effort', effort);
+      const stdinPayload = `${compilePrompt({ ...context, tools })}\n\n` +
+        `This is a planner-only bridge. DO NOT invoke any Antigravity CLI tools. Return ONLY raw JSON matching:\n` +
+        `{"type":"tool"|"message","calls":[{"id":"unique","name":"tool.name","arguments":"JSON string"}],"text":"","finish":"continue"|"done"|"refusal"}\n` +
+        `Available tools: ${JSON.stringify(tools)}\n` +
+        `For tool actions set type="tool", calls=[...], text="", finish="continue". For final replies set type="message", calls=[], text="summary", finish="done".`;
+      const env = antigravitySubscriptionEnvironment(cliEnvironments.get(this));
+      const output = await runSubprocessPlanner(this, { args, cwd: working, signal, turnTimeoutMs, input: stdinPayload, env, label: 'Antigravity' });
+      let envelopeText = output, usage = null, parsed = null;
+      const trimmedOut = output.trim();
+      try { parsed = JSON.parse(trimmedOut); } catch {
+        const fb = trimmedOut.indexOf('{'), lb = trimmedOut.lastIndexOf('}');
+        if (fb >= 0 && lb > fb) { try { parsed = JSON.parse(trimmedOut.slice(fb, lb + 1)); } catch {} }
+      }
+      if (parsed && typeof parsed === 'object') {
+        if (typeof parsed.status === 'string' && parsed.status && parsed.status !== 'SUCCESS') {
+          const safeStatus = String(parsed.status).replace(/[^A-Za-z0-9_ -]/g, '').slice(0, 40) || 'ERROR';
+          throw Object.assign(new Error(`Antigravity CLI returned status ${safeStatus}`), { code: 'provider_configuration', retryable: false });
+        }
+        if (Number(parsed.num_turns) > 1) {
+          throw Object.assign(new Error('Planner-only Antigravity CLI bridge attempted an internal tool turn; response rejected'), { code: 'tool_protocol' });
+        }
+        if (typeof parsed.response === 'string') envelopeText = parsed.response;
+        else if (typeof parsed.text === 'string' && !parsed.type) envelopeText = parsed.text;
+        if (parsed.usage && typeof parsed.usage === 'object') usage = parsed.usage;
+      }
+      const decision = parsePlannerDecisionEnvelope(envelopeText, tools, 'Antigravity CLI');
+      return { ...decision, usage, model: this.model || 'antigravity-cli-default', evidenceKind: 'live_antigravity_cli', accounting: this.accounting };
     } finally { await fs.rm(working, { recursive: true, force: true }); }
   }
 }
@@ -2137,6 +2206,7 @@ export function environmentProviders() {
     const id=`codex:${model}`;
     result.set(id,new CodexProvider({id,label:`${model} · Codex bridge`,binary:process.env.G0D_CODEX_BINARY||'codex',model}));
   }
+  if(process.env.G0D_ENABLE_ANTIGRAVITY_CLI==='1')result.set('antigravity-cli',new AntigravityCliProvider({binary:process.env.G0D_ANTIGRAVITY_BINARY||'agy',model:process.env.G0D_ANTIGRAVITY_MODEL}));
   if(process.env.G0D_ENABLE_GEMINI_CLI==='1')result.set('gemini-cli',new GeminiCliProvider({binary:process.env.G0D_GEMINI_BINARY||'gemini',model:process.env.G0D_GEMINI_MODEL}));
   if(process.env.G0D_ENABLE_COPILOT_CLI==='1')result.set('copilot-cli',new CopilotCliProvider({binary:process.env.G0D_COPILOT_BINARY||'copilot',model:process.env.G0D_COPILOT_MODEL}));
   return result;

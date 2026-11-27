@@ -14,7 +14,7 @@ import {
   redactOutboundText,
   OutboundAuditLog
 } from '../src/privacy.mjs';
-import { HttpProvider, cliEnvironment, claudeSubscriptionEnvironment, geminiSubscriptionEnvironment, copilotSubscriptionEnvironment } from '../src/providers.mjs';
+import { HttpProvider, cliEnvironment, claudeSubscriptionEnvironment, antigravitySubscriptionEnvironment, geminiSubscriptionEnvironment, copilotSubscriptionEnvironment } from '../src/providers.mjs';
 import { createApp } from '../src/server.mjs';
 import { createScriptedProviders } from '../bench/scripted.mjs';
 
@@ -110,9 +110,9 @@ test('Zero-Telemetry Structural Audit: zero analytics SDKs, zero phone-home URLs
   assert.doesNotMatch(connSrc, /readFile.*(?:oauth_creds|auth\.json|\.claude\.json|hosts\.yml)/i);
 });
 
-test('CLI telemetry kill-switch forcibly disables vendor telemetry across all 4 CLI subscription environments', () => {
+test('CLI telemetry kill-switch forcibly disables vendor telemetry across all 5 CLI subscription environments', () => {
   const baseEnv = { HOME: '/tmp/home', PATH: '/usr/bin' };
-  for (const builder of [cliEnvironment, claudeSubscriptionEnvironment, geminiSubscriptionEnvironment, copilotSubscriptionEnvironment]) {
+  for (const builder of [cliEnvironment, claudeSubscriptionEnvironment, antigravitySubscriptionEnvironment, geminiSubscriptionEnvironment, copilotSubscriptionEnvironment]) {
     const out = builder(baseEnv);
     for (const [k, v] of Object.entries(CLI_NO_TELEMETRY_ENV)) {
       assert.equal(out[k], v, `${builder.name} must set ${k}=${v}`);

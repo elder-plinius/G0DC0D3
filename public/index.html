@@ -30,6 +30,7 @@
   <script src="/mermaid-lite.js" defer></script>
   <script src="/file-preview.js" defer></script>
   <script src="/recovery.js" defer></script>
+  <script src="/alerts.js" defer></script>
   <script src="/app.js" defer></script>
   <script src="/conversation-controls.js" defer></script>
   <script src="/settings.js" defer></script>
@@ -428,9 +429,48 @@
         <form id="custom-model-form" autocomplete="off"><div class="api-key-row"><select id="custom-model-provider" class="api-key-provider" aria-label="Connected provider"></select><input id="custom-model-name" type="text" placeholder="e.g. moonshotai/kimi-k2 or anthropic/claude-sonnet-4.6" aria-label="Model identifier" autocomplete="off" spellcheck="false" maxlength="160" required><button type="submit" class="button button-secondary" id="custom-model-submit">Add model</button></div><p class="form-feedback" id="custom-model-feedback" role="status"></p></form>
       </div>
       <div class="local-model-setup">
-        <h5>Local model (Ollama / LM Studio / vLLM / MLX)</h5>
-        <p class="field-help">No API key required — runs 100% locally on this device for private or Tier-0 routing.</p>
-        <form id="local-model-form" autocomplete="off"><div class="local-model-grid"><input id="local-model-url" type="url" value="http://127.0.0.1:11434/v1" placeholder="http://127.0.0.1:11434/v1" aria-label="Local model base URL" spellcheck="false" maxlength="512" required><input id="local-model-name" type="text" placeholder="qwen2.5-coder:14b" aria-label="Local model identifier" spellcheck="false" maxlength="200" required><input id="local-model-label" type="text" placeholder="Label (optional)" aria-label="Optional display label" maxlength="120"><button type="submit" class="button button-secondary" id="local-model-submit">Add local model</button></div><p class="form-feedback" id="local-model-feedback" role="status"></p></form>
+        <div class="local-model-head">
+          <div>
+            <h5>Local &amp; HuggingFace stacks (Ollama · LM Studio · llama.cpp · vLLM · MLX · TGI)</h5>
+            <p class="field-help">Saved across restarts on this device — zero cloud egress on loopback, or connect a LAN GPU server with an optional bearer token.</p>
+          </div>
+          <button type="button" class="button button-secondary" id="local-scan-btn">Scan local servers</button>
+        </div>
+        <div class="local-preset-bar" id="local-stack-presets" role="group" aria-label="Local stack presets">
+          <button type="button" class="local-preset-chip is-active" data-local-preset="ollama" data-url="http://127.0.0.1:11434/v1" data-placeholder="qwen2.5-coder:32b or hf.co/org/repo:Q4_K_M">Ollama</button>
+          <button type="button" class="local-preset-chip" data-local-preset="lmstudio" data-url="http://127.0.0.1:1234/v1" data-placeholder="qwen2.5-coder-32b-instruct">LM Studio</button>
+          <button type="button" class="local-preset-chip" data-local-preset="llamacpp" data-url="http://127.0.0.1:8080/v1" data-placeholder="hf.co/unsloth/Qwen3-Coder-30B-A3B-GGUF">llama.cpp</button>
+          <button type="button" class="local-preset-chip" data-local-preset="vllm" data-url="http://127.0.0.1:8000/v1" data-placeholder="Qwen/Qwen3-Coder-30B-A3B-Instruct">vLLM</button>
+          <button type="button" class="local-preset-chip" data-local-preset="mlx" data-url="http://127.0.0.1:8081/v1" data-placeholder="mlx-community/Qwen3-Coder-30B-A3B-4bit">MLX</button>
+          <button type="button" class="local-preset-chip" data-local-preset="tgi" data-url="http://127.0.0.1:8082/v1" data-placeholder="meta-llama/Llama-4-Scout-17B-16E-Instruct">HF TGI</button>
+          <button type="button" class="local-preset-chip" data-local-preset="sglang" data-url="http://127.0.0.1:30000/v1" data-placeholder="deepseek-ai/DeepSeek-R1-Distill-Qwen-32B">SGLang</button>
+          <button type="button" class="local-preset-chip" data-local-preset="jan" data-url="http://127.0.0.1:1337/v1" data-placeholder="qwen2.5-coder-14b">Jan</button>
+        </div>
+        <div id="local-scan-results" class="local-scan-results hidden" role="region" aria-label="Discovered local models"></div>
+        <form id="local-model-form" autocomplete="off">
+          <div class="local-model-grid local-model-grid-v2">
+            <input id="local-model-url" type="url" value="http://127.0.0.1:11434/v1" placeholder="http://127.0.0.1:11434/v1" aria-label="Local model base URL" spellcheck="false" maxlength="512" required>
+            <input id="local-model-name" type="text" placeholder="qwen2.5-coder:32b or hf.co/org/repo:Q4_K_M" aria-label="Local model identifier" spellcheck="false" maxlength="200" required>
+            <input id="local-model-label" type="text" placeholder="Display label (optional)" aria-label="Optional display label" maxlength="120">
+            <input id="local-model-apikey" type="password" placeholder="Local API key (optional, e.g. vLLM / TGI)" aria-label="Optional local bearer API key" autocomplete="off" spellcheck="false" maxlength="512">
+          </div>
+          <div class="local-model-actions">
+            <button type="submit" class="button button-secondary" id="local-model-submit">Add local model</button>
+            <p class="form-feedback" id="local-model-feedback" role="status"></p>
+          </div>
+        </form>
+        <div id="local-models-list" class="local-models-list" aria-label="Saved local models"></div>
+        <details class="local-hf-drawer">
+          <summary>HuggingFace Hub / GGUF quick-pull &amp; launch commands</summary>
+          <p class="field-help">Paste any HuggingFace repo (<code>org/repo</code>, <code>hf.co/org/repo:Q4_K_M</code>, or full HuggingFace URL) to pull GGUFs straight into local Ollama or copy serve commands for llama.cpp, vLLM, MLX, and TGI.</p>
+          <div class="api-key-row">
+            <input id="local-hf-repo" type="text" placeholder="e.g. unsloth/Qwen3-Coder-30B-A3B-GGUF:Q4_K_M" aria-label="HuggingFace repository" autocomplete="off" spellcheck="false" maxlength="220">
+            <button type="button" class="button button-secondary" id="local-hf-recipes-btn">Commands</button>
+            <button type="button" class="button button-primary" id="local-hf-pull-btn">Pull into Ollama</button>
+          </div>
+          <p class="form-feedback" id="local-hf-feedback" role="status"></p>
+          <div id="local-hf-recipes" class="local-hf-recipes hidden"></div>
+        </details>
       </div>
     </section>
     <section id="connected-services-hub" class="settings-card services-hub" data-model-subtab="connections" aria-label="Connected coding and AI services"></section>
@@ -559,7 +599,7 @@
         <dt><kbd>⌘V</kbd></dt><dd>Paste screenshot or file into composer</dd>
         <dt><kbd>⌘⇧P</kbd></dt><dd>Toggle Plan / Build mode</dd>
         <dt><kbd>⌘⇧G</kbd></dt><dd>Switch GODMODƎ / GODCODƎ</dd>
-        <dt><kbd>/</kbd></dt><dd>/godmode, /godcode, /conclave, /browser, /schedules, /privacy, /system, /prefill, /effort, /plan, /build, /compact, /diff, /undo, /fork, /export, /remember, /memory, /skill, /model, /forge, /help</dd>
+        <dt><kbd>/</kbd></dt><dd>/godmode, /godcode, /conclave, /browser, /schedules, /alerts, /mute, /privacy, /system, /prefill, /effort, /plan, /build, /compact, /diff, /undo, /fork, /export, /remember, /memory, /skill, /model, /forge, /help</dd>
         <dt><kbd>@</kbd></dt><dd>Reference a workspace file</dd></dl>
       </section>
       <section><h3>Workspace</h3>

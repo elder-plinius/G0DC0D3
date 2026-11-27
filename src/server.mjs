@@ -11,6 +11,7 @@ import { CRON_PRESETS } from './cron.mjs';
 import { evaluateTask } from './evaluator.mjs';
 import { environmentProviders, HttpProvider } from './providers.mjs';
 import { createProviderSettings, linuxSecretToolKeychain, nativeKeychain } from './provider-settings.mjs';
+import { createLocalProviderManager } from './local-providers.mjs';
 import { isSandboxSupportedPlatform } from './runner.mjs';
 import { createCliConnections } from './provider-connections.mjs';
 import { createSetup } from './setup.mjs';
@@ -52,8 +53,8 @@ function publicTask(task,runtime) {
   return {...rest,pendingApproval:rest.pendingApproval||null,permissionRules:rest.permissionRules??null,todos:Array.isArray(rest.todos)?rest.todos:[],outcome:outcomeFor(task,runtime),crewBusy:Boolean(runtime?.crew.busy(task.id)),sourceBusy:Boolean(runtime?.sourceChanges.busy(task.id)),draining:!['running','recovering','verifying'].includes(task.status)&&Boolean(runtime?.runs.has(task.id)||runtime?.broker.locks.has(task.id))};
 }
 function taskSummary(task,runtime) {
-  const {id,title,objective,status,providerId,providers,calls,recoveries,createdAt,updatedAt,completionKind,fixtureId,sourcePath,workspaceKind,planMode,parentTaskId}=task;
-  return {id,title,objective,status,providerId,providers,calls,recoveries,createdAt,updatedAt,completionKind,fixtureId,sourcePath,workspaceKind,planMode:Boolean(planMode),parentTaskId:parentTaskId||null,pendingApproval:Boolean(task.pendingApproval),todoCount:Array.isArray(task.todos)?task.todos.length:0,outcome:outcomeFor(task,runtime)};
+  const {id,title,objective,status,providerId,providers,calls,recoveries,createdAt,updatedAt,completionKind,fixtureId,sourcePath,workspaceKind,planMode,parentTaskId,version,eventSeq}=task;
+  return {id,title,objective,status,providerId,providers,calls,recoveries,createdAt,updatedAt,completionKind,fixtureId,sourcePath,workspaceKind,planMode:Boolean(planMode),parentTaskId:parentTaskId||null,version:Number(version)||0,eventSeq:Number(eventSeq)||0,pendingApproval:Boolean(task.pendingApproval),pendingApprovalTool:task.pendingApproval?.tool||null,pendingApprovalId:task.pendingApproval?.id||null,todoCount:Array.isArray(task.todos)?task.todos.length:0,outcome:outcomeFor(task,runtime)};
 }
 const DISPLAY_TEXT_KEYS = new Set(['text', 'message', 'thinking']);
 function displayValue(value, depth = 0, key = '') {
@@ -86,18 +87,19 @@ async function readBody(req, maxBytes = 65536) {
   catch {throw Object.assign(new Error('Expected a JSON object'),{status:400});}
 }
 
-export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(projectDir,'.g0dc0d3'),providers,evaluator=evaluateTask,auth=true,keychain,fetchCatalog,fetchOpenRouterCatalog,fetchProviderCatalog,cliDiscovery={},startScheduler=true,schedulerTickMs=15000}={}) {
+export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(projectDir,'.g0dc0d3'),providers,evaluator=evaluateTask,auth=true,keychain,fetchCatalog,fetchOpenRouterCatalog,fetchProviderCatalog,fetchLocal,cliDiscovery={},startScheduler=true,schedulerTickMs=15000}={}) {
   dataDir=path.resolve(dataDir);
   const configuredProviders = !providers;
   providers ||= new Map([...createScriptedProviders(),...environmentProviders()]);
   if (configuredProviders) await loadProviderReferences({dataDir,providers});
   const providerSettings = await createProviderSettings(providers, keychain, { dataDir, ...(fetchProviderCatalog ? { fetchImpl: fetchProviderCatalog } : {}) });
-  const redact = value => redactDiagnostics(value, [...environmentSecrets(), ...providerSettings.secrets]);
+  const localProviders = await createLocalProviderManager({ dataDir, providers, ...(fetchLocal ? { fetchImpl: fetchLocal } : {}) });
+  const redact = value => redactDiagnostics(value, [...environmentSecrets(), ...providerSettings.secrets, ...localProviders.secrets()]);
   const cliConnections = await createCliConnections({...cliDiscovery,dataDir,providers});
   const modelCatalog = await createModelCatalog({dataDir, ...(fetchOpenRouterCatalog ? { fetchImpl: fetchOpenRouterCatalog } : {})});
   const catalog = createVeniceCatalog(providers, fetchCatalog, () => runtime.getPrivacy().settings);
   const runtime = new Runtime({dataDir,providers,evaluator,catalog,startScheduler,schedulerTickMs,
-    outboundSecrets: () => [...environmentSecrets(), ...providerSettings.secrets]});
+    outboundSecrets: () => [...environmentSecrets(), ...providerSettings.secrets, ...localProviders.secrets()]});
   const serviceStatus = createServiceStatus({providers,cliConnections,getPrivacy:()=>runtime.getPrivacy().settings});
   const promptCommands = createPromptCommands(runtime.store);
   const setup = createSetup(runtime.store);
@@ -210,6 +212,7 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
         veniceConnectionId:[...providers.values()].find(provider=>provider.baseUrl===veniceEndpoint && provider.available && !provider.closed)?.id || null,
         openrouterConnectionId:[...providers.values()].find(provider=>provider.baseUrl==='https://openrouter.ai/api/v1' && provider.available && !provider.closed)?.id || null,
         connectedApiProviders:providerSettings.connectedProfiles(),
+        localProviders:localProviders.list(),
         tasks:runtime.listTasks().map(task=>taskSummary(task,runtime)),providers:[...providers.values()].map(provider=>({id:provider.id,label:provider.label,model:provider.model||null,kind:provider.kind,available:provider.available??true,accounting:provider.accounting,tier:provider.tier||'standard',zdr:classifyProviderZdr(provider),meta:classifyModel(provider,{catalog:modelCatalog,learning})})),
         fixtures:fixtures.map(({id,title,description,objective})=>({id,title,description,objective})),scenarios:scriptedScenarios,benchmark,version:'0.2.0',capabilities,limitations,personas:PERSONAS,tools:TOOLS.map(({name,description,parameters,result})=>({name,description,parameters,resultSchema:result})),executionAvailable:isSandboxSupportedPlatform(),sessionProtected:auth,workflows:listWorkflows(),permissions:runtime.getGlobalPermissions(),privacy:runtime.getPrivacy(),overseer:runtime.getOverseer(),router:runtime.getRouterSettings(),schedulesSummary:runtime.getSchedulesSummary(),modelGroups:runtime.getModelGroups({sortBy,catalog:modelCatalog}),sortModes:MODEL_SORT_MODES,catalogMeta:modelCatalog.meta()
       });
@@ -521,37 +524,42 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
         const result = await providerSettings.removeModels(await readBody(req));
         return send(res,200,{...result,connectedApiProviders:providerSettings.connectedProfiles(),providers:[...providers.values()].map(({id,label,kind,available=true,tier='standard'})=>({id,label,kind,available,tier}))});
       }
+      if(req.method==='GET' && url.pathname==='/api/providers/local') {
+        return send(res,200,localProviders.list());
+      }
       if(req.method==='POST' && url.pathname==='/api/providers/local') {
         const body=await readBody(req);
-        const rawBaseUrl=body.baseUrl===undefined||body.baseUrl===''?'http://127.0.0.1:11434/v1':body.baseUrl;
-        if(typeof rawBaseUrl!=='string'||rawBaseUrl.length>512||/[\x00-\x1f\x7f]/.test(rawBaseUrl))
-          throw Object.assign(new Error('Provide a valid http:// or https:// baseUrl.'),{status:400});
-        const baseUrlStr=rawBaseUrl.trim()||'http://127.0.0.1:11434/v1';
-        let parsedUrl;
-        try { parsedUrl=new URL(baseUrlStr); } catch { throw Object.assign(new Error('Provide a valid http:// or https:// baseUrl.'),{status:400}); }
-        if(!['http:','https:'].includes(parsedUrl.protocol))
-          throw Object.assign(new Error('baseUrl must use http:// or https://.'),{status:400});
-        const model=typeof body.model==='string'?body.model.trim():'';
-        if(!model||model.length>200||/[\x00-\x1f\x7f]/.test(model))
-          throw Object.assign(new Error('Provide a valid non-empty model name.'),{status:400});
-        let label=body.label;
-        if(label!==undefined&&label!==null&&label!=='') {
-          if(typeof label!=='string'||label.trim().length>120||/[\x00-\x1f\x7f]/.test(label))
-            throw Object.assign(new Error('Label must be a short string without control characters.'),{status:400});
-          label=label.trim();
-        } else {
-          label=`${model} · Local`;
-        }
-        const tier=body.tier===undefined||body.tier===''?'local':body.tier;
-        if(typeof tier!=='string'||!['local','standard','frontier'].includes(tier))
-          throw Object.assign(new Error('Tier must be local, standard, or frontier.'),{status:400});
-        const slug=model.toLowerCase().replace(/[^a-z0-9._-]+/g,'-').replace(/-+/g,'-').replace(/^-|-$/g,'')||'model';
-        const id=`local:${slug}`;
-        const localCount=[...providers.keys()].filter(k=>k.startsWith('local:')).length;
-        if(!providers.has(id)&&localCount>=32)throw Object.assign(new Error('At most 32 dynamic local models can be registered per session.'),{status:400});
-        const p=new HttpProvider({id,label,protocol:'openai-chat',baseUrl:baseUrlStr,model,apiKeyEnv:undefined,tier,allowPrivateHttp:true,timeoutMs:180000,maxOutputTokens:8192,maxOutputTokensCeiling:32768});
-        providers.set(id,p);
-        return send(res,200,{id,registered:[id],provider:{id:p.id,label:p.label,kind:p.kind,available:p.available,tier:p.tier},providers:[...providers.values()].map(({id:pid,label:plabel,kind,available=true,accounting,tier:ptier='standard'})=>({id:pid,label:plabel,kind,available,accounting,tier:ptier}))});
+        const result=await localProviders.register(body);
+        return send(res,200,{...result,localProviders:localProviders.list(),providers:[...providers.values()].map(({id:pid,label:plabel,kind,available=true,accounting,tier:ptier='standard'})=>({id:pid,label:plabel,kind,available,accounting,tier:ptier}))});
+      }
+      if(req.method==='DELETE' && url.pathname==='/api/providers/local') {
+        const queryId = url.searchParams.get('id') || '';
+        const body = queryId && !req.headers['content-type']?.startsWith('application/json') ? {} : await readBody(req);
+        const targetId = body.id || queryId;
+        const result=await localProviders.remove(targetId);
+        return send(res,200,{...result,localProviders:localProviders.list(),providers:[...providers.values()].map(({id:pid,label:plabel,kind,available=true,accounting,tier:ptier='standard'})=>({id:pid,label:plabel,kind,available,accounting,tier:ptier}))});
+      }
+      if(req.method==='POST' && url.pathname==='/api/providers/local/discover') {
+        const body=await readBody(req);
+        const result=await localProviders.discover({
+          customBaseUrl:body.baseUrl||'',
+          customApiKey:body.apiKey||'',
+          privacy:runtime.getPrivacy().settings
+        });
+        return send(res,200,{...result,localProviders:localProviders.list()});
+      }
+      if(req.method==='POST' && url.pathname==='/api/providers/local/ollama-pull') {
+        const body=await readBody(req);
+        const result=await localProviders.pullOllamaModel({
+          model:body.model||'',
+          baseUrl:body.baseUrl||'http://127.0.0.1:11434',
+          privacy:runtime.getPrivacy().settings
+        });
+        return send(res,200,{...result,localProviders:localProviders.list(),providers:[...providers.values()].map(({id:pid,label:plabel,kind,available=true,accounting,tier:ptier='standard'})=>({id:pid,label:plabel,kind,available,accounting,tier:ptier}))});
+      }
+      if(req.method==='POST' && url.pathname==='/api/providers/local/hf-recipes') {
+        const body=await readBody(req);
+        return send(res,200,localProviders.huggingfaceRecipes(body.ref||body.model||''));
       }
       if(req.method==='DELETE' && url.pathname==='/api/learning'){await readBody(req);return send(res,200,runtime.resetLearning());}
       if(req.method==='POST' && url.pathname==='/api/conversations') {
@@ -1070,6 +1078,7 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
       staticFiles['/mermaid-lite.js'] = ['mermaid-lite.js','text/javascript'];
       staticFiles['/conclave.js'] = ['conclave.js','text/javascript'];
       staticFiles['/browser-live.js'] = ['browser-live.js','text/javascript'];
+      staticFiles['/alerts.js'] = ['alerts.js','text/javascript'];
       staticFiles['/brand-wordmark.ttf'] = ['brand-wordmark.ttf', 'font/ttf'];
       if(req.method==='GET'&&staticFiles[url.pathname]) {
         const [filename,mime]=staticFiles[url.pathname],body=await fs.readFile(path.join(publicDir,filename));

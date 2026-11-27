@@ -6,9 +6,11 @@ import path from 'node:path';
 import {
   CodexProvider,
   ClaudeCodeProvider,
+  AntigravityCliProvider,
   GeminiCliProvider,
   CopilotCliProvider,
   claudeSubscriptionEnvironment,
+  antigravitySubscriptionEnvironment,
   geminiSubscriptionEnvironment,
   copilotSubscriptionEnvironment,
   cliEnvironment,
@@ -38,15 +40,26 @@ const DEFINITIONS = Object.freeze({
     defaultModels: ['gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-6.1-terra', 'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.4', 'gpt-5.3-codex'],
     Provider: CodexProvider
   },
+  'antigravity-cli': {
+    name: 'Google Antigravity (agy)',
+    subscription: 'Google AI Pro / Ultra / Antigravity',
+    env: 'G0D_ANTIGRAVITY_BINARY',
+    modelEnv: 'G0D_ANTIGRAVITY_MODEL',
+    args: ['models'],
+    loginHint: 'Install via "brew install --cask antigravity-cli", run "agy" to sign in with Google, then refresh.',
+    suggestedModels: ['gemini-4-neon-high', 'gemini-4-neon-xhigh', 'gemini-4-neon-medium', 'gemini-4-neon-low', 'gemini-4-carbon-high', 'gemini-4-argon-high', 'gemini-4-hydrogen-high', 'gemini-3.8-flash-high', 'claude-opus-5-5-high', 'claude-sonnet-5-5-high'],
+    defaultModels: ['gemini-4-neon-high', 'gemini-4-neon-medium', 'gemini-4-neon-xhigh', 'gemini-4-carbon-high', 'gemini-4-argon-high', 'gemini-4-hydrogen-high', 'gemini-3.8-flash-high'],
+    Provider: AntigravityCliProvider
+  },
   'gemini-cli': {
-    name: 'Gemini CLI',
-    subscription: 'Google AI Pro / Ultra / Code Assist',
+    name: 'Gemini CLI (Legacy)',
+    subscription: 'Code Assist Enterprise / GEMINI_API_KEY',
     env: 'G0D_GEMINI_BINARY',
     modelEnv: 'G0D_GEMINI_MODEL',
     args: ['--version'],
-    loginHint: 'Run "gemini" in your terminal and sign in with Google, then refresh.',
-    suggestedModels: ['gemini-4-neon', 'gemini-4-pro', 'gemini-3-pro', 'gemini-2.5-pro', 'gemini-2.5-flash'],
-    defaultModels: ['gemini-4-neon', 'gemini-4-pro', 'gemini-3-pro', 'gemini-2.5-pro', 'gemini-2.5-flash'],
+    loginHint: 'Personal Google AI login moved to Antigravity CLI ("agy"). For Enterprise Code Assist, run "gemini" and refresh.',
+    suggestedModels: ['gemini-4-neon', 'gemini-4-pro', 'gemini-3.8-flash', 'gemini-3-pro', 'gemini-2.5-pro', 'gemini-2.5-flash'],
+    defaultModels: ['gemini-4-neon', 'gemini-4-pro', 'gemini-3.8-flash', 'gemini-2.5-pro', 'gemini-2.5-flash'],
     Provider: GeminiCliProvider
   },
   'copilot-cli': {
@@ -137,6 +150,11 @@ function candidates(id, env, home) {
     binName = 'claude';
     fixed = [
       '/opt/homebrew/bin/claude', '/usr/local/bin/claude', path.join(home, '.local/bin/claude'), path.join(home, '.claude/local/claude')
+    ];
+  } else if (id === 'antigravity-cli') {
+    binName = 'agy';
+    fixed = [
+      '/opt/homebrew/bin/agy', '/usr/local/bin/agy', path.join(home, '.local/bin/agy'), '/usr/bin/agy'
     ];
   } else if (id === 'gemini-cli') {
     binName = 'gemini';
@@ -318,11 +336,13 @@ export async function createCliConnections({ dataDir, providers, environment = p
     const Provider = def.Provider;
     const env = subscriptionId === 'claude-code'
       ? claudeSubscriptionEnvironment(environment)
-      : subscriptionId === 'gemini-cli'
-        ? geminiSubscriptionEnvironment(environment)
-        : subscriptionId === 'copilot-cli'
-          ? copilotSubscriptionEnvironment(environment)
-          : codexEnvironment(environment);
+      : subscriptionId === 'antigravity-cli'
+        ? antigravitySubscriptionEnvironment(environment)
+        : subscriptionId === 'gemini-cli'
+          ? geminiSubscriptionEnvironment(environment)
+          : subscriptionId === 'copilot-cli'
+            ? copilotSubscriptionEnvironment(environment)
+            : codexEnvironment(environment);
     return new Provider({
       id: providerId,
       subscriptionId,
@@ -394,7 +414,7 @@ export async function createCliConnections({ dataDir, providers, environment = p
       }
       const binary = await discover(id, environment, home);
       if (!binary) { setAvailableForKind(false); return { id, binary: null, installed: false, authenticated: false, detail: `CLI not installed. ${definition.loginHint}` }; }
-      const env = id === 'claude-code' ? claudeSubscriptionEnvironment(environment) : id === 'gemini-cli' ? geminiSubscriptionEnvironment(environment) : id === 'copilot-cli' ? copilotSubscriptionEnvironment(environment) : codexEnvironment(environment);
+      const env = id === 'claude-code' ? claudeSubscriptionEnvironment(environment) : id === 'antigravity-cli' ? antigravitySubscriptionEnvironment(environment) : id === 'gemini-cli' ? geminiSubscriptionEnvironment(environment) : id === 'copilot-cli' ? copilotSubscriptionEnvironment(environment) : codexEnvironment(environment);
       const result = await probe(binary, definition.args, env, probeTimeoutMs);
       let authenticated = false, signInDetected = false;
       if (result.code === 0) {
@@ -402,6 +422,27 @@ export async function createCliConnections({ dataDir, providers, environment = p
         else if (id === 'claude-code') {
           try { const status = JSON.parse(result.stdout.trim()); authenticated = status.loggedIn === true && ['claude.ai', 'oauth_token'].includes(status.authMethod); }
           catch { authenticated = false; }
+        } else if (id === 'antigravity-cli') {
+          const HEADER_WORDS = new Set(['model', 'models', 'id', 'name', 'status', 'error', 'warning', 'usage', 'available', 'description']);
+          const parsedSlugs = [];
+          const cleanOut = String(result.stdout || '').replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
+          for (const rawLine of cleanOut.split('\n')) {
+            // Keep only the final overwritten frame after any carriage-return spinner updates
+            const line = rawLine.split('\r').at(-1).trim();
+            const m = line.match(/^([a-zA-Z0-9][a-zA-Z0-9._:/-]{2,80})\s{2,}\S/);
+            if (!m) continue;
+            const slug = m[1];
+            if (HEADER_WORDS.has(slug.toLowerCase())) continue;
+            if (!/[0-9.-]/.test(slug) || !validModel(slug)) continue;
+            parsedSlugs.push(slug);
+          }
+          const uniqueSlugs = [...new Set(parsedSlugs)];
+          if (uniqueSlugs.length > 0 && !/please sign in|not authenticated|sign in/i.test(result.output)) {
+            authenticated = true;
+            localCacheMap[id] = { slugs: uniqueSlugs, count: uniqueSlugs.length };
+          } else {
+            delete localCacheMap[id];
+          }
         } else if (id === 'gemini-cli') {
           signInDetected = await probeGeminiAuth(environment, home);
         } else if (id === 'copilot-cli') {
@@ -487,7 +528,24 @@ export async function createCliConnections({ dataDir, providers, environment = p
       });
     }
   }
-  if (Object.values(preferences).some(pref => pref.enabled)) await refresh();
+  if (Object.values(preferences).some(pref => pref.enabled)) {
+    await refresh();
+    // Re-sync live-discovered Antigravity models after initial refresh when user has not pinned customModels
+    const agyPref = preferences['antigravity-cli'];
+    if (agyPref?.enabled && agyPref.customModels !== true && localCacheMap['antigravity-cli']?.slugs?.length) {
+      const agyRecord = (cache || []).find(c => c.id === 'antigravity-cli');
+      if (agyRecord?.binary && agyRecord.authenticated) {
+        try {
+          await installSubscriptionProviders('antigravity-cli', agyRecord.binary, {
+            primaryModel: agyPref.model || null,
+            models: resolveEnabledModels('antigravity-cli', agyPref),
+            settings: agyPref.settings || {},
+            available: true
+          });
+        } catch {}
+      }
+    }
+  }
 
   return {
     async status({ refresh: force = false } = {}) { if (!cache || force) await refresh(); return publicStatus(); },
