@@ -148,9 +148,22 @@ function highlightCodeLine(line, language) {
 }
 
 function wrapCodeLines(highlightedHtml) {
-  const lines = String(highlightedHtml).split('\n');
-  if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
-  return lines.map(line => `<span class="code-line">${line || ' '}</span>`).join('\n');
+  const rawLines = String(highlightedHtml).split('\n');
+  if (rawLines.length > 1 && rawLines[rawLines.length - 1] === '') rawLines.pop();
+  const openTags = [];
+  const wrapped = rawLines.map(line => {
+    const prefix = openTags.join('');
+    const tagRe = /<\/?span\b[^>]*>/gi;
+    let m;
+    while ((m = tagRe.exec(line)) !== null) {
+      if (m[0].startsWith('</')) openTags.pop();
+      else openTags.push(m[0]);
+    }
+    const suffix = openTags.length ? '</span>'.repeat(openTags.length) : '';
+    const content = line ? `${prefix}${line}${suffix}` : '';
+    return `<span class="code-line">${content}</span>`;
+  });
+  return wrapped.join('\n');
 }
 
 function messageMarkdown(text) {

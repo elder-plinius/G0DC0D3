@@ -19,7 +19,7 @@ export function diagnoseIncident(incident = {}) {
   if (/CAPABILITY|UNSUPPORTED_MODEL|UNSUPPORTED_TOOL/.test(code)) return { category: 'capability', route: true };
   if (code === 'OUTPUT_LIMIT') return { category: 'output_limit', route: true };
   if (/INVALID_RESPONSE|INVALID_TOOL|TOOL_PROTOCOL|RESULT_SCHEMA|OPERATION_ID_COLLISION/.test(code)) return { category: 'protocol', route: true };
-  if (/TIMEOUT|ETIMEDOUT|ECONN|ENET|EAI_|FETCH|RATE_LIMIT|HTTP_5\d\d|HTTP_429|PROVIDER_ERROR|OVERLOADED_ERROR|API_ERROR|PROVIDER_INCOMPLETE|PROVIDER_RESPONSE_FAILED/.test(code)) return { category: 'transport', route: true };
+  if (/TIMEOUT|ETIMEDOUT|ECONN|ENET|EAI_|FETCH|RATE_LIMIT|QUOTA_EXHAUSTED|HTTP_5\d\d|HTTP_429|PROVIDER_ERROR|OVERLOADED_ERROR|API_ERROR|PROVIDER_INCOMPLETE|PROVIDER_RESPONSE_FAILED/.test(code)) return { category: 'transport', route: true };
   if (/NO_PROGRESS|DOOM_LOOP/.test(code)) return { category: 'stalled', route: true };
   if (/INCOMPLETE_TASK|VERIFICATION_UNKNOWN|CHECK_FAILED/.test(code)) return { category: 'verification', route: true };
   return { category: 'tool_error', route: true };

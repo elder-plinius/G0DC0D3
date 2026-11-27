@@ -369,7 +369,7 @@
     return act(() => refresh(chat?.codeWorkspace?.id));
   }
   window.openChatCode = openView;
-  window.closeChatCode = () => { if (view?.chatId) resetView(true); };
+  window.closeChatCode = ({ remember = false } = {}) => { if (view?.chatId) resetView(remember); };
   window.restoreChatCode = chat => {
     try { if (!view && chat.codeWorkspace && localStorage.getItem('g0dc0d3.codePanel') === chat.id) openView(chat); } catch {}
   };
@@ -388,15 +388,32 @@
   };
   get('tree-remove').onclick = () =>
     act(async () => {
+      const targetId = project?.id || get('tree-list')?.value;
+      if (!targetId) return;
       if (
         !window.confirm(
-          'Remove this worktree folder? Git keeps its branch and refuses to remove uncommitted work.',
+          'Remove this worktree folder? Git keeps its branch and refuses to remove uncommitted work unless forced.',
         )
       ) {
-        status(project.branch);
+        if (project?.branch) status(project.branch);
         return;
       }
-      const result = await post(route('remove'), {});
+      const removePath = `/api/worktrees/${encodeURIComponent(targetId)}/remove`;
+      let result;
+      try {
+        result = await post(removePath, {});
+      } catch (err) {
+        const msg = String(err?.message || '');
+        if (/modified|untracked|dirty|contains modified|force/i.test(msg)) {
+          if (!window.confirm(`Worktree has uncommitted or untracked files:\n\n${msg}\n\nForce remove this worktree and discard uncommitted files? (Committed work on its branch is kept.)`)) {
+            if (project?.branch) status(project.branch);
+            return;
+          }
+          result = await post(removePath, { force: true });
+        } else {
+          throw err;
+        }
+      }
       project = null;
       await refresh();
       status('Removed worktree. Branch ' + result.branch + ' is retained.');

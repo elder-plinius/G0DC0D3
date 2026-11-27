@@ -4,6 +4,7 @@ import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { TOOLS } from './broker.mjs';
+import { STRICT_DEFAULT_PRESET } from './permissions.mjs';
 import { resolveCatalogEntry } from './model-catalog.mjs';
 import { classifyProviderFailure } from './outcomes.mjs';
 import { compilePrompt, compileInstructions, compileTaskContext, buildToolPlaybook, effortInstructions, PROMPT_VERSION, PERSONAS, resolvePersona } from './prompts.mjs';
@@ -22,6 +23,12 @@ import {
   redactOutboundValue,
   redactOutboundText
 } from './privacy.mjs';
+import {
+  AcpClient,
+  AcpSessionPool,
+  createAcpPermissionHandler,
+  createAcpSandboxHandlers
+} from './acp-client.mjs';
 
 export { compilePrompt, compileInstructions, compileTaskContext, inspectPrompt, PROMPT_VERSION, PERSONAS } from './prompts.mjs';
 
@@ -249,6 +256,10 @@ export function catalogMessages(context, { enableTools = false, aliases = null }
   if (typeof metaBrief === 'string' && metaBrief.trim() && !context.task?.fixtureId) {
     systemContent += `\n\n${metaBrief.trim().slice(0, 2400)}`;
   }
+  const overseerGuide = context.task?.overseerGuidance || context.task?.routing?.overseerGuidance;
+  if (typeof overseerGuide === 'string' && overseerGuide.trim()) {
+    systemContent += `\n\n[Overseer Supervisory Guidance — follow directly on this turn]\n${overseerGuide.trim().slice(0, 800)}`;
+  }
   const messages = [{ role: 'system', content: systemContent }, { role: 'user', content: context.task.objective }];
   // Persisted follow-ups survive compaction. Ledger order resolves turns
   // sharing a millisecond, including an edited message after a rewind.
@@ -270,7 +281,7 @@ export function catalogMessages(context, { enableTools = false, aliases = null }
   const overseerRefusedSeqs = new Set();
   for (let i = 0; i < context.history.length; i++) {
     const ev = context.history[i];
-    if (ev.type === 'overseer.judged' && ev.data?.isRefusal) {
+    if ((ev.type === 'overseer.judged' && ev.data?.isRefusal) || (ev.type === 'overseer.audited' && ev.data?.verdict === 'needs_work')) {
       for (let j = i - 1; j >= 0; j--) {
         if (context.history[j].type === 'model.response') {
           overseerRefusedSeqs.add(context.history[j].seq);
@@ -733,18 +744,29 @@ export class HttpProvider {
         body: JSON.stringify(currentBody),
       });
     }
+    const isVenice = choice.kind === 'catalog' || choice.baseUrl === 'https://api.venice.ai/api/v1' || String(choice.id || '').startsWith('venice:');
+    const providerDisplay = isVenice ? 'Venice' : (choice.label || choice.id || 'Provider');
     if (!res.ok) {
       res.body?.cancel?.().catch(() => {});
       // An explicit wait applies to the connection. Only gateway outages qualify for the optional backup.
       const gateway = [502, 503, 504].includes(res.status);
       const wait = res.headers.get('retry-after');
       let code = 'PROVIDER_FAILURE';
-      if (res.status === 429) code = 'VENICE_RATE_LIMIT';
-      else if (res.status === 402) code = 'http_402';
-      else if (res.status >= 500 && wait !== null) code = 'VENICE_RETRY_AFTER';
-      else if (gateway) code = 'VENICE_SERVICE_OUTAGE';
-      const retryAfterMs = ['VENICE_RATE_LIMIT','VENICE_RETRY_AFTER'].includes(code) ? retryAfterMilliseconds(wait) : undefined;
-      return { type: 'error', code, httpStatus: res.status, message: 'Venice returned HTTP ' + res.status + '.',
+      let retryable;
+      if (isVenice) {
+        if (res.status === 429) code = 'VENICE_RATE_LIMIT';
+        else if (res.status === 402) code = 'http_402';
+        else if (res.status >= 500 && wait !== null) code = 'VENICE_RETRY_AFTER';
+        else if (gateway) code = 'VENICE_SERVICE_OUTAGE';
+      } else {
+        if (res.status === 401 || res.status === 403) { code = 'authentication'; retryable = false; }
+        else if (res.status === 429) { code = 'rate_limit'; retryable = true; }
+        else if (res.status === 402) { code = 'http_402'; retryable = false; }
+        else if (res.status >= 500) { code = 'provider_unavailable'; retryable = true; }
+      }
+      const retryAfterMs = (res.status === 429 || (res.status >= 500 && wait !== null)) ? retryAfterMilliseconds(wait) : undefined;
+      return { type: 'error', code, httpStatus: res.status, message: `${providerDisplay} returned HTTP ${res.status}.`,
+        ...(retryable !== undefined ? { retryable } : {}),
         ...(retryAfterMs !== undefined ? { retryAfterMs } : {}) };
     }
     const contentType = (res.headers?.get('content-type') || '').toLowerCase();
@@ -897,15 +919,15 @@ export class HttpProvider {
         }
       }
     }
-    const content = answer?.message?.refusal || answer?.message?.content || (declined && 'Venice declined this request.');
+    const content = answer?.message?.refusal || answer?.message?.content || (declined && `${providerDisplay} declined this request.`);
     const limited = !declined && answer?.finish_reason === 'length';
     if (typeof content !== 'string' || !content.trim()) return { type: 'error', httpStatus: res.status,
-      code: limited ? 'VENICE_OUTPUT_LIMIT' : 'PROVIDER_FAILURE',
+      code: limited ? (isVenice ? 'VENICE_OUTPUT_LIMIT' : 'output_limit') : 'PROVIDER_FAILURE',
       message: limited
         ? (rawThinking
-          ? 'Venice spent its output token limit on internal reasoning before returning visible text.'
-          : 'Venice reached its output limit before returning visible text.')
-        : 'Venice returned no reply text.',
+          ? `${providerDisplay} spent its output token limit on internal reasoning before returning visible text.`
+          : `${providerDisplay} reached its output limit before returning visible text.`)
+        : `${providerDisplay} returned no reply text.`,
       ...(limited && rawThinking ? { exhaustedReasoning: true } : {}) };
     const rawCleanText = key ? content.split(key).join('[redacted credential]') : content;
     const cleanText = !declined && prefillUsed ? stitchPrefillIntoText(rawCleanText, prefillUsed) : rawCleanText;
@@ -1448,6 +1470,10 @@ export class HttpProvider {
       };
     }
     Object.assign(body, generation);
+    if (this.protocol === 'openai-responses' && Object.hasOwn(generation, 'max_tokens')) {
+      body.max_output_tokens = generation.max_tokens;
+      delete body.max_tokens;
+    }
     const { zdrFlags } = applyZdrRequestPolicy(this, body, privacy);
     if (onDelta) {
       body.stream = true;
@@ -1755,6 +1781,45 @@ export class CodexProvider {
     return{type:'message',text:value.text||'',finish:value.finish||'done',...meta};
     } finally { await fs.rm(schemaDir,{recursive:true,force:true}); }
   }
+  async draft(messages = [], signal, _maxTokens = 1000, _params = {}, { privacy = DEFAULT_PRIVACY_SETTINGS, onOutbound, extraSecrets } = {}) {
+    if (this.closed) return { type: 'error', code: 'PROVIDER_CLOSED', message: 'Codex provider is closed.', retryable: false };
+    const environment = cliEnvironments.get(this);
+    if (!environment) return { type: 'error', code: 'PROVIDER_CLOSED', message: 'Codex provider is closed.', retryable: false };
+    if (signal?.aborted) return { type: 'error', code: 'cancelled', message: 'Codex request cancelled.', retryable: false };
+    const gate = checkProviderPrivacyAllowed(this, privacy);
+    if (!gate.allowed) {
+      onOutbound?.({ providerId: this.id, host: 'cli:codex', protocol: this.kind, zdrClass: gate.posture.zdrClass, zdrFlags: [], secretsRedacted: 0, blocked: true, reason: gate.message });
+      return { type: 'error', code: gate.code, message: gate.message, retryable: false };
+    }
+    const cleaned = privacy.redactOutboundSecrets === false ? { value: messages, count: 0 } : redactOutboundValue(messages, extraSecrets || environmentSecrets());
+    onOutbound?.({ providerId: this.id, host: 'cli:codex', protocol: this.kind, zdrClass: gate.posture.zdrClass, zdrFlags: ['cli:telemetry-disabled'], secretsRedacted: cleaned.count, blocked: false });
+    const promptText = [
+      'CRITICAL: Planner/advisory text-only call. DO NOT invoke any Codex built-in tools.',
+      ...(Array.isArray(cleaned.value) ? cleaned.value.map(m => `${String(m?.role || 'user').toUpperCase()}:\n${String(m?.content || '')}`) : [String(cleaned.value || '')])
+    ].join('\n\n');
+    const working = await fs.mkdtemp(path.join(tmpdir(), 'g0d-codex-draft-'));
+    try {
+      const args = [
+        'exec', '--ephemeral', '--ignore-user-config', '--sandbox', 'read-only',
+        '--skip-git-repo-check', '--json', '--color', 'never', '--cd', working,
+        '-c', 'approval_policy="never"', '-c', 'web_search="disabled"'
+      ];
+      for (const feature of ['shell_tool', 'unified_exec', 'apps', 'plugins', 'hooks', 'multi_agent', 'browser_use', 'computer_use', 'image_generation', 'in_app_browser', 'goals', 'memories', 'workspace_dependencies']) {
+        args.push('--disable', feature);
+      }
+      if (this.model) args.push('--model', this.model);
+      args.push('-');
+      const output = await runSubprocessPlanner(this, { args, cwd: working, signal, timeoutOverrideMs: 60000, input: promptText, env: environment, label: 'Codex' });
+      const events = output.split('\n').filter(Boolean).flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
+      const text = events.filter(e => e.type === 'item.completed' && e.item?.type === 'agent_message').map(e => e.item?.text || '').join('\n').trim() || output.trim();
+      const usage = events.findLast(e => e.type === 'turn.completed')?.usage || null;
+      return { type: 'message', text, finish: 'done', usage, model: this.model || 'codex-configured-default' };
+    } catch (err) {
+      return { type: 'error', code: err?.code || 'provider_error', message: err?.message || 'Codex CLI draft failed.', retryable: Boolean(err?.retryable) };
+    } finally {
+      await fs.rm(working, { recursive: true, force: true });
+    }
+  }
   close() {
     if(this.closePromise)return this.closePromise;
     this.closed=true;cliEnvironments.delete(this);
@@ -1805,7 +1870,7 @@ export class ClaudeCodeProvider extends CodexProvider {
       try {
         output = await runClaudePlanner(this,{args,cwd:working,signal,turnTimeoutMs,input});
       } catch (err) {
-        if (args.includes('--effort') && /unknown option|unrecognized|invalid option/i.test(String(err?.message || ''))) {
+        if (args.includes('--effort') && (err?.code === 'UNSUPPORTED_CLI_FLAG' || /unknown option|unrecognized|invalid option/i.test(String(err?.message || '')))) {
           const fallbackArgs = buildClaudeExecArgs({ schemaJson, systemPrompt, model: this.model || null, taskEffort: context.task?.effort || 'medium', cliSettings: this.cliSettings, includeEffort: false });
           output = await runClaudePlanner(this,{args:fallbackArgs,cwd:working,signal,turnTimeoutMs,input});
         } else {
@@ -1820,13 +1885,63 @@ export class ClaudeCodeProvider extends CodexProvider {
       if(internalCall)throw Object.assign(new Error('Planner-only Claude Code bridge attempted an internal tool; response rejected'),{code:'tool_protocol'});
       const result=events.findLast(event=>event.type==='result');
       if(!result)throw Object.assign(new Error('Claude Code returned no result'),{code:'tool_protocol'});
-      if(result.is_error||result.subtype&&result.subtype!=='success')throw Object.assign(new Error('Claude Code could not complete the planner request. Check CLI sign-in, model access and usage limits.'),{code:'provider_configuration',retryable:false});
+      if(result.is_error||result.subtype&&result.subtype!=='success') {
+        const resHint = String(result.result || result.error || '');
+        if (/rate\s*limit|too many requests|429|overloaded|529|capacity|try again later/i.test(resHint)) {
+          throw Object.assign(new Error('Claude Code hit a temporary rate limit or capacity spike; retrying.'), { code: 'rate_limit', retryable: true });
+        }
+        throw Object.assign(new Error('Claude Code could not complete the planner request. Check CLI sign-in, model access and usage limits.'),{code:'provider_configuration',retryable:false});
+      }
       const value=result.structured_output;
       if(!value||typeof value!=='object'||Array.isArray(value)||!['tool','message'].includes(value.type)||!Array.isArray(value.calls)||typeof value.text!=='string'||!['continue','done','refusal'].includes(value.finish)||Object.keys(value).some(key=>!['type','calls','text','finish'].includes(key)))throw Object.assign(new Error('Claude Code returned an invalid decision envelope'),{code:'tool_protocol'});
       if((value.type==='tool'&&(!value.calls.length||value.finish!=='continue'))||(value.type==='message'&&value.calls.length))throw Object.assign(new Error('Claude Code returned inconsistent decision fields'),{code:'tool_protocol'});
       const meta={usage:result.usage||null,model:this.model||'claude-cli-default',evidenceKind:'live_claude_cli',accounting:this.accounting};
       return value.type==='tool'?{type:'tool',calls:normalizeCalls(value.calls,toolAliases(tools),tools),...meta}:{type:'message',text:value.text,finish:value.finish,...meta};
     } finally {await fs.rm(working,{recursive:true,force:true});}
+  }
+  async draft(messages = [], signal, _maxTokens = 1000, _params = {}, { privacy = DEFAULT_PRIVACY_SETTINGS, onOutbound, extraSecrets } = {}) {
+    if (this.closed) return { type: 'error', code: 'PROVIDER_CLOSED', message: 'Claude Code provider is closed.', retryable: false };
+    if (signal?.aborted) return { type: 'error', code: 'cancelled', message: 'Claude Code request cancelled.', retryable: false };
+    const gate = checkProviderPrivacyAllowed(this, privacy);
+    if (!gate.allowed) {
+      onOutbound?.({ providerId: this.id, host: 'cli:claude', protocol: this.kind, zdrClass: gate.posture.zdrClass, zdrFlags: [], secretsRedacted: 0, blocked: true, reason: gate.message });
+      return { type: 'error', code: gate.code, message: gate.message, retryable: false };
+    }
+    const cleaned = privacy.redactOutboundSecrets === false ? { value: messages, count: 0 } : redactOutboundValue(messages, extraSecrets || environmentSecrets());
+    onOutbound?.({ providerId: this.id, host: 'cli:claude', protocol: this.kind, zdrClass: gate.posture.zdrClass, zdrFlags: ['cli:telemetry-disabled'], secretsRedacted: cleaned.count, blocked: false });
+    const list = Array.isArray(cleaned.value) ? cleaned.value : [{ role: 'user', content: String(cleaned.value || '') }];
+    const sys = [
+      'CRITICAL: Planner/advisory text-only call. Do not invoke any native tools.',
+      ...list.filter(m => m?.role === 'system').map(m => String(m.content || ''))
+    ].filter(Boolean).join('\n\n');
+    const userPrompt = list.filter(m => m?.role !== 'system').map(m => `${String(m?.role || 'user').toUpperCase()}:\n${String(m?.content || '')}`).join('\n\n') || 'Continue.';
+    const working = await fs.mkdtemp(path.join(tmpdir(), 'g0d-claude-draft-'));
+    try {
+      const args = [
+        '--print', '--output-format', 'stream-json', '--verbose',
+        '--no-session-persistence', '--tools', '', '--disable-slash-commands', '--no-chrome',
+        '--permission-mode', 'dontAsk', '--setting-sources', '',
+        '--settings', JSON.stringify({ disableAllHooks: true, enabledPlugins: {} }),
+        '--strict-mcp-config', '--mcp-config', JSON.stringify({ mcpServers: {} }),
+        '--max-turns', '2', '--system-prompt', sys
+      ];
+      if (this.model) args.push('--model', this.model);
+      const output = await runClaudePlanner(this, { args, cwd: working, signal, turnTimeoutMs: 60000, input: userPrompt });
+      const events = output.split('\n').filter(l => l.trim()).flatMap(l => { try { return [JSON.parse(l)]; } catch { return []; } });
+      const result = events.findLast(e => e.type === 'result');
+      if (result && (result.is_error || (result.subtype && result.subtype !== 'success'))) {
+        const resHint = String(result.result || result.error || '');
+        const isRate = /rate\s*limit|too many requests|429|overloaded|529|capacity/i.test(resHint);
+        return { type: 'error', code: isRate ? 'rate_limit' : 'provider_configuration', message: isRate ? 'Claude Code hit a temporary rate limit.' : 'Claude Code could not complete the advisory request.', retryable: isRate };
+      }
+      const assistantText = events.flatMap(e => e.message?.content || []).filter(b => b?.type === 'text' && typeof b.text === 'string').map(b => b.text).join('').trim();
+      const text = (typeof result?.result === 'string' && result.result.trim()) ? result.result.trim() : assistantText;
+      return { type: 'message', text, finish: 'done', usage: result?.usage || null, model: this.model || 'claude-cli-default' };
+    } catch (err) {
+      return { type: 'error', code: err?.code || 'provider_error', message: err?.message || 'Claude Code CLI draft failed.', retryable: Boolean(err?.retryable) };
+    } finally {
+      await fs.rm(working, { recursive: true, force: true });
+    }
   }
 }
 
@@ -1936,13 +2051,30 @@ function runSubprocessPlanner(owner, { args, cwd, signal, turnTimeoutMs, timeout
       }
       outChunks.push(chunk);
     });
-    // Provider stderr can contain account data. Never forward it to a task, browser or log.
-    child.stderr.resume();
+    // Capture bounded stderr ONLY for internal error classification — never forward raw stderr to tasks/UI/logs.
+    let errSnippet = '';
+    child.stderr.on('data', chunk => {
+      if (errSnippet.length < 4096) errSnippet += chunk.toString('utf8');
+    });
     child.on('close', code => {
       closed = true; clearTimeout(killTimer); owner.children.delete(record); resolveExit();
-      code === 0
-        ? done(null, Buffer.concat(outChunks).toString('utf8'))
-        : done(Object.assign(new Error(`${label} CLI could not complete the request. Check CLI sign-in, model access and usage limits.`), { code: 'provider_configuration', retryable: false }));
+      if (code === 0) {
+        done(null, Buffer.concat(outChunks).toString('utf8'));
+        return;
+      }
+      const lowerErr = errSnippet.toLowerCase();
+      if (/quota\s+reached|third-party\s+quota|daily\s+limit\s+reached|resets?\s+in\s+\d+\s*[mh]/i.test(lowerErr)) {
+        const resetMatch = errSnippet.match(/resets?\s+in\s+[0-9]+[mh](?:[0-9]+[ms])?/i);
+        const resetHint = resetMatch ? ` (${resetMatch[0]})` : '';
+        done(Object.assign(new Error(`${label} CLI quota reached${resetHint}. Switch models or wait before retrying.`), { code: 'quota_exhausted', retryable: true, quotaExhausted: true, retryAfterMs: 300000 }));
+      } else if (/429|rate[\s_-]?limit|quota|too many requests|resource_exhausted|overloaded|temporarily unavailable/i.test(lowerErr)) {
+        done(Object.assign(new Error(`${label} CLI is temporarily rate-limited or overloaded.`), { code: 'rate_limit', retryable: true, retryAfterMs: 2500 }));
+      } else if (/not logged in|unauthenticated|sign[\s-]?in|login required|expired token|invalid credentials/i.test(lowerErr)) {
+        const hint = label === 'Antigravity' ? ' Run `agy login` to re-authenticate.' : '';
+        done(Object.assign(new Error(`${label} CLI authentication required.${hint}`), { code: 'provider_configuration', retryable: false }));
+      } else {
+        done(Object.assign(new Error(`${label} CLI could not complete the request. Check CLI sign-in, model access and usage limits.`), { code: 'provider_configuration', retryable: false }));
+      }
     });
     child.stdin.on('error', () => {});
     if (signal?.aborted) { abort(); return; }
@@ -2001,6 +2133,43 @@ export class GeminiCliProvider extends CodexProvider {
       return { ...decision, usage, model: this.model || 'gemini-cli-default', evidenceKind: 'live_gemini_cli', accounting: this.accounting };
     } finally { await fs.rm(working, { recursive: true, force: true }); }
   }
+  async draft(messages = [], signal, _maxTokens = 1000, _params = {}, { privacy = DEFAULT_PRIVACY_SETTINGS, onOutbound, extraSecrets } = {}) {
+    if (this.closed) return { type: 'error', code: 'PROVIDER_CLOSED', message: 'Gemini CLI provider is closed.', retryable: false };
+    if (signal?.aborted) return { type: 'error', code: 'cancelled', message: 'Gemini CLI request cancelled.', retryable: false };
+    const gate = checkProviderPrivacyAllowed(this, privacy);
+    if (!gate.allowed) {
+      onOutbound?.({ providerId: this.id, host: 'cli:gemini', protocol: this.kind, zdrClass: gate.posture.zdrClass, zdrFlags: [], secretsRedacted: 0, blocked: true, reason: gate.message });
+      return { type: 'error', code: gate.code, message: gate.message, retryable: false };
+    }
+    const cleaned = privacy.redactOutboundSecrets === false ? { value: messages, count: 0 } : redactOutboundValue(messages, extraSecrets || environmentSecrets());
+    onOutbound?.({ providerId: this.id, host: 'cli:gemini', protocol: this.kind, zdrClass: gate.posture.zdrClass, zdrFlags: ['cli:telemetry-disabled'], secretsRedacted: cleaned.count, blocked: false });
+    const promptText = [
+      'CRITICAL: Planner/advisory text-only call. DO NOT invoke any Gemini CLI built-in tools.',
+      ...(Array.isArray(cleaned.value) ? cleaned.value.map(m => `${String(m?.role || 'user').toUpperCase()}:\n${String(m?.content || '')}`) : [String(cleaned.value || '')])
+    ].join('\n\n');
+    const working = await fs.mkdtemp(path.join(tmpdir(), 'g0d-gemini-draft-'));
+    try {
+      const directive = 'Read the advisory prompt from stdin and respond directly. Do not invoke any native Gemini CLI tools.';
+      const args = ['--prompt', directive, '--output-format', 'json'];
+      if (this.model) args.push('--model', this.model);
+      const env = geminiSubscriptionEnvironment(cliEnvironments.get(this));
+      const output = await runSubprocessPlanner(this, { args, cwd: working, signal, timeoutOverrideMs: 60000, input: promptText, env, label: 'Gemini' });
+      let text = output.trim(), parsed = null;
+      try { parsed = JSON.parse(text); } catch {
+        const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
+        if (fb >= 0 && lb > fb) { try { parsed = JSON.parse(text.slice(fb, lb + 1)); } catch {} }
+      }
+      if (parsed && typeof parsed === 'object') {
+        if (typeof parsed.response === 'string') text = parsed.response;
+        else if (typeof parsed.text === 'string') text = parsed.text;
+      }
+      return { type: 'message', text, finish: 'done', usage: parsed?.stats || null, model: this.model || 'gemini-cli-default' };
+    } catch (err) {
+      return { type: 'error', code: err?.code || 'provider_error', message: err?.message || 'Gemini CLI draft failed.', retryable: Boolean(err?.retryable) };
+    } finally {
+      await fs.rm(working, { recursive: true, force: true });
+    }
+  }
 }
 
 function compactToolCatalog(tools = []) {
@@ -2013,7 +2182,8 @@ function compactToolCatalog(tools = []) {
 
 function antigravityContractSignature(context) {
   const task = context.task || {};
-  const pp = task.probeProgress || null;
+  // Keep overseerGuidance and probeProgress out of the session-busting hash — they are
+  // already delivered in buildAntigravityDeltaPayload so Neon retains its warm KV-cache!
   return createHash('sha256').update(JSON.stringify({
     objective: task.objective || '',
     constraints: task.constraints || [],
@@ -2022,9 +2192,6 @@ function antigravityContractSignature(context) {
     execution: task.execution || null,
     checks: (task.checks || []).map(c => ({ name: c?.name, command: c?.command })),
     persona: task.persona || 'plinian',
-    overseerGuidance: task.overseerGuidance || null,
-    probeHasProgress: Boolean((pp?.passed || 0) > 0 || (pp?.highWater || 0) > 0),
-    probeRolledBack: Boolean(pp?.rolledBack),
   })).digest('hex');
 }
 
@@ -2065,26 +2232,164 @@ function buildAntigravityDeltaPayload(context, cached) {
     ...(task.overseerGuidance ? { overseerGuidance: String(task.overseerGuidance).slice(0, 600) } : {}),
   };
   return `Continue the task. CRITICAL: planner-only JSON bridge — DO NOT invoke any Antigravity CLI built-in tools. Return ONLY one raw JSON decision envelope (no markdown fences, no prose): {"type":"tool"|"message","calls":[{"id":"unique","name":"tool.name","arguments":"JSON string"}],"text":"","finish":"continue"|"done"|"refusal"}.\n` +
-    `On repo.write, OMIT expectedHash (the broker tracks hashes automatically). Batch independent file edits in one turn.\n\n` +
+    `EFFICIENCY: Calls in calls:[...] execute sequentially in order — batch repo.write/repo.patch AND verification (process.run / check.run) in ONE turn. Omit expectedHash on repo.write. Clean up any temporary test files inside the same shell command. Once verified, immediately return type="message", finish="done".\n\n` +
     `Delta since your last turn (JSON):\n${JSON.stringify(delta)}`;
 }
 
 /** Subscription-authenticated Google Antigravity CLI (agy) planner. CLI owns Google auth; the broker owns effects. */
 export class AntigravityCliProvider extends CodexProvider {
-  constructor({ id = 'antigravity-cli', label = 'Google Antigravity (agy) · CLI default', binary = process.env.G0D_ANTIGRAVITY_BINARY || 'agy', timeoutMs = 180000, model, environment = process.env, subscriptionId = 'antigravity-cli', cliSettings = {} } = {}) {
+  constructor({ id = 'antigravity-cli', label = 'Google Antigravity (agy) · CLI default', binary = process.env.G0D_ANTIGRAVITY_BINARY || 'agy', timeoutMs = 180000, model, environment = process.env, subscriptionId = 'antigravity-cli', cliSettings = {}, useAcp } = {}) {
     super({ id, label, binary, timeoutMs, model, environment, subscriptionId, cliSettings });
     this.kind = 'antigravity-cli';
     this.tier = inferProviderTier({ id, model: model || 'gemini-4-neon-high' });
     this.accounting = 'Antigravity CLI turns and reported usage; underlying provider attempts are opaque';
     this.sessions = new Map();
     this.inFlightSessions = new Set();
+    this.acpPool = new AcpSessionPool({ maxClients: 8 });
+    this._acpUnsupported = false;
+    this._acpEverSucceeded = false;
+    const transportPref = String(cliSettings?.transport || '').toLowerCase();
+    const envFlag = environment?.G0D_AGY_ACP ?? process.env.G0D_AGY_ACP;
+    if (typeof useAcp === 'boolean') this.acpEnabled = useAcp;
+    else if (transportPref === 'subprocess' || envFlag === '0') this.acpEnabled = false;
+    else if (transportPref === 'acp' || envFlag === '1') this.acpEnabled = true;
+    else this.acpEnabled = path.basename(String(binary || '')) === 'agy';
   }
-  close() {
+  acpStatus() {
+    return this.acpPool.status();
+  }
+  async close() {
+    this.closed = true;
     this.sessions.clear();
     this.inFlightSessions.clear();
+    await this.acpPool.closeAll().catch(() => {});
     return super.close();
   }
-  async turn(context, { signal, turnTimeoutMs, privacy = DEFAULT_PRIVACY_SETTINGS, onOutbound, extraSecrets } = {}) {
+  async _acquireAcpSession(poolKey, { env, model, effort, signal } = {}) {
+    if (this.closed) throw Object.assign(new Error('Antigravity CLI provider is closed.'), { code: 'PROVIDER_CLOSED', retryable: false });
+    const existing = this.acpPool.get(poolKey);
+    if (existing && existing.client.isAlive() && existing.model === (model || null)) {
+      return existing;
+    }
+    if (existing) await this.acpPool.drop(poolKey);
+    const working = await fs.mkdtemp(path.join(tmpdir(), 'g0d-agy-acp-'));
+    const client = new AcpClient({
+      binary: this.binary,
+      args: ['acp', '--disable-telemetry'],
+      cwd: working,
+      env,
+      capabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+      permissionHandler: createAcpPermissionHandler({ mode: 'planner' }),
+    });
+    const origClose = client.close.bind(client);
+    client.close = async () => {
+      try { await origClose(); } finally { await fs.rm(working, { recursive: true, force: true }).catch(() => {}); }
+    };
+    try {
+      if (signal?.aborted) throw Object.assign(new Error('Antigravity ACP cancelled.'), { code: 'cancelled', retryable: false });
+      const sess = await client.createSession({ cwd: working, model: model || this.model || null, mode: 'plan', effort, signal });
+      if (this.closed || signal?.aborted) {
+        await client.close().catch(() => {});
+        throw Object.assign(new Error(this.closed ? 'Antigravity CLI provider is closed.' : 'Antigravity ACP cancelled.'), { code: this.closed ? 'PROVIDER_CLOSED' : 'cancelled', retryable: false });
+      }
+      const entry = {
+        client,
+        sessionId: sess.sessionId,
+        harnessId: 'antigravity-cli',
+        model: model || this.model || null,
+        mode: 'planner',
+        working,
+      };
+      this.acpPool.set(poolKey, entry);
+      return entry;
+    } catch (err) {
+      await client.close().catch(() => {});
+      throw err;
+    }
+  }
+  async draft(messages = [], signal, _maxTokens = 1000, _params = {}, { privacy = DEFAULT_PRIVACY_SETTINGS, onOutbound, extraSecrets, onDelta } = {}) {
+    if (this.closed) return { type: 'error', code: 'PROVIDER_CLOSED', message: 'Antigravity CLI provider is closed.', retryable: false };
+    if (signal?.aborted) return { type: 'error', code: 'cancelled', message: 'Antigravity CLI request cancelled.', retryable: false };
+    const gate = checkProviderPrivacyAllowed(this, privacy);
+    if (!gate.allowed) {
+      onOutbound?.({ providerId: this.id, host: 'cli:antigravity', protocol: this.kind, zdrClass: gate.posture.zdrClass, zdrFlags: [], secretsRedacted: 0, blocked: true, reason: gate.message });
+      return { type: 'error', code: gate.code, message: gate.message, retryable: false };
+    }
+    const cleaned = privacy.redactOutboundSecrets === false ? { value: messages, count: 0 } : redactOutboundValue(messages, extraSecrets || environmentSecrets());
+    const useAcpNow = Boolean(this.acpEnabled && !this._acpUnsupported);
+    onOutbound?.({ providerId: this.id, host: useAcpNow ? 'acp:antigravity' : 'cli:antigravity', protocol: useAcpNow ? 'acp-v1' : this.kind, zdrClass: gate.posture.zdrClass, zdrFlags: ['cli:telemetry-disabled'], secretsRedacted: cleaned.count, blocked: false });
+    const promptText = [
+      'CRITICAL: Planner/advisory text-only call. DO NOT invoke any Antigravity CLI built-in tools.',
+      ...(Array.isArray(cleaned.value) ? cleaned.value.map(m => `${String(m?.role || 'user').toUpperCase()}:\n${String(m?.content || '')}`) : [String(cleaned.value || '')])
+    ].join('\n\n');
+    const env = antigravitySubscriptionEnvironment(cliEnvironments.get(this));
+
+    if (useAcpNow) {
+      const draftKey = `draft:${randomUUID().slice(0, 8)}`;
+      try {
+        const entry = await this._acquireAcpSession(draftKey, { env, model: this.model, effort: this.cliSettings?.reasoningEffort, signal });
+        try {
+          const res = await entry.client.prompt({
+            sessionId: entry.sessionId,
+            text: promptText,
+            signal,
+            timeoutMs: 90000,
+            onDelta,
+          });
+          if (res.toolCalls.length > 0) {
+            return { type: 'error', code: 'tool_protocol', message: 'Planner-only Antigravity ACP draft attempted an internal tool call; response rejected.', retryable: true };
+          }
+          this._acpEverSucceeded = true;
+          return {
+            type: 'message',
+            text: res.text,
+            reasoning: res.reasoning || undefined,
+            finish: 'done',
+            usage: res.usage,
+            model: this.model || 'antigravity-cli-default',
+            transport: 'acp-v1',
+          };
+        } finally {
+          await this.acpPool.drop(draftKey);
+        }
+      } catch (err) {
+        if (this.closed || signal?.aborted || ['cancelled', 'PROVIDER_CLOSED', 'ETIMEDOUT', 'quota_exhausted', 'rate_limit'].includes(err?.code)) {
+          return { type: 'error', code: signal?.aborted ? 'cancelled' : (err?.code || 'acp_error'), message: err?.message || 'Antigravity ACP draft interrupted.', retryable: Boolean(err?.retryable), ...(err?.retryAfterMs ? { retryAfterMs: err.retryAfterMs } : {}) };
+        }
+        // Only permanently disable ACP if it has never succeeded on this binary and handshake failed.
+        if (!this._acpEverSucceeded && (err?.code === 'acp_init_failed' || err?.code === 'provider_configuration')) {
+          this._acpUnsupported = true;
+        }
+      }
+    }
+
+    const working = await fs.mkdtemp(path.join(tmpdir(), 'g0d-agy-draft-'));
+    try {
+      const args = ['--output-format', 'json', '--disable-slash-commands', '--sandbox'];
+      if (this.model) args.push('--model', this.model);
+      const output = await runSubprocessPlanner(this, { args, cwd: working, signal, timeoutOverrideMs: 60000, input: promptText, env, label: 'Antigravity' });
+      let text = output.trim();
+      let parsed = null;
+      try { parsed = JSON.parse(text); } catch {
+        const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
+        if (fb >= 0 && lb > fb) { try { parsed = JSON.parse(text.slice(fb, lb + 1)); } catch {} }
+      }
+      if (parsed && typeof parsed === 'object') {
+        if (typeof parsed.status === 'string' && parsed.status && parsed.status !== 'SUCCESS') {
+          return { type: 'error', code: 'provider_configuration', message: `Antigravity CLI returned status ${String(parsed.status).slice(0, 40)}`, retryable: false };
+        }
+        if (typeof parsed.response === 'string') text = parsed.response;
+        else if (typeof parsed.text === 'string') text = parsed.text;
+      }
+      if (onDelta && text) onDelta({ type: 'text', text });
+      return { type: 'message', text, finish: 'done', usage: parsed?.usage || null, model: this.model || 'antigravity-cli-default' };
+    } catch (err) {
+      return { type: 'error', code: err?.code || 'provider_error', message: err?.message || 'Antigravity CLI draft failed.', retryable: Boolean(err?.retryable) };
+    } finally {
+      await fs.rm(working, { recursive: true, force: true });
+    }
+  }
+  async turn(context, { signal, turnTimeoutMs, privacy = DEFAULT_PRIVACY_SETTINGS, onOutbound, extraSecrets, onDelta } = {}) {
     if (this.closed) throw Object.assign(new Error('Antigravity CLI provider is closed'), { code: 'PROVIDER_CLOSED', retryable: false });
     if (signal?.aborted) throw Object.assign(new Error('Antigravity CLI bridge cancelled'), { code: 'cancelled' });
     const gate = checkProviderPrivacyAllowed(this, privacy);
@@ -2094,7 +2399,8 @@ export class AntigravityCliProvider extends CodexProvider {
     }
     const cleaned = privacy.redactOutboundSecrets === false ? { value: context, count: 0 } : redactOutboundValue(context, extraSecrets || environmentSecrets());
     context = cleaned.value;
-    onOutbound?.({ providerId: this.id, host: 'cli:antigravity', protocol: this.kind, zdrClass: gate.posture.zdrClass, zdrFlags: ['cli:telemetry-disabled'], secretsRedacted: cleaned.count, blocked: false });
+    const tryAcpInit = Boolean(this.acpEnabled && !this._acpUnsupported);
+    onOutbound?.({ providerId: this.id, host: tryAcpInit ? 'acp:antigravity' : 'cli:antigravity', protocol: tryAcpInit ? 'acp-v1' : this.kind, zdrClass: gate.posture.zdrClass, zdrFlags: tryAcpInit ? ['acp:persistent-stdio', 'cli:telemetry-disabled'] : ['cli:telemetry-disabled'], secretsRedacted: cleaned.count, blocked: false });
     const tools = context.tools ?? canonicalTools;
     const taskId = typeof context.task?.id === 'string' && context.task.id ? context.task.id : null;
     const history = Array.isArray(context.history) ? context.history : [];
@@ -2107,33 +2413,44 @@ export class AntigravityCliProvider extends CodexProvider {
     const contractSig = antigravityContractSignature(context);
     const validConvId = id => typeof id === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(id);
 
+    const followups = Array.isArray(context.task?.followups) ? context.task.followups : [];
+    const followupsPrefixHash = count => createHash('sha256').update(JSON.stringify(followups.slice(0, count).map(f => ({ id: f?.id, message: f?.message })))).digest('hex');
+
     // Only stateful multi-turn tasks with durable event history participate in session reuse.
     // Stateless subagent/overseer/compactor turns (history: []) and overlapping calls never touch this.sessions.
     const canManageSession = Boolean(taskId && history.length > 0 && maxEventSeq > 0 && !this.inFlightSessions.has(taskId));
     if (canManageSession) this.inFlightSessions.add(taskId);
 
-    const cached = canManageSession ? this.sessions.get(taskId) : null;
-    const canReuseSession = Boolean(
-      canManageSession
-      && cached
-      && validConvId(cached.conversationId)
-      && cached.strategy === strategy
-      && cached.contractVersion === contractVersion
-      && cached.recoveries === recoveries
-      && cached.toolSig === toolSig
-      && cached.contractSig === contractSig
-      && cached.lastEventSeq > 0
-      && maxEventSeq >= cached.lastEventSeq
-      && compactedBeforeSeq <= cached.lastEventSeq
-    );
-    if (canManageSession && cached && !canReuseSession) {
-      this.sessions.delete(taskId);
-    }
-
-    const turnStartedAt = Date.now();
-    const turnBudgetMs = Number.isFinite(turnTimeoutMs) && turnTimeoutMs > 0 ? Math.max(this.timeoutMs, turnTimeoutMs) : this.timeoutMs;
-    const working = await fs.mkdtemp(path.join(tmpdir(), 'g0d-agy-planner-'));
+    let working = null;
     try {
+      const cached = canManageSession ? this.sessions.get(taskId) : null;
+      const followupsAppendOnly = Boolean(
+        cached
+        && followups.length >= (cached.followupsCount || 0)
+        && followupsPrefixHash(cached.followupsCount || 0) === cached.followupsHash
+      );
+      const canReuseSession = Boolean(
+        canManageSession
+        && cached
+        && validConvId(cached.conversationId)
+        && cached.strategy === strategy
+        && contractVersion >= cached.contractVersion
+        && followupsAppendOnly
+        && cached.recoveries === recoveries
+        && cached.toolSig === toolSig
+        && cached.contractSig === contractSig
+        && cached.lastEventSeq > 0
+        && maxEventSeq >= cached.lastEventSeq
+        && compactedBeforeSeq <= cached.lastEventSeq
+      );
+      if (canManageSession && cached && !canReuseSession) {
+        this.sessions.delete(taskId);
+        await this.acpPool.drop(`task:${taskId}`).catch(() => {});
+      }
+
+      const turnStartedAt = Date.now();
+      const turnBudgetMs = Number.isFinite(turnTimeoutMs) && turnTimeoutMs > 0 ? Math.max(this.timeoutMs, turnTimeoutMs) : this.timeoutMs;
+      working = await fs.mkdtemp(path.join(tmpdir(), 'g0d-agy-planner-'));
       if (this.closed) throw Object.assign(new Error('Antigravity CLI provider is closed'), { code: 'PROVIDER_CLOSED', retryable: false });
       const env = antigravitySubscriptionEnvironment(cliEnvironments.get(this));
       const buildArgs = conversationId => {
@@ -2148,9 +2465,10 @@ export class AntigravityCliProvider extends CodexProvider {
       const buildFullPayload = () =>
         `CRITICAL: You are running inside a planner-only JSON bridge. DO NOT invoke any Antigravity CLI built-in tools (no read_file, write_file, run_command, etc.). Return ONLY one raw JSON object matching the decision envelope below (no markdown fences, no prose).\n` +
         `EFFICIENCY RULES:\n` +
-        `- Batch all independent file edits (repo.write / repo.patch) in a SINGLE type="tool" turn.\n` +
+        `- Files already shown with content in your workspace snapshot below are ALREADY loaded — do NOT waste a turn calling repo.list or repo.read on them.\n` +
+        `- Calls in calls:[...] execute sequentially in order: batch all independent repo.write/repo.patch edits AND your verification process.run (or check.run if configured) in the SAME type="tool" turn whenever possible.\n` +
         `- On repo.write, OMIT expectedHash (the broker tracks file hashes automatically).\n` +
-        `- After writing files, verify with check.run or process.run before returning finish="done".\n\n` +
+        `- If you run ad-hoc verification commands via process.run, use inline scripts or clean up any temporary test/binary files inside the SAME shell command. Once verification passes cleanly, immediately return type="message", finish="done".\n\n` +
         `${compilePrompt({ ...context, tools })}\n\n` +
         `Return ONLY raw JSON matching:\n` +
         `{"type":"tool"|"message","calls":[{"id":"unique","name":"tool.name","arguments":"JSON string"}],"text":"","finish":"continue"|"done"|"refusal"}\n` +
@@ -2187,32 +2505,120 @@ export class AntigravityCliProvider extends CodexProvider {
         return { decision, usage, nextConversationId };
       };
 
-      let result;
-      if (canReuseSession) {
+      const invokeViaAcp = async (reuseWarm, timeoutOverrideMs = null) => {
+        const poolKey = canManageSession ? `task:${taskId}` : `ephem:${randomUUID().slice(0, 8)}`;
+        if (!reuseWarm) await this.acpPool.drop(poolKey).catch(() => {});
+        const entry = await this._acquireAcpSession(poolKey, {
+          env,
+          model: this.model,
+          effort: this.cliSettings?.reasoningEffort || context.task?.effort,
+          signal,
+        });
+        // Strictly verify same transport AND same live AcpClient instance before sending a delta!
+        const useDelta = Boolean(
+          reuseWarm
+          && cached
+          && cached.transport === 'acp-v1'
+          && cached.client === entry.client
+          && entry.sessionId === cached.conversationId
+        );
+        const promptText = useDelta ? buildAntigravityDeltaPayload(context, cached) : buildFullPayload();
+        const images = Array.isArray(context.visualObservations)
+          ? context.visualObservations.slice(0, 8).map(obs => {
+              const m = String(obs?.dataUrl || '').match(/^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/=]+)$/);
+              if (!m || m[2].length > 14 * 1024 * 1024) return null;
+              return { mimeType: m[1], data: m[2] };
+            }).filter(Boolean)
+          : [];
         try {
-          result = await invokeAndParse(cached.conversationId);
-        } catch (err) {
-          this.sessions.delete(taskId);
-          const remainingMs = turnBudgetMs - (Date.now() - turnStartedAt);
-          if (err?.code === 'cancelled' || err?.code === 'PROVIDER_CLOSED' || err?.code === 'ETIMEDOUT' || signal?.aborted || this.closed || remainingMs < 15000) throw err;
-          // Warm session expired or errored — fall back transparently to a fresh full-context turn within remaining timeout budget.
-          result = await invokeAndParse(null, remainingMs);
+          const res = await entry.client.prompt({
+            sessionId: entry.sessionId,
+            text: promptText,
+            images,
+            signal,
+            timeoutMs: timeoutOverrideMs || turnBudgetMs,
+            onDelta: onDelta ? (evt => { if (evt?.type === 'reasoning' || evt?.type === 'thinking') onDelta({ type: 'thinking', text: evt.text }); }) : null,
+          });
+          if (res.toolCalls.length > 0) {
+            await this.acpPool.drop(poolKey).catch(() => {});
+            throw Object.assign(new Error('Planner-only Antigravity ACP bridge attempted an internal tool call; response rejected'), { code: 'tool_protocol' });
+          }
+          const decision = parsePlannerDecisionEnvelope(res.text, tools, 'Antigravity ACP');
+          this._acpEverSucceeded = true;
+          return {
+            decision,
+            reasoning: res.reasoning || undefined,
+            usage: res.usage,
+            nextConversationId: entry.sessionId,
+            transport: 'acp-v1',
+            client: entry.client,
+          };
+        } finally {
+          if (!canManageSession) await this.acpPool.drop(poolKey).catch(() => {});
         }
-      } else {
-        result = await invokeAndParse(null);
+      };
+
+      let result;
+      const tryAcp = Boolean(this.acpEnabled && !this._acpUnsupported);
+      if (tryAcp) {
+        try {
+          const canReuseAcp = Boolean(canReuseSession && cached?.transport === 'acp-v1');
+          if (canReuseAcp) {
+            try {
+              result = await invokeViaAcp(true);
+            } catch (err) {
+              this.sessions.delete(taskId);
+              await this.acpPool.drop(`task:${taskId}`).catch(() => {});
+              const remainingMs = turnBudgetMs - (Date.now() - turnStartedAt);
+              if (err?.code === 'cancelled' || err?.code === 'PROVIDER_CLOSED' || err?.code === 'ETIMEDOUT' || err?.code === 'quota_exhausted' || err?.code === 'rate_limit' || signal?.aborted || this.closed || remainingMs < 15000) throw err;
+              result = await invokeViaAcp(false, remainingMs);
+            }
+          } else {
+            result = await invokeViaAcp(false);
+          }
+        } catch (acpErr) {
+          if (acpErr?.code === 'cancelled' || acpErr?.code === 'PROVIDER_CLOSED' || acpErr?.code === 'ETIMEDOUT' || acpErr?.code === 'quota_exhausted' || acpErr?.code === 'rate_limit' || signal?.aborted || this.closed) {
+            throw acpErr;
+          }
+          // Only latch _acpUnsupported when ACP has never succeeded on this binary and handshake failed.
+          if (!this._acpEverSucceeded && (acpErr?.code === 'acp_init_failed' || acpErr?.code === 'provider_configuration')) {
+            this._acpUnsupported = true;
+          }
+          result = null;
+        }
+      }
+
+      if (!result) {
+        const canReuseSubprocess = Boolean(canReuseSession && this.sessions.has(taskId) && cached?.transport !== 'acp-v1');
+        if (canReuseSubprocess) {
+          try {
+            result = await invokeAndParse(cached.conversationId);
+          } catch (err) {
+            this.sessions.delete(taskId);
+            const remainingMs = turnBudgetMs - (Date.now() - turnStartedAt);
+            if (err?.code === 'cancelled' || err?.code === 'PROVIDER_CLOSED' || err?.code === 'ETIMEDOUT' || signal?.aborted || this.closed || remainingMs < 15000) throw err;
+            result = await invokeAndParse(null, remainingMs);
+          }
+        } else {
+          result = await invokeAndParse(null);
+        }
       }
 
       if (canManageSession) {
         if (result.decision.finish === 'refusal' || !validConvId(result.nextConversationId)) {
           this.sessions.delete(taskId);
+          await this.acpPool.drop(`task:${taskId}`).catch(() => {});
         } else {
           const fileSnapshots = new Map(
             (context.files || []).map(f => [f.path, { sha256: f.sha256, hasContent: typeof f.content === 'string' }])
           );
           this.sessions.set(taskId, {
             conversationId: result.nextConversationId,
+            transport: result.transport || 'subprocess',
+            client: result.client || null,
             lastEventSeq: maxEventSeq,
-            followupsCount: Array.isArray(context.task?.followups) ? context.task.followups.length : 0,
+            followupsCount: followups.length,
+            followupsHash: followupsPrefixHash(followups.length),
             fileSnapshots,
             strategy,
             contractVersion,
@@ -2220,7 +2626,6 @@ export class AntigravityCliProvider extends CodexProvider {
             toolSig,
             contractSig,
           });
-          // Bound session cache size to prevent unbounded growth in long-lived servers
           if (this.sessions.size > 200) {
             const oldestKey = this.sessions.keys().next().value;
             if (oldestKey && oldestKey !== taskId) this.sessions.delete(oldestKey);
@@ -2228,10 +2633,311 @@ export class AntigravityCliProvider extends CodexProvider {
         }
       }
 
-      return { ...result.decision, usage: result.usage, model: this.model || 'antigravity-cli-default', evidenceKind: 'live_antigravity_cli', accounting: this.accounting };
+      return {
+        ...result.decision,
+        ...(result.reasoning ? { thinking: result.reasoning, reasoning: result.reasoning } : {}),
+        usage: result.usage,
+        model: this.model || 'antigravity-cli-default',
+        evidenceKind: result.transport === 'acp-v1' ? 'live_antigravity_acp' : 'live_antigravity_cli',
+        ...(result.transport ? { transport: result.transport } : {}),
+        accounting: this.accounting,
+      };
     } finally {
       if (canManageSession) this.inFlightSessions.delete(taskId);
-      await fs.rm(working, { recursive: true, force: true });
+      if (working) await fs.rm(working, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+}
+
+/**
+ * Universal Agent Client Protocol (ACP v1) Multi-Harness Provider.
+ * Connects G0DC0D3 to any ACP-capable CLI harness (agy acp, claude-code-acp, codex-acp,
+ * gemini --experimental-acp, opencode acp) over persistent JSON-RPC 2.0 stdio with
+ * G0DC0D3-mediated workspace fs/*, Seatbelt/bwrap terminal/*, and permission enforcement.
+ */
+export class AcpHarnessProvider {
+  constructor({
+    id = 'acp:antigravity',
+    harnessId = 'antigravity-cli',
+    label = 'ACP Multi-Harness Provider',
+    binary = process.env.G0D_ANTIGRAVITY_BINARY || 'agy',
+    args = ['acp', '--disable-telemetry'],
+    model = null,
+    delegated = true,
+    timeoutMs = 180000,
+    environment = process.env,
+    tier = 'frontier',
+    subscriptionId = 'acp',
+    cliSettings = {},
+  } = {}) {
+    Object.assign(this, {
+      id,
+      harnessId,
+      label,
+      binary,
+      args: Array.isArray(args) ? [...args] : [],
+      model,
+      delegated: Boolean(delegated),
+      timeoutMs,
+      subscriptionId,
+      cliSettings: cliSettings || {},
+      kind: 'acp',
+      protocol: 'acp-v1',
+      tier: inferProviderTier({ id, model, tier }),
+      available: true,
+      accounting: 'Persistent ACP v1 stdio harness session with G0DC0D3-mediated fs/terminal/permission controls',
+      capabilities: providerCapabilities(true, 'acp'),
+      closed: false,
+    });
+    cliEnvironments.set(this, cliEnvironment(environment));
+    this.acpPool = new AcpSessionPool({ maxClients: 8 });
+    this.inFlightSessions = new Set();
+  }
+
+  acpStatus() {
+    return this.acpPool.status();
+  }
+
+  async close() {
+    this.closed = true;
+    this.inFlightSessions.clear();
+    await this.acpPool.closeAll().catch(() => {});
+  }
+
+  _scopedHarnessEnv() {
+    const base = { ...(cliEnvironments.get(this) || {}), ...CLI_NO_TELEMETRY_ENV };
+    const harnessConfigKeep = {
+      'codex-cli': new Set(['CODEX_HOME']),
+      'claude-code': new Set(['CLAUDE_CONFIG_DIR']),
+      'gemini-cli': new Set(['GEMINI_CONFIG_DIR', 'GOOGLE_CLOUD_PROJECT', 'GOOGLE_CLOUD_LOCATION']),
+      'antigravity-cli': new Set(['GOOGLE_CLOUD_PROJECT', 'GOOGLE_CLOUD_LOCATION']),
+      'opencode': new Set([]),
+    };
+    const keep = harnessConfigKeep[this.harnessId] || new Set();
+    for (const key of ['CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CONFIG_DIR', 'GH_CONFIG_DIR', 'COPILOT_CONFIG_DIR']) {
+      if (!keep.has(key)) delete base[key];
+    }
+    return this.harnessId === 'antigravity-cli' ? antigravitySubscriptionEnvironment(base) : base;
+  }
+
+  async _createClient({ workspace, execution, planMode, permissionRules, privacy = DEFAULT_PRIVACY_SETTINGS, extraSecrets = null, onPermissionDecision, onFileModified, onTerminalEvent }) {
+    const env = this._scopedHarnessEnv();
+    const effectiveCwd = workspace || await fs.mkdtemp(path.join(tmpdir(), 'g0d-acp-cwd-'));
+    const tempOwned = !workspace;
+    const effectiveRules = Array.isArray(permissionRules) && permissionRules.length > 0 ? permissionRules : STRICT_DEFAULT_PRESET;
+    const sandboxHandlers = this.delegated && workspace
+      ? createAcpSandboxHandlers({ workspace, execution, planMode, permissionRules: effectiveRules, privacy, extraSecrets, onFileModified, onTerminalEvent })
+      : null;
+    const permissionHandler = createAcpPermissionHandler({
+      mode: this.delegated && workspace ? 'delegated' : 'planner',
+      workspace: workspace || null,
+      planMode: Boolean(planMode),
+      permissionRules: effectiveRules,
+      privacy,
+      onPermissionDecision,
+    });
+    const client = new AcpClient({
+      binary: this.binary,
+      args: this.args,
+      cwd: effectiveCwd,
+      env,
+      capabilities: this.delegated && workspace
+        ? { fs: { readTextFile: true, writeTextFile: !planMode }, terminal: Boolean(execution?.enabled && !planMode) }
+        : { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+      permissionHandler,
+      sandboxHandlers,
+    });
+    if (tempOwned) {
+      const origClose = client.close.bind(client);
+      client.close = async () => {
+        try { await origClose(); } finally { await fs.rm(effectiveCwd, { recursive: true, force: true }).catch(() => {}); }
+      };
+    }
+    return { client, effectiveCwd, sandboxHandlers };
+  }
+
+  async draft(messages = [], signal, _maxTokens = 2000, _params = {}, { privacy = DEFAULT_PRIVACY_SETTINGS, onOutbound, extraSecrets, onDelta } = {}) {
+    if (this.closed) return { type: 'error', code: 'PROVIDER_CLOSED', message: 'ACP harness provider is closed.', retryable: false };
+    if (signal?.aborted) return { type: 'error', code: 'cancelled', message: 'ACP request cancelled.', retryable: false };
+    const gate = checkProviderPrivacyAllowed(this, privacy);
+    if (!gate.allowed) {
+      onOutbound?.({ providerId: this.id, host: `acp:${this.harnessId}`, protocol: 'acp-v1', zdrClass: gate.posture.zdrClass, zdrFlags: [], secretsRedacted: 0, blocked: true, reason: gate.message });
+      return { type: 'error', code: gate.code, message: gate.message, retryable: false };
+    }
+    const cleaned = privacy.redactOutboundSecrets === false ? { value: messages, count: 0 } : redactOutboundValue(messages, extraSecrets || environmentSecrets());
+    onOutbound?.({ providerId: this.id, host: `acp:${this.harnessId}`, protocol: 'acp-v1', zdrClass: gate.posture.zdrClass, zdrFlags: ['acp:persistent-stdio', 'cli:telemetry-disabled'], secretsRedacted: cleaned.count, blocked: false });
+    const promptText = (Array.isArray(cleaned.value) ? cleaned.value : [{ role: 'user', content: String(cleaned.value || '') }])
+      .map(m => `${String(m?.role || 'user').toUpperCase()}:\n${String(m?.content || '')}`)
+      .join('\n\n');
+    const { client, effectiveCwd } = await this._createClient({ workspace: null, planMode: true, privacy, extraSecrets });
+    try {
+      const sess = await client.createSession({ cwd: effectiveCwd, model: this.model, mode: 'plan', effort: this.cliSettings?.reasoningEffort, signal });
+      const res = await client.prompt({
+        sessionId: sess.sessionId,
+        text: promptText,
+        signal,
+        timeoutMs: Math.min(this.timeoutMs, 120000),
+        onDelta,
+      });
+      if (res.toolCalls.length > 0) {
+        return { type: 'error', code: 'tool_protocol', message: 'Planner-only ACP draft attempted an internal tool call; response rejected.', retryable: true };
+      }
+      return {
+        type: 'message',
+        text: res.text,
+        reasoning: res.reasoning || undefined,
+        finish: 'done',
+        usage: res.usage,
+        model: this.model || this.harnessId,
+        transport: 'acp-v1',
+      };
+    } catch (err) {
+      return { type: 'error', code: err?.code || 'acp_error', message: err?.message || 'ACP draft failed.', retryable: Boolean(err?.retryable), ...(err?.retryAfterMs ? { retryAfterMs: err.retryAfterMs } : {}) };
+    } finally {
+      await client.close().catch(() => {});
+    }
+  }
+
+  async turn(context, { signal, turnTimeoutMs, privacy = DEFAULT_PRIVACY_SETTINGS, onOutbound, extraSecrets, onDelta } = {}) {
+    if (this.closed) throw Object.assign(new Error('ACP harness provider is closed'), { code: 'PROVIDER_CLOSED', retryable: false });
+    if (signal?.aborted) throw Object.assign(new Error('ACP harness cancelled'), { code: 'cancelled', retryable: false });
+    const gate = checkProviderPrivacyAllowed(this, privacy);
+    if (!gate.allowed) {
+      onOutbound?.({ providerId: this.id, host: `acp:${this.harnessId}`, protocol: 'acp-v1', zdrClass: gate.posture.zdrClass, zdrFlags: [], secretsRedacted: 0, blocked: true, reason: gate.message });
+      return { type: 'error', code: gate.code, message: gate.message, retryable: false };
+    }
+    const cleaned = privacy.redactOutboundSecrets === false ? { value: context, count: 0 } : redactOutboundValue(context, extraSecrets || environmentSecrets());
+    context = cleaned.value;
+    onOutbound?.({ providerId: this.id, host: `acp:${this.harnessId}`, protocol: 'acp-v1', zdrClass: gate.posture.zdrClass, zdrFlags: ['acp:persistent-stdio', 'cli:telemetry-disabled'], secretsRedacted: cleaned.count, blocked: false });
+
+    const task = context.task || {};
+    const hasDurableTaskId = typeof task.id === 'string' && task.id.length > 0;
+    const poolKey = hasDurableTaskId ? `${this.id}:${task.id}` : `${this.id}:ephem-${randomUUID().slice(0, 8)}`;
+    const isEphemeral = !hasDurableTaskId || this.inFlightSessions.has(poolKey);
+    const effectiveKey = isEphemeral ? `${this.id}:ephem-${randomUUID().slice(0, 8)}` : poolKey;
+    this.inFlightSessions.add(effectiveKey);
+
+    try {
+      const workspace = task.workspace || null;
+      const planMode = Boolean(task.planMode);
+      const execution = task.execution || { enabled: false, network: false, timeoutMs: 30000 };
+      const effectiveRules = Array.isArray(task.permissionRules) && task.permissionRules.length > 0
+        ? task.permissionRules
+        : STRICT_DEFAULT_PRESET;
+      const securityDigest = createHash('sha256').update(JSON.stringify({
+        workspace,
+        planMode,
+        recoveries: task.recoveries || 0,
+        execution,
+        effectiveRules,
+        privacy: { localOnly: Boolean(privacy?.localOnly), redactOutboundSecrets: privacy?.redactOutboundSecrets !== false, scopeAllow: privacy?.scopeAllow || [], scopeDeny: privacy?.scopeDeny || [] },
+        model: this.model || null,
+        effort: task.effort || this.cliSettings?.reasoningEffort || null,
+        objective: task.objective || '',
+        constraints: task.constraints || [],
+        contractVersion: task.contractVersion || 1,
+      })).digest('hex');
+
+      let entry = isEphemeral ? null : this.acpPool.get(effectiveKey);
+      if (entry && entry.securityDigest !== securityDigest) {
+        await this.acpPool.drop(effectiveKey);
+        entry = null;
+      }
+
+      if (!entry) {
+        const { client, effectiveCwd, sandboxHandlers } = await this._createClient({
+          workspace,
+          execution,
+          planMode,
+          permissionRules: effectiveRules,
+          privacy,
+          extraSecrets,
+        });
+        try {
+          // Never put the child harness in 'auto' unless delegated + execution enabled + explicit wildcard allow;
+          // otherwise use 'plan' (read-only/planner) or 'default' so every action routes through G0DC0D3 permission mediation.
+          const hasExplicitWildcardAllow = effectiveRules.some(r => r?.tool === '*' && r?.action === 'allow');
+          const mode = (!this.delegated || planMode)
+            ? 'plan'
+            : (execution?.enabled && hasExplicitWildcardAllow ? 'auto' : 'default');
+          const sess = await client.createSession({
+            cwd: effectiveCwd,
+            model: this.model,
+            mode,
+            effort: task.effort || this.cliSettings?.reasoningEffort,
+            signal,
+          });
+          if (this.closed || signal?.aborted) {
+            await client.close().catch(() => {});
+            throw Object.assign(new Error(this.closed ? 'ACP harness provider is closed' : 'ACP harness cancelled'), { code: this.closed ? 'PROVIDER_CLOSED' : 'cancelled', retryable: false });
+          }
+          entry = {
+            client,
+            sessionId: sess.sessionId,
+            harnessId: this.harnessId,
+            model: this.model,
+            mode: this.delegated ? 'delegated' : 'planner',
+            workspace,
+            planMode,
+            securityDigest,
+            sandboxHandlers,
+            turnCount: 0,
+            followupsCount: 0,
+          };
+          this.acpPool.set(effectiveKey, entry);
+        } catch (err) {
+          await client.close().catch(() => {});
+          throw err;
+        }
+      }
+
+      const followups = Array.isArray(task.followups) ? task.followups : [];
+      const newFollowups = followups.slice(entry.followupsCount || 0).map(f => String(f?.message || '')).filter(Boolean);
+      const promptText = entry.turnCount === 0
+        ? [
+            task.objective || '',
+            task.constraints?.length ? `Constraints:\n- ${task.constraints.join('\n- ')}` : '',
+            task.overseerGuidance ? `Overseer Guidance: ${task.overseerGuidance}` : '',
+          ].filter(Boolean).join('\n\n')
+        : [
+            newFollowups.length ? newFollowups.join('\n\n') : 'Continue and complete the objective.',
+            task.overseerGuidance ? `Overseer Guidance: ${task.overseerGuidance}` : '',
+          ].filter(Boolean).join('\n\n');
+
+      let res;
+      try {
+        res = await entry.client.prompt({
+          sessionId: entry.sessionId,
+          text: promptText,
+          signal,
+          timeoutMs: Number.isFinite(turnTimeoutMs) && turnTimeoutMs > 0 ? Math.max(this.timeoutMs, turnTimeoutMs) : this.timeoutMs,
+          onDelta,
+          onToolCall: tc => onDelta?.({ type: 'tool_status', tool: tc.name, status: tc.status, title: tc.title }),
+        });
+      } catch (err) {
+        await this.acpPool.drop(effectiveKey).catch(() => {});
+        throw err;
+      }
+      entry.turnCount += 1;
+      entry.followupsCount = followups.length;
+
+      const refused = detectRefusal({ type: 'message', text: res.text });
+      return {
+        type: 'message',
+        text: res.text,
+        ...(res.reasoning ? { thinking: res.reasoning, reasoning: res.reasoning } : {}),
+        finish: refused ? 'refusal' : 'done',
+        usage: res.usage,
+        model: this.model || this.harnessId,
+        transport: 'acp-v1',
+        acpToolCalls: res.toolCalls,
+        ttftMs: res.ttftMs,
+        evidenceKind: 'live_acp_harness',
+        accounting: this.accounting,
+      };
+    } finally {
+      this.inFlightSessions.delete(effectiveKey);
+      if (isEphemeral) await this.acpPool.drop(effectiveKey).catch(() => {});
     }
   }
 }
@@ -2275,6 +2981,34 @@ export class CopilotCliProvider extends CodexProvider {
       return { ...decision, usage: null, model: this.model || 'copilot-cli-default', evidenceKind: 'live_copilot_cli', accounting: this.accounting };
     } finally { await fs.rm(working, { recursive: true, force: true }); }
   }
+  async draft(messages = [], signal, _maxTokens = 1000, _params = {}, { privacy = DEFAULT_PRIVACY_SETTINGS, onOutbound, extraSecrets } = {}) {
+    if (this.closed) return { type: 'error', code: 'PROVIDER_CLOSED', message: 'GitHub Copilot provider is closed.', retryable: false };
+    if (signal?.aborted) return { type: 'error', code: 'cancelled', message: 'GitHub Copilot request cancelled.', retryable: false };
+    const gate = checkProviderPrivacyAllowed(this, privacy);
+    if (!gate.allowed) {
+      onOutbound?.({ providerId: this.id, host: 'cli:copilot', protocol: this.kind, zdrClass: gate.posture.zdrClass, zdrFlags: [], secretsRedacted: 0, blocked: true, reason: gate.message });
+      return { type: 'error', code: gate.code, message: gate.message, retryable: false };
+    }
+    const cleaned = privacy.redactOutboundSecrets === false ? { value: messages, count: 0 } : redactOutboundValue(messages, extraSecrets || environmentSecrets());
+    onOutbound?.({ providerId: this.id, host: 'cli:copilot', protocol: this.kind, zdrClass: gate.posture.zdrClass, zdrFlags: ['cli:telemetry-disabled'], secretsRedacted: cleaned.count, blocked: false });
+    const promptText = [
+      'CRITICAL: Planner/advisory text-only call. DO NOT invoke any Copilot tools.',
+      ...(Array.isArray(cleaned.value) ? cleaned.value.map(m => `${String(m?.role || 'user').toUpperCase()}:\n${String(m?.content || '')}`) : [String(cleaned.value || '')])
+    ].join('\n\n');
+    const working = await fs.mkdtemp(path.join(tmpdir(), 'g0d-copilot-draft-'));
+    try {
+      const directive = 'Read the advisory prompt from stdin and respond directly. Do not invoke any Copilot tools.';
+      const args = ['-p', directive, '-s'];
+      if (this.model) args.push('--model', this.model);
+      const env = copilotSubscriptionEnvironment(cliEnvironments.get(this));
+      const output = await runSubprocessPlanner(this, { args, cwd: working, signal, timeoutOverrideMs: 60000, input: promptText, env, label: 'GitHub Copilot' });
+      return { type: 'message', text: output.trim(), finish: 'done', usage: null, model: this.model || 'copilot-cli-default' };
+    } catch (err) {
+      return { type: 'error', code: err?.code || 'provider_error', message: err?.message || 'GitHub Copilot CLI draft failed.', retryable: Boolean(err?.retryable) };
+    } finally {
+      await fs.rm(working, { recursive: true, force: true });
+    }
+  }
 }
 
 function runClaudePlanner(owner,{args,cwd,signal,turnTimeoutMs,input}) {
@@ -2282,7 +3016,7 @@ function runClaudePlanner(owner,{args,cwd,signal,turnTimeoutMs,input}) {
     if(signal?.aborted){reject(Object.assign(new Error('Claude Code bridge cancelled'),{code:'cancelled'}));return;}
     const child=spawn(owner.binary,args,{cwd,stdio:['pipe','pipe','pipe'],env:claudeSubscriptionEnvironment(cliEnvironments.get(owner)),detached:process.platform!=='win32'});
     const outChunks = [];
-    let outBytes = 0, settled = false, closed = false, terminating = false, killTimer, resolveExit;
+    let outBytes = 0, errSnippet = '', settled = false, closed = false, terminating = false, killTimer, resolveExit;
     const exited=new Promise(done=>{resolveExit=done;});
     const kill=()=>{
       if(terminating||closed||!Number.isInteger(child.pid))return;terminating=true;
@@ -2301,9 +3035,23 @@ function runClaudePlanner(owner,{args,cwd,signal,turnTimeoutMs,input}) {
       if (outBytes > 16 * 1024 * 1024) { kill(); done(Object.assign(new Error('Claude Code bridge output exceeded its limit'),{code:'tool_protocol'})); return; }
       outChunks.push(chunk);
     });
-    // Provider stderr can contain account data. Never forward it to a task, browser or log.
-    child.stderr.resume();
-    child.on('close',code=>{closed=true;clearTimeout(killTimer);owner.children.delete(record);resolveExit();code===0?done(null,Buffer.concat(outChunks).toString('utf8')):done(Object.assign(new Error('Claude Code CLI could not complete the request. Check CLI sign-in, model access and usage limits.'),{code:'provider_configuration',retryable:false}));});
+    // Classify stderr internally (bounded 4 KiB) without ever forwarding raw stderr to tasks, browsers, or logs.
+    child.stderr.on('data', chunk => {
+      if (errSnippet.length < 4096) errSnippet += chunk.toString('utf8').slice(0, 4096 - errSnippet.length);
+    });
+    child.on('close',code=>{
+      closed=true;clearTimeout(killTimer);owner.children.delete(record);resolveExit();
+      if (code === 0) { done(null, Buffer.concat(outChunks).toString('utf8')); return; }
+      if (/unknown option|unrecognized option|invalid option/i.test(errSnippet)) {
+        done(Object.assign(new Error('Claude Code CLI rejected an unsupported flag (unknown option).'), { code: 'UNSUPPORTED_CLI_FLAG', retryable: false }));
+      } else if (/rate\s*limit|too many requests|429|overloaded|529|capacity|try again later/i.test(errSnippet)) {
+        done(Object.assign(new Error('Claude Code CLI hit a temporary rate limit or capacity spike; retrying.'), { code: 'rate_limit', retryable: true }));
+      } else if (/not logged in|unauthenticated|unauthorized|401|login|auth.*expired/i.test(errSnippet)) {
+        done(Object.assign(new Error('Claude Code CLI authentication expired. Run `claude` to sign back in.'), { code: 'authentication', retryable: false }));
+      } else {
+        done(Object.assign(new Error('Claude Code CLI could not complete the request. Check CLI sign-in, model access and usage limits.'), { code: 'provider_configuration', retryable: false }));
+      }
+    });
     child.stdin.on('error',()=>{});
     if(signal?.aborted){abort();return;}
     child.stdin.end(input);

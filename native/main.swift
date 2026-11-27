@@ -599,6 +599,11 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
               token.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil else {
             throw NSError(domain: "G0DC0D3", code: 5, userInfo: [NSLocalizedDescriptionKey: "The local session file is invalid. Restart the local runtime."])
         }
+        if let pid = runtimeProcess?.processIdentifier,
+           let filePid = record["pid"] as? Int,
+           Int32(filePid) != pid {
+            throw NSError(domain: "G0DC0D3", code: 6, userInfo: [NSLocalizedDescriptionKey: "Waiting for the new local runtime session file."])
+        }
         var components = URLComponents(url: rootURL, resolvingAgainstBaseURL: false)!
         components.fragment = "session=\(token)"
         return components.url!
@@ -702,7 +707,7 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         if navigationAction.navigationType == .linkActivated,
            let url = navigationAction.request.url,
-           ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
+           ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "") {
             NSWorkspace.shared.open(url)
         }
         return nil

@@ -430,3 +430,28 @@ test('Audit regressions: trailing-dot FQDN scope block, IPv6 scope, anti-spoofin
   assert.equal(memRes.status, 403);
   assert.equal((await memRes.json()).code, 'EPHEMERAL_SESSION');
 });
+
+test('Cron Round 2 regressions: dontAsk/acceptEdits presets persist and reconcileOnBoot:false preserves due nextRunAt', async t => {
+  const { normalizeScheduledJobInput, CronScheduler } = await import('../src/cron.mjs');
+  const { Store } = await import('../src/store.mjs');
+
+  const j1 = normalizeScheduledJobInput({ name: 'Headless', prompt: 'Check', kind: 'cron', expression: '0 9 * * *', permissionPreset: 'dontAsk' });
+  assert.equal(j1.permissionPreset, 'dontAsk');
+  const j2 = normalizeScheduledJobInput({ name: 'Edits', prompt: 'Check', kind: 'cron', expression: '0 9 * * *', permissionPreset: 'acceptEdits' });
+  assert.equal(j2.permissionPreset, 'acceptEdits');
+
+  const dir = await mkdtemp(path.join(tmpdir(), 'godmode-cron-due-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const store = new Store(path.join(dir, 'state.sqlite'));
+  t.after(() => store.close());
+  const pastDue = new Date(Date.now() - 120_000).toISOString();
+  store.putScheduledJob({ ...j1, nextRunAt: pastDue });
+
+  // Constructing scheduler with reconcileOnBoot: false (CLI --due-only path) must NOT advance pastDue nextRunAt
+  const cliScheduler = new CronScheduler({ store, onTrigger: async () => ({ status: 'completed' }), reconcileOnBoot: false });
+  assert.equal(store.getScheduledJob(j1.id).nextRunAt, pastDue);
+  const res = cliScheduler.triggerNow(j1.id, { respectEnabled: true });
+  await res.promise;
+  assert.ok(Date.parse(store.getScheduledJob(j1.id).nextRunAt) > Date.now(), 'triggerNow(respectEnabled) must advance nextRunAt');
+  cliScheduler.stop();
+});

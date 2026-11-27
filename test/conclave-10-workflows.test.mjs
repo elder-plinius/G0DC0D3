@@ -111,6 +111,9 @@ test('Conclave UX Launchpad: 6 generalized starter agents, 10 diverse long-form 
       }
       return { type: 'message', finish: 'done', text: 'Synthesized Conclave final deliverable across all specialists.' };
     },
+    async draft() {
+      return { type: 'message', finish: 'done', text: 'Synthesized Conclave 2.0 final verdict across all specialists.' };
+    },
     close() {},
   };
 
@@ -214,10 +217,12 @@ test('Conclave UX Launchpad: 6 generalized starter agents, 10 diverse long-form 
     });
     await pool.act(sid, { action: 'click', selector: '#conclave-launch-btn', waitMs: 1200 }, { privacy: { localOnly: false } });
 
-    // Wait briefly for parallel agent.spawn fan-out to finish
+    // Wait briefly for native Conclave 2.0 multi-round execution to finish
     await new Promise(r => setTimeout(r, 900));
-    assert.ok(seenSpawns.length >= 1, 'Expected clicking Launch Conclave to dispatch real parallel agent.spawn calls');
-    assert.deepEqual(seenSpawns[0].sort(), ['analyst', 'explore', 'strategist']);
+    const allConclaveDone = () => app.runtime.listTasks().flatMap(t => app.runtime.getEvents(t.id).filter(e => e.type === 'conclave.completed'));
+    const runsAfterClick = allConclaveDone();
+    assert.ok(runsAfterClick.length >= 1, 'Expected clicking Launch Conclave to complete a native Conclave 2.0 run');
+    assert.deepEqual(runsAfterClick[0].data.specialists.map(s => s.slug).sort(), ['analyst', 'explore', 'strategist']);
 
     // 6. Test 1-command `/conclave <mission>` directly from main chat composer!
     await pool.evaluate(sid, {
@@ -230,8 +235,9 @@ test('Conclave UX Launchpad: 6 generalized starter agents, 10 diverse long-form 
       })()`
     });
     await new Promise(r => setTimeout(r, 1100));
-    assert.ok(seenSpawns.length >= 2, 'Expected /conclave <mission> slash command to launch a second specialist squad');
-    assert.deepEqual(seenSpawns[1].sort(), ['builder', 'designer', 'reviewer']);
+    const runsAfterSlash = allConclaveDone();
+    assert.ok(runsAfterSlash.length >= 2, 'Expected /conclave <mission> slash command to launch a second native Conclave 2.0 run');
+    assert.deepEqual(runsAfterSlash.at(-1).data.specialists.map(s => s.slug).sort(), ['builder', 'designer', 'reviewer']);
 
     // 7. Verify Roster lens shows all 6 generalized cards & 0 inline style= in both Dark & Light themes
     await pool.act(sid, { action: 'click', selector: '[data-conclave-lens="roster"]', waitMs: 350 }, { privacy: { localOnly: false } });

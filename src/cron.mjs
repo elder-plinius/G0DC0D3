@@ -48,7 +48,13 @@ const DOW_NAMES = Object.freeze({
 
 const DOW_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MAX_JOBS = 100;
-const VALID_PERMISSION_PRESETS = new Set(['safe', 'read_only', 'dontAsk', 'default', 'acceptEdits']);
+const PERMISSION_PRESET_CANONICAL = Object.freeze({
+  safe: 'safe',
+  read_only: 'read_only',
+  dontask: 'dontAsk',
+  default: 'default',
+  acceptedits: 'acceptEdits',
+});
 const VALID_EFFORTS = new Set(['low', 'medium', 'high', 'max']);
 const VALID_MODES = new Set(['godmode', 'godcode']);
 const VALID_OVERLAP = new Set(['skip', 'queue']);
@@ -344,8 +350,8 @@ export function normalizeScheduledJobInput(input = {}, existing = null, now = ne
   const effortRaw = String(input.effort ?? existing?.effort ?? 'medium').toLowerCase();
   const effort = VALID_EFFORTS.has(effortRaw) ? effortRaw : 'medium';
 
-  const presetRaw = String(input.permissionPreset ?? existing?.permissionPreset ?? 'safe').toLowerCase();
-  const permissionPreset = VALID_PERMISSION_PRESETS.has(presetRaw) ? presetRaw : 'safe';
+  const presetRaw = String(input.permissionPreset ?? existing?.permissionPreset ?? 'safe').trim().toLowerCase();
+  const permissionPreset = PERMISSION_PRESET_CANONICAL[presetRaw] || 'safe';
 
   const overlapRaw = String(input.overlapPolicy ?? existing?.overlapPolicy ?? 'skip').toLowerCase();
   const overlapPolicy = VALID_OVERLAP.has(overlapRaw) ? overlapRaw : 'skip';
@@ -498,7 +504,7 @@ ${intervalXml}
 }
 
 export class CronScheduler {
-  constructor({ store, onTrigger, onChange = null, tickMs = 15000, now = () => new Date() } = {}) {
+  constructor({ store, onTrigger, onChange = null, tickMs = 15000, now = () => new Date(), reconcileOnBoot = true } = {}) {
     this.store = store;
     this.onTrigger = onTrigger;
     this.onChange = onChange;
@@ -508,7 +514,7 @@ export class CronScheduler {
     this._running = new Map();
     this._queued = new Set();
     this._closed = false;
-    this._reconcileOnBoot();
+    if (reconcileOnBoot) this._reconcileOnBoot();
   }
 
   _reconcileOnBoot() {
@@ -665,12 +671,8 @@ export class CronScheduler {
           stillEnabled = false;
         }
       }
-      if (job.maxRuns && (job.runCount + 1) >= job.maxRuns) {
-        stillEnabled = false;
-        nextRunAt = null;
-      }
-
       if (this._running.has(job.id)) {
+        // Advance nextRunAt without prematurely tripping maxRuns on a skipped/queued overlap slot.
         this.store.putScheduledJob({ ...job, enabled: stillEnabled, nextRunAt, updatedAt: now.toISOString() });
         if (job.overlapPolicy === 'queue') {
           this._queued.add(job.id);
@@ -689,6 +691,11 @@ export class CronScheduler {
           });
         }
         continue;
+      }
+
+      if (job.maxRuns && (job.runCount + 1) >= job.maxRuns) {
+        stillEnabled = false;
+        nextRunAt = null;
       }
 
       const updatedJob = {
@@ -718,10 +725,29 @@ export class CronScheduler {
     if (this._running.has(id)) {
       throw Object.assign(new Error('This scheduled job already has an active run.'), { code: 'SCHEDULE_BUSY', status: 409 });
     }
-    if (respectEnabled && job.kind === 'once') {
-      this.store.putScheduledJob({ ...job, enabled: false, nextRunAt: null, updatedAt: this.now().toISOString() });
+    let dispatchJob = job;
+    if (respectEnabled) {
+      const now = this.now();
+      if (job.kind === 'once') {
+        dispatchJob = { ...job, enabled: false, nextRunAt: null, updatedAt: now.toISOString() };
+        this.store.putScheduledJob(dispatchJob);
+      } else if (job.kind === 'cron' && job.expression) {
+        let nextRunAt = null;
+        let stillEnabled = job.enabled;
+        try {
+          nextRunAt = nextCronTime(job.expression, now).toISOString();
+        } catch {
+          stillEnabled = false;
+        }
+        if (job.maxRuns && ((job.runCount || 0) + 1) >= job.maxRuns) {
+          stillEnabled = false;
+          nextRunAt = null;
+        }
+        dispatchJob = { ...job, enabled: stillEnabled, nextRunAt, updatedAt: now.toISOString() };
+        this.store.putScheduledJob(dispatchJob);
+      }
     }
-    return this._dispatch(job, respectEnabled ? 'schedule' : 'manual');
+    return this._dispatch(dispatchJob, respectEnabled ? 'schedule' : 'manual');
   }
 
   _dispatch(job, trigger = 'schedule') {

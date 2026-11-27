@@ -4,7 +4,7 @@ import Security
 // This mode runs before AppKit starts. The record travels only over private pipes.
 func providerKeychain(_ arguments: [String]) -> Int32 {
     guard arguments.count == 4,
-          arguments[3].range(of: #"^[0-9a-f]{64}\.(venice|openrouter|anthropic|openai|gemini|nous)$"#, options: .regularExpression) != nil
+          arguments[3].range(of: #"^[0-9a-f]{64}\.(venice|openrouter|anthropic|openai|xai|gemini|meta|nous)$"#, options: .regularExpression) != nil
     else { return 2 }
     let item: [String: Any] = [
         kSecClass as String: kSecClassGenericPassword,

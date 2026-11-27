@@ -200,8 +200,9 @@ async function callSingleOverseer({ provider, system, user, privacy = DEFAULT_PR
     return { ok: false, blocked: true, code: gate.code, error: gate.message };
   }
   if (signal?.aborted) return { ok: false, error: 'Overseer call cancelled.' };
+  const isCliProvider = ['antigravity-cli', 'codex', 'claude', 'gemini-cli', 'copilot-cli'].includes(provider.kind);
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 30000);
+  const timer = setTimeout(() => controller.abort(), isCliProvider ? 60000 : 30000);
   const onAbort = () => controller.abort();
   signal?.addEventListener?.('abort', onAbort, { once: true });
   try {

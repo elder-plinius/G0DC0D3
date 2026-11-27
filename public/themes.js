@@ -1461,6 +1461,7 @@
     const btn = document.getElementById('theme-toggle');
     if (!pop) return;
     const open = typeof force === 'boolean' ? force : pop.classList.contains('hidden');
+    if (open) window.closeAllPopovers?.('theme-popover');
     pop.classList.toggle('hidden', !open);
     btn?.setAttribute('aria-expanded', String(open));
     if (open) {

@@ -870,6 +870,77 @@ document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" clas
 </dialog>`);
 $('#settings-pane-models').append($('#model-controls'));
 $('#model-controls').hidden = false;
+{
+  const acpCard = document.createElement('section');
+  acpCard.id = 'acp-status-card';
+  acpCard.className = 'settings-card acp-status-card';
+  acpCard.dataset.modelSubtab = 'connections';
+  acpCard.innerHTML = `<div class="settings-card-head acp-card-head">
+    <div>
+      <h4>ACP Multi-Harness Coordination <span class="acp-proto-badge">ACP v1</span></h4>
+      <p>Persistent JSON-RPC stdio transport for live token/reasoning streaming, zero per-turn startup tax, and G0DC0D3-mediated Seatbelt &amp; workspace permissions across subscription CLIs.</p>
+    </div>
+    <button type="button" class="button button-secondary acp-refresh-btn" id="acp-refresh-btn">Refresh ACP</button>
+  </div>
+  <div id="acp-harness-list" class="acp-harness-grid" role="list" aria-label="ACP-capable harnesses"></div>
+  <p id="acp-sessions-summary" class="field-help acp-sessions-summary">Checking installed ACP harnesses…</p>`;
+  $('#model-controls')?.append(acpCard);
+}
+
+let acpStatusCache = null;
+let acpStatusInFlight = null;
+let acpStatusReqSeq = 0;
+async function refreshAcpStatus({ force = false } = {}) {
+  const listEl = $('#acp-harness-list');
+  const sumEl = $('#acp-sessions-summary');
+  const btnEl = $('#acp-refresh-btn');
+  if (!listEl || !sumEl) return;
+  if (acpStatusCache && !force) return;
+  if (acpStatusInFlight && !force) return acpStatusInFlight;
+  const reqId = ++acpStatusReqSeq;
+  if (btnEl) {
+    btnEl.disabled = true;
+    btnEl.textContent = 'Refreshing…';
+  }
+  const run = (async () => {
+    try {
+      const data = await api('/api/acp/status');
+      if (reqId !== acpStatusReqSeq) return;
+      const harnesses = Array.isArray(data?.harnesses) ? data.harnesses : [];
+      const active = Array.isArray(data?.activeSessions) ? data.activeSessions : [];
+      listEl.innerHTML = harnesses.map(h => {
+        const stateCls = h.installed ? 'is-ready' : 'is-missing';
+        const stateTxt = h.installed ? 'ACP Ready' : 'Not installed';
+        const args = Array.isArray(h.args) ? h.args : [];
+        return `<div class="acp-harness-chip ${stateCls}" role="listitem">
+        <div class="acp-harness-top">
+          <strong>${escapeHTML(h.label || h.id || 'ACP Harness')}</strong>
+          <span class="acp-pill ${stateCls}">${stateTxt}</span>
+        </div>
+        <code class="acp-harness-cmd">${escapeHTML([h.binary, ...args].filter(Boolean).join(' '))}</code>
+      </div>`;
+      }).join('');
+      const installedCount = harnesses.filter(h => h.installed).length;
+      sumEl.textContent = `${installedCount}/${harnesses.length} ACP harnesses detected · ${active.length} live persistent session${active.length === 1 ? '' : 's'} active.`;
+      acpStatusCache = data;
+    } catch (err) {
+      if (reqId === acpStatusReqSeq) {
+        sumEl.textContent = `Could not query ACP status: ${err?.message || 'error'}`;
+      }
+    } finally {
+      if (reqId === acpStatusReqSeq) {
+        acpStatusInFlight = null;
+        if (btnEl) {
+          btnEl.disabled = false;
+          btnEl.textContent = 'Refresh ACP';
+        }
+      }
+    }
+  })();
+  acpStatusInFlight = run;
+  return run;
+}
+$('#acp-refresh-btn')?.addEventListener('click', () => refreshAcpStatus({ force: true }));
 
 let settingsTaskId = null;
 let settingsReturnFocus = null;
@@ -886,19 +957,35 @@ const settingsTask = () => settingsTaskId && selectedData?.task?.id === settings
 function renderTaskSettings(task) {
   const commands = (selectedData?.operations || []).filter(op => op.name === 'process.run');
   const panel = $('#panel-commands');
-  if (panel) panel.innerHTML = commands.length ? `<div class="terminal-emulator" role="log" aria-label="Terminal output">${commands.map(op => {
-    const result = op.result || {};
-    const cmd = op.args?.command || 'command';
-    const exitCode = result.exitCode ?? '?';
-    const ok = exitCode === 0;
-    const stdout = result.stdout || '';
-    const stderr = result.stderr || '';
-    const errMsg = result.error?.message || '';
-    const output = [stdout, stderr, errMsg].filter(Boolean).join('\n') || (op.status === 'dispatching' ? 'Running…' : '');
-    const ansi = typeof ansiToHtml === 'function' ? ansiToHtml(output) : escapeHTML(output);
-    const copyBtn = output ? `<button type="button" class="terminal-copy-btn" data-copy-text="${escapeHTML(output)}" aria-label="Copy command output">Copy</button>` : '';
-    return `<div class="terminal-block ${ok ? '' : 'terminal-error'}"><div class="terminal-prompt"><span class="terminal-ps1">$</span><span class="terminal-cmd">${escapeHTML(cmd)}</span><span class="terminal-exit ${ok ? 'exit-ok' : 'exit-fail'}">${escapeHTML(String(exitCode))}</span>${result.durationMs != null ? `<span class="terminal-duration">${escapeHTML(duration(result.durationMs))}</span>` : ''}${copyBtn}</div>${output ? `<pre class="terminal-output">${ansi}</pre>` : ''}</div>`;
-  }).join('')}</div>` : '<div class="panel-empty"><div><h3>No commands yet.</h3><p>Shell commands executed by the agent appear here.</p><button type="button" class="button button-secondary" data-command-settings>Command settings</button></div></div>';
+  if (panel) {
+    const nextHtml = commands.length ? `<div class="terminal-emulator" role="log" aria-label="Terminal output">${commands.map(op => {
+      const result = op.result || {};
+      const cmd = op.args?.command || 'command';
+      const exitCode = result.exitCode ?? '?';
+      const ok = exitCode === 0;
+      const stdout = result.stdout || '';
+      const stderr = result.stderr || '';
+      const errMsg = result.error?.message || '';
+      const output = [stdout, stderr, errMsg].filter(Boolean).join('\n') || (op.status === 'dispatching' ? 'Running…' : '');
+      const ansi = typeof ansiToHtml === 'function' ? ansiToHtml(output) : escapeHTML(output);
+      const copyBtn = output ? `<button type="button" class="terminal-copy-btn" data-copy-text="${escapeHTML(output)}" aria-label="Copy command output">Copy</button>` : '';
+      return `<div class="terminal-block ${ok ? '' : 'terminal-error'}"><div class="terminal-prompt"><span class="terminal-ps1">$</span><span class="terminal-cmd">${escapeHTML(cmd)}</span><span class="terminal-exit ${ok ? 'exit-ok' : 'exit-fail'}">${escapeHTML(String(exitCode))}</span>${result.durationMs != null ? `<span class="terminal-duration">${escapeHTML(duration(result.durationMs))}</span>` : ''}${copyBtn}</div>${output ? `<pre class="terminal-output">${ansi}</pre>` : ''}</div>`;
+    }).join('')}</div>` : '<div class="panel-empty"><div><h3>No commands yet.</h3><p>Shell commands executed by the agent appear here.</p><button type="button" class="button button-secondary" data-command-settings>Command settings</button></div></div>';
+    if (panel.dataset.lastHtml !== nextHtml) {
+      const liveBlock = ACTIVE.has(task?.status) ? panel.querySelector('.terminal-live-block') : null;
+      if (liveBlock) liveBlock.remove();
+      panel.dataset.lastHtml = nextHtml;
+      panel.innerHTML = nextHtml;
+      if (liveBlock) {
+        let emu = panel.querySelector('.terminal-emulator');
+        if (!emu) {
+          panel.innerHTML = '<div class="terminal-emulator" role="log" aria-label="Terminal output"></div>';
+          emu = panel.querySelector('.terminal-emulator');
+        }
+        emu?.append(liveBlock);
+      }
+    }
+  }
   if ($('#command-count')) setText('#command-count', commands.length);
   if ($('#settings-dialog').open) {
     syncSettingsLocks();
@@ -965,14 +1052,16 @@ function renderPermissionsSection() {
 
   const list = $('#permission-rules-list');
   if (!list) return;
-  if (!activeRules.length) {
-    list.innerHTML = '<p class="field-help permission-rules-empty">No blocking rules active — allowed tools execute automatically.</p>';
-    return;
+  const nextListHtml = !activeRules.length
+    ? '<p class="field-help permission-rules-empty">No blocking rules active — allowed tools execute automatically.</p>'
+    : `<ul class="permission-rule-items">${activeRules.map((rule, idx) => {
+        const action = String(rule.action || 'ask').toLowerCase();
+        return `<li class="permission-rule-item"><span class="perm-action-pill perm-action-${escapeHTML(action)}">${escapeHTML(action.toUpperCase())}</span><code class="perm-rule-tool">${escapeHTML(rule.tool)}</code>${rule.pattern ? `<code class="perm-rule-pattern">${escapeHTML(rule.pattern)}</code>` : ''}${rule.reason ? `<span class="perm-rule-reason">${escapeHTML(rule.reason)}</span>` : ''}<button type="button" class="icon-button perm-rule-del" data-delete-perm-rule="${idx}" aria-label="Remove rule" title="Remove rule">×</button></li>`;
+      }).join('')}</ul>`;
+  if (list.dataset.lastHtml !== nextListHtml) {
+    list.dataset.lastHtml = nextListHtml;
+    list.innerHTML = nextListHtml;
   }
-  list.innerHTML = `<ul class="permission-rule-items">${activeRules.map((rule, idx) => {
-    const action = String(rule.action || 'ask').toLowerCase();
-    return `<li class="permission-rule-item"><span class="perm-action-pill perm-action-${escapeHTML(action)}">${escapeHTML(action.toUpperCase())}</span><code class="perm-rule-tool">${escapeHTML(rule.tool)}</code>${rule.pattern ? `<code class="perm-rule-pattern">${escapeHTML(rule.pattern)}</code>` : ''}${rule.reason ? `<span class="perm-rule-reason">${escapeHTML(rule.reason)}</span>` : ''}<button type="button" class="icon-button perm-rule-del" data-delete-perm-rule="${idx}" aria-label="Remove rule" title="Remove rule">×</button></li>`;
-  }).join('')}</ul>`;
 }
 
 async function saveCustomPermissionRules(nextRules, toastMsg) {
@@ -1163,8 +1252,16 @@ function renderPrivacySettings(data) {
   const deny = Array.isArray(s.scopeDeny) ? s.scopeDeny : [];
   const allowEl = $('#privacy-scope-allow');
   const denyEl = $('#privacy-scope-deny');
-  if (allowEl && document.activeElement !== allowEl) allowEl.value = allow.join(', ');
-  if (denyEl && document.activeElement !== denyEl) denyEl.value = deny.join(', ');
+  if (allowEl && !allowEl.dataset.dirtyWired) {
+    allowEl.dataset.dirtyWired = '1';
+    allowEl.addEventListener('input', () => { allowEl.dataset.dirty = '1'; });
+  }
+  if (denyEl && !denyEl.dataset.dirtyWired) {
+    denyEl.dataset.dirtyWired = '1';
+    denyEl.addEventListener('input', () => { denyEl.dataset.dirty = '1'; });
+  }
+  if (allowEl && document.activeElement !== allowEl && allowEl.dataset.dirty !== '1') allowEl.value = allow.join(', ');
+  if (denyEl && document.activeElement !== denyEl && denyEl.dataset.dirty !== '1') denyEl.value = deny.join(', ');
   setText('#privacy-scope-badge', (allow.length || deny.length) ? `${allow.length} allow · ${deny.length} deny` : 'Unrestricted');
   if (typeof window.syncSecurityPostureChrome === 'function') window.syncSecurityPostureChrome(privacy);
 
@@ -1221,6 +1318,10 @@ async function updatePrivacySetting(key, value) {
       : typeof key === 'string'
         ? `${keyLabels[key] || key}: ${value ? 'ON' : 'OFF'}`
         : 'Security scope saved.';
+    if (typeof key !== 'string' && !payload.applyProfile) {
+      delete $('#privacy-scope-allow')?.dataset.dirty;
+      delete $('#privacy-scope-deny')?.dataset.dirty;
+    }
     settingsFeedback(label);
     toast(label);
   } catch (error) {
@@ -1375,6 +1476,7 @@ function selectModelsSubtab(subtab) {
   $$('#model-controls > [data-model-subtab]').forEach(el => {
     el.classList.toggle('model-subtab-hidden', el.dataset.modelSubtab !== modelsSubtab);
   });
+  if (modelsSubtab === 'connections') refreshAcpStatus();
   let emptyEl = $('#models-catalog-empty');
   if (modelsSubtab === 'catalog') {
     const visibleCatalogCards = $$('#model-controls > [data-model-subtab="catalog"]').filter(el => !el.hidden && !el.classList.contains('hidden') && !el.classList.contains('model-subtab-hidden'));
@@ -1545,7 +1647,7 @@ async function selectSettingsPane(pane, options = {}) {
     if (options.subtab) selectModelsSubtab(options.subtab);
     else selectModelsSubtab(modelsSubtab);
     renderModelSettings();
-    await Promise.all([loadModelConnections(), loadVeniceCatalog(), typeof loadOpenRouterCatalog === 'function' ? loadOpenRouterCatalog() : Promise.resolve(), ...(typeof loadDirectProviderCatalog === 'function' ? ['openai', 'anthropic', 'xai', 'gemini', 'meta'].map(p => loadDirectProviderCatalog(p)) : []), typeof loadServices === 'function' ? loadServices() : Promise.resolve(), typeof loadModelGroups === 'function' ? loadModelGroups() : Promise.resolve(), typeof loadOverseer === 'function' ? loadOverseer() : Promise.resolve(), typeof loadUltraRouter === 'function' ? loadUltraRouter() : Promise.resolve()]);
+    await Promise.all([loadModelConnections(), refreshAcpStatus({ force: true }), loadVeniceCatalog(), typeof loadOpenRouterCatalog === 'function' ? loadOpenRouterCatalog() : Promise.resolve(), ...(typeof loadDirectProviderCatalog === 'function' ? ['openai', 'anthropic', 'xai', 'gemini', 'meta'].map(p => loadDirectProviderCatalog(p)) : []), typeof loadServices === 'function' ? loadServices() : Promise.resolve(), typeof loadModelGroups === 'function' ? loadModelGroups() : Promise.resolve(), typeof loadOverseer === 'function' ? loadOverseer() : Promise.resolve(), typeof loadUltraRouter === 'function' ? loadUltraRouter() : Promise.resolve()]);
     selectModelsSubtab(modelsSubtab);
   }
   if (pane === 'tools') { await Promise.all([loadPermissionsSettings(), loadHooksSettings(), loadBrowserSettings()]); }
@@ -2518,6 +2620,14 @@ $('#settings-pane-system')?.addEventListener('change', async event => {
       injections: {
         enabled: Boolean($('#lab-injections-enabled')?.checked),
         stitchPrefill: Boolean($('#lab-stitch-prefill')?.checked),
+        systemPrefix: $('#lab-system-prefix')?.value || '',
+        systemSuffix: $('#lab-system-suffix')?.value || '',
+        fewShotUser: $('#lab-fewshot-user')?.value || '',
+        fewShotAssistant: $('#lab-fewshot-assistant')?.value || '',
+        userPrefix: $('#lab-user-prefix')?.value || '',
+        userSuffix: $('#lab-user-suffix')?.value || '',
+        reasoningPrefill: $('#lab-reasoning-prefill')?.value || '',
+        assistantPrefill: $('#lab-assistant-prefill')?.value || '',
       }
     }, event.target.id === 'lab-injections-enabled' ? ($('#lab-injections-enabled').checked ? 'Prefills & Message Shaping enabled.' : 'Prefills & Message Shaping disabled.') : 'Updated prefill stitch preference.');
   }

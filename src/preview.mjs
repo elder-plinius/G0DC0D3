@@ -33,6 +33,17 @@ const MIME_TYPES = Object.freeze({
 
 export const PREVIEW_CSP = "sandbox allow-scripts allow-pointer-lock allow-modals; default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: data:; style-src 'self' 'unsafe-inline' data:; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' data: blob:; connect-src 'none'; frame-ancestors 'self'";
 
+export function buildPreviewCsp(token, host = null) {
+  const cleanHost = typeof host === 'string' && /^(?:127\.0\.0\.1|localhost)(?::\d{1,5})?$/i.test(host.trim()) ? host.trim() : '';
+  const cleanToken = typeof token === 'string' && /^[a-f0-9]{16,64}$/i.test(token) ? token : '';
+  if (!cleanHost || !cleanToken) return PREVIEW_CSP;
+  // Sandboxed preview iframes intentionally omit allow-same-origin, giving an opaque (null) origin where
+  // CSP 'self' never matches sibling assets. Scoping explicitly to this preview session path lets
+  // multi-file HTML/CSS/JS/image bundles load while keeping APIs, other tokens, and external hosts blocked.
+  const scope = `http://${cleanHost}/preview/${cleanToken}/`;
+  return `sandbox allow-scripts allow-pointer-lock allow-modals; default-src 'none'; script-src ${scope} 'unsafe-inline' 'unsafe-eval' blob: data:; style-src ${scope} 'unsafe-inline' data:; img-src ${scope} data: blob:; font-src ${scope} data:; media-src ${scope} data: blob:; connect-src 'none'; frame-ancestors 'self'`;
+}
+
 function buildConsoleBridge(token) {
   const safeToken = JSON.stringify(String(token));
   return `<script>(function(){var T=${safeToken};function send(lvl,msg){try{window.parent.postMessage({type:'g0d-preview-console',token:T,level:lvl,message:String(msg||'').slice(0,1000)},'*');}catch(e){}}function mkStore(){var m=Object.create(null);return{get length(){return Object.keys(m).length;},key:function(i){return Object.keys(m)[i]||null;},getItem:function(k){return Object.prototype.hasOwnProperty.call(m,String(k))?m[String(k)]:null;},setItem:function(k,v){m[String(k)]=String(v);},removeItem:function(k){delete m[String(k)];},clear:function(){m=Object.create(null);}};}['localStorage','sessionStorage'].forEach(function(n){try{void window[n];}catch(_){try{Object.defineProperty(window,n,{value:mkStore(),configurable:true});}catch(__){}}});window.addEventListener('error',function(e){if(e&&e.target&&e.target!==window&&(e.target.tagName==='SCRIPT'||e.target.tagName==='LINK')){send('warn','Blocked or missing resource: '+(e.target.src||e.target.href||'unknown'));return;}send('error',(e.message||'Script error')+(e.lineno?' (line '+e.lineno+')':''));},true);window.addEventListener('unhandledrejection',function(e){send('error','Unhandled rejection: '+(e.reason&&e.reason.message?e.reason.message:String(e.reason)));});var oe=console.error,ow=console.warn;console.error=function(){send('error',Array.prototype.map.call(arguments,String).join(' '));return oe.apply(console,arguments);};console.warn=function(){send('warn',Array.prototype.map.call(arguments,String).join(' '));return ow.apply(console,arguments);};`
@@ -131,7 +142,7 @@ export function createPreviewRegistry(runtime) {
     return { token, url: `/preview/${token}/${encodeURIComponent(cleanName)}`, entry: cleanName, kind: 'snippet' };
   }
 
-  async function serve(token, rawRelPath, res) {
+  async function serve(token, rawRelPath, res, host = null) {
     const record = sessions.get(token);
     if (!record) {
       res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
@@ -139,7 +150,7 @@ export function createPreviewRegistry(runtime) {
       return;
     }
     const commonHeaders = {
-      'content-security-policy': PREVIEW_CSP,
+      'content-security-policy': buildPreviewCsp(token, host),
       'x-frame-options': 'SAMEORIGIN',
       'cross-origin-resource-policy': 'cross-origin',
       'x-content-type-options': 'nosniff',

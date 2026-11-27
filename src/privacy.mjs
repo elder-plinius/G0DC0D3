@@ -272,7 +272,7 @@ export function classifyProviderZdr(provider) {
   if (provider.kind === 'scripted') {
     return { zdrClass: 'local-only', label: 'LOCAL ONLY', detail: 'In-process test double — zero network egress.', strictZdrEligible: true, localOnly: true, skipSecretRedaction: true };
   }
-  if (['codex', 'claude', 'antigravity-cli', 'gemini-cli', 'copilot-cli'].includes(provider.kind)) {
+  if (['codex', 'claude', 'antigravity-cli', 'gemini-cli', 'copilot-cli', 'acp'].includes(provider.kind)) {
     return {
       zdrClass: 'provider-policy',
       label: 'CLI SUBSCRIPTION',

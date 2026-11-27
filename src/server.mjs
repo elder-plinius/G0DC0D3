@@ -33,6 +33,7 @@ import { resolveWorkflow, listWorkflows, WORKFLOW_NAMES } from './workflows.mjs'
 import { discoverSkills, saveUserSkill, deleteUserSkill } from './skills.mjs';
 import { PERMISSION_PRESETS } from './permissions.mjs';
 import { discoverHooks } from './hooks.mjs';
+import { discoverAcpHarnesses } from './acp-client.mjs';
 import { createPreviewRegistry } from './preview.mjs';
 import { extractPdfText } from './web-fetch.mjs';
 import { promptNeedsLiveTools } from './ultra-router.mjs';
@@ -116,7 +117,7 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
   let benchmark = {status:'idle',report:null}, benchmarkPromise = null;
   const benchmarkFile=path.join(dataDir,'latest-benchmark.json');
   try {benchmark={status:'completed',report:JSON.parse(await fs.readFile(benchmarkFile,'utf8'))};}catch{}
-  let closing=false, closePromise;
+  let closing=false, closePromise, sessionReady = !auth;
   const sseClients = new Set();
   const run = id => { runtime.run(id).catch(error=>process.stderr.write(`Task ${id}: ${error.message}\n`)); };
   const server=http.createServer(async(req,res)=>{
@@ -144,9 +145,12 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
       if (isPreviewGet) {
         const pm = url.pathname.match(/^\/preview\/([a-f0-9]{32})(?:\/(.*))?$/);
         if (!pm) return send(res, 404, { error: 'Unknown preview route.' });
-        return await previews.serve(pm[1], pm[2] || '', res);
+        return await previews.serve(pm[1], pm[2] || '', res, req.headers.host);
       }
-      if(req.method==='GET' && url.pathname==='/api/health')return send(res,200,{app:'g0dc0d3',version:'0.2.0',authRequired:auth,desktopWorktrees:true,chatWorktrees:true,patchRequestPreview:true,veniceCatalog:true});
+      if(req.method==='GET' && url.pathname==='/api/health') {
+        if (!sessionReady) return send(res, 503, { error: 'Local session initializing' });
+        return send(res,200,{app:'g0dc0d3',version:'0.2.0',authRequired:auth,desktopWorktrees:true,chatWorktrees:true,patchRequestPreview:true,veniceCatalog:true});
+      }
       if(req.method==='POST' && url.pathname==='/api/session') {
         const now = Date.now();
         while (sessionFailTimestamps.length && now - sessionFailTimestamps[0] > 60000) sessionFailTimestamps.shift();
@@ -191,7 +195,10 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
         }
         if(req.method==='POST' && action==='stop-waiting') return send(res,200,worktrees.stopWaiting(id,(await readBody(req)).buildId));
         if(req.method==='POST' && action==='apply') return send(res,200,await worktrees.apply(id,(await readBody(req)).candidateId));
-        if(req.method==='POST' && action==='remove') return send(res,200,await worktrees.remove(id));
+        if(req.method==='POST' && action==='remove') {
+          const body = req.headers['content-length'] === '0' ? {} : await readBody(req).catch(() => ({}));
+          return send(res,200,await worktrees.remove(id, { force: Boolean(body?.force) }));
+        }
         if(req.method==='POST' && action==='check') return send(res,200,await worktrees.check(id,await readBody(req)));
       }
       if (url.pathname === '/api/prompt-commands') {
@@ -241,6 +248,30 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
       if(req.method==='POST' && url.pathname==='/api/conclave/formations')return send(res,201,runtime.saveConclaveFormation(await readBody(req)));
       const formDelMatch = req.method === 'DELETE' && url.pathname.match(/^\/api\/conclave\/formations\/([^/]+)$/);
       if (formDelMatch) return send(res, 200, runtime.deleteConclaveFormation(decodeURIComponent(formDelMatch[1])));
+      if(req.method==='POST' && url.pathname==='/api/conclave/run') {
+        const body = await readBody(req);
+        let taskId = typeof body.taskId === 'string' && body.taskId.trim() ? body.taskId.trim() : null;
+        let recordUserMessage = true;
+        if (!taskId) {
+          const requestedIds = Array.isArray(body.providerIds) && body.providerIds.length
+            ? body.providerIds
+            : [...providers.values()].filter(p => p.available !== false && p.kind !== 'scripted').map(p => p.id);
+          const fallbackIds = requestedIds.length ? requestedIds : [...providers.values()].filter(p => p.available !== false).map(p => p.id);
+          if (!fallbackIds.length) throw Object.assign(new Error('Connect at least one AI provider in Settings → Models before launching a Conclave.'), { code: 'NO_PROVIDER', status: 400 });
+          await loadSelected(fallbackIds);
+          const cleanMission = String(body.mission || '').trim();
+          const title = (body.formationName ? `${body.formationName}: ` : '✦ Conclave: ') + (cleanMission.slice(0, 56) || 'Multi-Agent Mission');
+          const created = await createConversationTask(runtime, dataDir, {
+            title,
+            objective: `✦ Conclave (${body.mode || 'parallel'}): ${cleanMission}`,
+            providerIds: fallbackIds.slice(0, 6),
+          });
+          taskId = created.id;
+          recordUserMessage = false;
+        }
+        const started = runtime.startConclaveRun(taskId, body, { recordUserMessage });
+        return send(res, 202, { ok: true, task: publicTask(started.task, runtime), mode: started.mode, agents: started.agents, conclave: runtime.getConclaveState(taskId) });
+      }
       if(req.method==='DELETE' && url.pathname==='/api/router/reset') {
         await readBody(req).catch(()=>({}));
         runtime.resetRouter();
@@ -273,7 +304,13 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
       if(req.method==='GET' && url.pathname==='/api/privacy')return send(res,200,runtime.getPrivacy());
       if(req.method==='PATCH' && url.pathname==='/api/privacy')return send(res,200,runtime.updatePrivacy(await readBody(req)));
       if(req.method==='DELETE' && url.pathname==='/api/privacy/audit'){await readBody(req);return send(res,200,runtime.clearOutboundAudit());}
-      if(req.method==='POST' && url.pathname==='/api/privacy/burn')return send(res,200,await runtime.burnSession(await readBody(req)));
+      if(req.method==='POST' && url.pathname==='/api/privacy/burn') {
+        const body = await readBody(req);
+        if (body?.includeTasks) {
+          for (const client of [...sseClients]) client.close();
+        }
+        return send(res,200,await runtime.burnSession(body));
+      }
       if(req.method==='GET' && url.pathname==='/api/schedules') {
         return send(res,200,{jobs:runtime.listScheduledJobs(),summary:runtime.getSchedulesSummary(),presets:CRON_PRESETS,serverTime:new Date().toISOString()});
       }
@@ -524,6 +561,31 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
         const result = await providerSettings.removeModels(await readBody(req));
         return send(res,200,{...result,connectedApiProviders:providerSettings.connectedProfiles(),providers:[...providers.values()].map(({id,label,kind,available=true,tier='standard'})=>({id,label,kind,available,tier}))});
       }
+      if(req.method==='GET' && url.pathname==='/api/acp/status') {
+        const harnesses = (await discoverAcpHarnesses({ env: cliDiscovery?.environment || process.env })).map(h => ({
+          id: h.id,
+          acpId: h.acpId,
+          label: h.label,
+          binary: path.basename(String(h.binary || '')),
+          args: h.args,
+          installed: h.installed,
+          protocol: h.protocol,
+          defaultModel: h.defaultModel,
+        }));
+        const activeSessions = runtime.getAcpStatus().map(s => ({
+          providerId: s.providerId,
+          harnessId: s.harnessId,
+          model: s.model,
+          mode: s.mode,
+          lastUsedAt: s.lastUsedAt,
+        }));
+        return send(res, 200, {
+          ok: true,
+          protocol: 'acp-v1',
+          harnesses,
+          activeSessions,
+        });
+      }
       if(req.method==='GET' && url.pathname==='/api/providers/local') {
         return send(res,200,localProviders.list());
       }
@@ -768,7 +830,7 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
         res.on('error', cleanup);
         return;
       }
-      const conclaveMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/conclave(?:\/(steer))?$/);
+      const conclaveMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/conclave(?:\/(steer|run))?$/);
       if (conclaveMatch) {
         const id = decodeURIComponent(conclaveMatch[1]);
         const subAction = conclaveMatch[2] || '';
@@ -780,6 +842,11 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
           const body = await readBody(req);
           const result = await runtime.queueWorkerSteer(id, body.workerId || 'orchestrator', body.message || '');
           return send(res, 200, { ...result, conclave: runtime.getConclaveState(id) });
+        }
+        if (req.method === 'POST' && subAction === 'run') {
+          const body = await readBody(req);
+          const started = runtime.startConclaveRun(id, body, { recordUserMessage: true });
+          return send(res, 202, { ok: true, task: publicTask(started.task, runtime), mode: started.mode, agents: started.agents, conclave: runtime.getConclaveState(id) });
         }
       }
       const crewMatch=url.pathname.match(/^\/api\/tasks\/([^/]+)\/crew(?:\/(pause|cancel|resume|inspect|candidate|apply))?$/);
@@ -819,13 +886,36 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
         res.end(frame.buffer);
         return;
       }
-      const browserCtrlMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/browser\/(status|mode|screencast|close)$/);
+      const browserCtrlMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/browser\/(status|mode|screencast|close|takeover|interact|grounding|qa-preview)$/);
       if (browserCtrlMatch) {
         const taskId = decodeURIComponent(browserCtrlMatch[1]);
         const sub = browserCtrlMatch[2];
         runtime.getTask(taskId);
         if (req.method === 'GET' && sub === 'status') {
           return send(res, 200, runtime.broker.browser.getStatus(taskId));
+        }
+        if (req.method === 'GET' && sub === 'grounding') {
+          return send(res, 200, await runtime.broker.browser.getGrounding(taskId));
+        }
+        if (req.method === 'POST' && sub === 'takeover') {
+          const body = await readBody(req);
+          const status = runtime.broker.browser.setTakeover(taskId, Boolean(body.active));
+          return send(res, 200, status);
+        }
+        if (req.method === 'POST' && sub === 'interact') {
+          const body = await readBody(req);
+          const result = await runtime.broker.browser.interact(taskId, body, runtime.outboundOptions());
+          return send(res, 200, result);
+        }
+        if (req.method === 'POST' && sub === 'qa-preview') {
+          const body = await readBody(req);
+          const rawUrl = String(body.url || '').trim();
+          const parsed = new URL(rawUrl, `http://${expectedHost}`);
+          if (!hosts.has(parsed.host) || !parsed.pathname.startsWith('/preview/')) {
+            throw Object.assign(new Error('Auto-QA only accepts local /preview/<token>/ URLs on this server.'), { status: 400, code: 'INVALID_QA_URL' });
+          }
+          const report = await runtime.broker.browser.runPreviewQa(taskId, parsed.toString(), runtime.outboundOptions());
+          return send(res, 200, report);
         }
         if (req.method === 'POST' && sub === 'mode') {
           const body = await readBody(req);
@@ -847,7 +937,7 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
           return send(res, 200, runtime.broker.browser.getStatus(taskId));
         }
       }
-      const match=url.pathname.match(/^\/api\/tasks\/([^/]+)(?:\/(run|pause|resume|cancel|accept|report-refusal|overseer-consult|policy|providers|answer-race|message|export|patch|execution|checks|persona|effort|prompt|apply-preview|apply-source|inspect-apply|undo-apply|source-backup|hunk|generation|rewind|plan-mode|compact|checkpoints|permissions|approval|fork|transcript|commit|title))?$/);
+      const match=url.pathname.match(/^\/api\/tasks\/([^/]+)(?:\/(run|pause|resume|cancel|accept|report-refusal|overseer-consult|save-skill|policy|providers|answer-race|message|export|patch|execution|checks|persona|effort|prompt|apply-preview|apply-source|inspect-apply|undo-apply|source-backup|hunk|generation|rewind|plan-mode|compact|checkpoints|permissions|approval|fork|transcript|commit|title))?$/);
       if(match) {
         const [,id,action]=match;
         if(mutation&&runtime.getTask(id).crewMember)throw Object.assign(new Error('Control crew workers through their parent conversation.'),{code:'CREW_MEMBER'});
@@ -979,9 +1069,13 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
         }
         if(req.method==='GET'&&!action) {
           const task=runtime.getTask(id);
-          let snapshot,workspaceExpired=false;
-          try { snapshot=await runtime.snapshotTask(id); } catch(e) { if(e.code==='ENOENT') { snapshot={files:[],snapshotHash:''}; workspaceExpired=true; } else throw e; }
-          return send(res,200,{task:publicTask(task,runtime),crew:runtime.crew.summary(id),crewBusy:runtime.crew.busy(id),sourceApplications:runtime.sourceChanges.summaries(id),events:displayOutcomes(runtime.getRecentEvents(id,200)).map(value=>displayValue(value)),eventCount:task.eventSeq,displayLimits:{events:200,stringCharacters:32000,messageCharacters:200000,exportUrl:`/api/tasks/${id}/export`},operations:runtime.getOperations(id).slice(-100).map(value=>displayValue(value)),files:snapshot.files,diff:workspaceExpired?[]:fileDiff(task.initialSnapshot.files,snapshot.files),workspaceExpired});
+          let snapshot, workspaceExpired=false, snapshotWarning=null;
+          try { snapshot=await runtime.snapshotTask(id); } catch(e) {
+            if (e.code === 'ENOENT') { snapshot = { files: [], snapshotHash: '' }; workspaceExpired = true; }
+            else if (e.code === 'SNAPSHOT_LIMIT' || e.code === 'SNAPSHOT_UNSUPPORTED') { snapshot = { files: [], snapshotHash: '' }; snapshotWarning = e.message; }
+            else throw e;
+          }
+          return send(res,200,{task:publicTask(task,runtime),crew:runtime.crew.summary(id),crewBusy:runtime.crew.busy(id),sourceApplications:runtime.sourceChanges.summaries(id),events:displayOutcomes(runtime.getRecentEvents(id,200)).map(value=>displayValue(value)),eventCount:task.eventSeq,displayLimits:{events:200,stringCharacters:32000,messageCharacters:200000,exportUrl:`/api/tasks/${id}/export`},operations:runtime.getOperations(id).slice(-100).map(value=>displayValue(value)),files:snapshot.files,diff:(workspaceExpired||snapshotWarning)?[]:fileDiff(task.initialSnapshot.files,snapshot.files),workspaceExpired,...(snapshotWarning?{snapshotWarning}:{})});
         }
         if(req.method==='DELETE'&&!action) {
           await readBody(req);
@@ -1052,6 +1146,11 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
           const result=await runtime.consultOverseer(id,{question:body.question||''});
           return send(res,200,{ok:true,advice:result.advice,task:publicTask(result.task,runtime)});
         }
+        if(req.method==='POST'&&action==='save-skill') {
+          const body=await readBody(req);
+          const result=await runtime.saveTaskAsSkill(id,{name:body.name||'',description:body.description||'',mode:body.mode||null});
+          return send(res,201,result);
+        }
         if(req.method==='POST'&&['run','pause','resume','cancel','accept'].includes(action)) {
           await readBody(req);
           if(['run','resume','accept'].includes(action))runtime.crew.assertIdle(id);
@@ -1104,7 +1203,7 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
     async listen(port=Number(process.env.G0D_PORT||4317)) {
       await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,'127.0.0.1',()=>{server.off('error',reject);resolve();});});
       baseUrl=`http://127.0.0.1:${server.address().port}`;
-      try {await session.publishToken(server.address().port);} catch(error){await new Promise(resolve=>server.close(resolve));throw error;}
+      try {await session.publishToken(server.address().port); sessionReady = true;} catch(error){await new Promise(resolve=>server.close(resolve));throw error;}
       return baseUrl;
     },
     close(){
@@ -1112,6 +1211,7 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
       closing=true;
       for (const client of [...sseClients]) client.close();
       server.closeIdleConnections();
+      server.closeAllConnections?.();
       closePromise=(async()=>{
         await worktrees.close();
         const outcomes=await Promise.allSettled([new Promise(resolve=>server.close(()=>resolve())),runtime.close(),benchmarkPromise]);

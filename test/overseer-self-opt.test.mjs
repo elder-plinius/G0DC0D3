@@ -428,7 +428,14 @@ test('Overseer 2.0: supervision postures, custom directives, pre-finish complete
     assert.equal(consult.json.ok, true);
     assert.equal(consult.json.advice.status, 'on_track');
     assert.equal(consult.json.advice.nextActions.length, 2);
-    assert.ok(app.runtime.getEvents(task.id).some(e => e.type === 'overseer.coached' && e.data.manual === true));
+    const coachedEv = app.runtime.getEvents(task.id).find(e => e.type === 'overseer.coached' && e.data.manual === true);
+    assert.ok(coachedEv);
+    assert.match(String(coachedEv.data.guidance || ''), /boundary fuzz tests/);
+
+    // 4. Manual consult guidance survives the next follow-up (stickyOnce) instead of being wiped by withFollowups()
+    const beforeFollowup = app.runtime.getTask(task.id);
+    assert.equal(beforeFollowup.routing?.overseerGuidanceStickyOnce, true);
+    assert.match(String(beforeFollowup.routing?.overseerGuidance || ''), /boundary fuzz tests/);
   } finally {
     await app.close();
     await fs.rm(dir, { recursive: true, force: true });

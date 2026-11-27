@@ -5,7 +5,7 @@ import { Readable } from 'node:stream';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createCliConnections } from '../src/provider-connections.mjs';
-import { AntigravityCliProvider, antigravitySubscriptionEnvironment } from '../src/providers.mjs';
+import { AntigravityCliProvider, antigravitySubscriptionEnvironment, catalogMessages } from '../src/providers.mjs';
 import { createLocalProviderManager, normalizeHuggingFaceRef } from '../src/local-providers.mjs';
 import { createApp } from '../src/server.mjs';
 import { Runtime } from '../src/runtime.mjs';
@@ -271,7 +271,7 @@ EOF
 esac
 `, { mode: 0o755 });
 
-    const provider = new AntigravityCliProvider({ binary: fakeAgy, model: 'gemini-4-neon-medium' });
+    const provider = new AntigravityCliProvider({ binary: fakeAgy, model: 'gemini-4-neon-medium', useAcp: false });
     try {
       const baseTask = { id: 'task-kv-1', title: 'KV', objective: 'Build feature', constraints: [], status: 'running', calls: 1, recoveries: 0, contractVersion: 1 };
       const bigContent = 'export const data = "' + 'x'.repeat(2000) + '";\n';
@@ -329,8 +329,21 @@ esac
       assert.equal(tSub.text, 'Fresh turn reply');
       assert.equal(provider.sessions.get('task-kv-1')?.conversationId, 'conv-abc');
 
+      // Turn 5: appended user follow-up increments contractVersion (1 -> 2) -> MUST stay warm on --conversation!
+      const t5 = await provider.turn({
+        task: { ...baseTask, calls: 5, recoveries: 1, contractVersion: 2, followups: [{ id: 'f1', message: 'Now add edge-case tests too.' }] },
+        files,
+        history: [
+          { seq: 1, type: 'task.created', data: {} },
+          { seq: 4, type: 'recovery.started', data: {} },
+          { seq: 5, type: 'user.message', data: { id: 'f1', message: 'Now add edge-case tests too.' } },
+        ],
+        tools: [],
+      });
+      assert.equal(t5.text, 'Warm cache reply');
+
       const lines = (await fs.readFile(logFile, 'utf8')).trim().split('\n');
-      assert.equal(lines.length, 6); // T1 fresh, T2 warm, T3 warm fail + T3 fresh fallback, T4 fresh after recovery, TSub stateless
+      assert.equal(lines.length, 7); // T1 fresh, T2 warm, T3 warm fail + T3 fresh fallback, T4 fresh after recovery, TSub stateless, T5 warm follow-up
       assert.equal(lines[0].includes('--conversation'), false);
       assert.equal(lines[1].includes('--conversation conv-abc'), true);
       const len1 = Number(lines[0].match(/LEN:(\d+)/)[1]);
@@ -340,9 +353,63 @@ esac
       assert.equal(lines[3].includes('--conversation'), false);
       assert.equal(lines[4].includes('--conversation'), false);
       assert.equal(lines[5].includes('--conversation'), false);
+      assert.equal(lines[6].includes('--conversation conv-abc'), true);
     } finally {
       await provider.close();
     }
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('AntigravityCliProvider.draft returns raw JSON for Overseer and catalogMessages applies overseerGuidance & skips audited drafts', async () => {
+  const dir = await fs.mkdtemp(path.join(tmpdir(), 'g0d-agy-draft-'));
+  try {
+    const fakeAgy = path.join(dir, 'fake-agy');
+    await fs.writeFile(fakeAgy, `#!/bin/sh
+cat > /dev/null
+printf '%s\\n' '{"status":"SUCCESS","response":"{\\"verdict\\":\\"approved\\",\\"completenessScore\\":98,\\"gaps\\":[],\\"guidance\\":\\"\\",\\"reason\\":\\"Complete.\\"}","usage":{"input_tokens":120,"output_tokens":28}}'
+`);
+    await fs.chmod(fakeAgy, 0o755);
+    const provider = new AntigravityCliProvider({
+      id: 'antigravity-cli:gemini-4-neon',
+      label: 'Gemini 4 Neon',
+      model: 'gemini-4-neon',
+      binary: fakeAgy,
+    });
+    try {
+      const res = await provider.draft([
+        { role: 'system', content: 'Return JSON only.' },
+        { role: 'user', content: 'Audit this reply.' },
+      ], undefined, 256);
+      assert.equal(res.type, 'message');
+      const parsed = JSON.parse(res.text);
+      assert.equal(parsed.verdict, 'approved');
+      assert.equal(parsed.completenessScore, 98);
+    } finally {
+      await provider.close();
+    }
+
+    const msgs = catalogMessages({
+      task: {
+        id: 't-cat',
+        objective: 'Build parser',
+        workspaceKind: 'conversation',
+        overseerGuidance: 'Replace TODO placeholders with real parsing code.',
+      },
+      history: [
+        { seq: 1, type: 'model.response', data: { response: { type: 'message', text: '// TODO: stub' } } },
+        { seq: 2, type: 'overseer.audited', data: { verdict: 'needs_work', reason: 'Stub detected' } },
+        { seq: 3, type: 'model.response', data: { response: { type: 'message', text: 'Full parser implemented.' } } },
+      ],
+      tools: [],
+      files: [],
+    });
+    const sysText = msgs.filter(m => m.role === 'system').map(m => m.content).join('\n');
+    const asstTexts = msgs.filter(m => m.role === 'assistant').map(m => m.content);
+    assert.match(sysText, /Replace TODO placeholders with real parsing code/);
+    assert.equal(asstTexts.some(t => t.includes('// TODO: stub')), false);
+    assert.equal(asstTexts.some(t => t.includes('Full parser implemented.')), true);
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
@@ -446,6 +513,133 @@ test('Runtime isolates per-file INVALID_TOOL errors in multi-file repo.write bat
     }
   } finally {
     await runtime.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('Round 2 regressions: all CLI bridges expose .draft(), forkTask preserves initialSnapshot diff, and GET /api/tasks/:id degrades gracefully on SNAPSHOT_LIMIT', async () => {
+  const { CodexProvider, ClaudeCodeProvider, GeminiCliProvider, CopilotCliProvider } = await import('../src/providers.mjs');
+  const { fileDiff } = await import('../src/workspaces.mjs');
+  for (const Cls of [CodexProvider, ClaudeCodeProvider, GeminiCliProvider, CopilotCliProvider]) {
+    const inst = new Cls({});
+    assert.equal(typeof inst.draft, 'function', `${Cls.name} must implement .draft()`);
+    await inst.close();
+  }
+
+  const dir = await fs.mkdtemp(path.join(tmpdir(), 'g0d-fork-snap-'));
+  const workDir = path.join(dir, 'work');
+  await fs.mkdir(workDir, { recursive: true });
+  await fs.writeFile(path.join(workDir, 'app.js'), 'export const v = 1;\n');
+  const app = await createApp({ dataDir: path.join(dir, 'data'), auth: false, cliDiscovery: { probes: [] }, startScheduler: false });
+  try {
+    const task = await app.runtime.createTask({
+      title: 'Fork Diff Test',
+      objective: 'Edit app.js',
+      workspace: workDir,
+      providers: ['scripted-primary'],
+      acceptance: { mode: 'owner' },
+    });
+    // Edit workspace file before forking
+    await fs.writeFile(path.join(workDir, 'app.js'), 'export const v = 2;\n');
+    const forked = await app.runtime.forkTask(task.id);
+    const forkedSnap = await app.runtime.snapshotTask(forked.id);
+    const diff = fileDiff(forked.initialSnapshot.files, forkedSnap.files);
+    assert.equal(diff.length, 1);
+    assert.equal(diff[0].path, 'app.js');
+    assert.equal(diff[0].before, 'export const v = 1;\n');
+    assert.equal(diff[0].after, 'export const v = 2;\n');
+
+    // Oversized file (>256 KiB) must NOT brick GET /api/tasks/:id with 400
+    await fs.writeFile(path.join(forked.workspace, 'bundle.js'), 'x'.repeat(300 * 1024));
+    const res = await dispatch(app, { method: 'GET', url: `/api/tasks/${forked.id}` });
+    assert.equal(res.status, 200);
+    assert.equal(res.json.task.id, forked.id);
+    assert.ok(res.json.snapshotWarning, 'Should include snapshotWarning instead of failing with HTTP 400');
+  } finally {
+    await app.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('AntigravityCliProvider keeps KV-cache warm across probeProgress/overseerGuidance updates and classifies quota_exhausted vs transient rate_limit with retryAfterMs', async () => {
+  const { diagnoseIncident } = await import('../src/routing.mjs');
+  assert.deepEqual(diagnoseIncident({ code: 'quota_exhausted', retryable: true }), { category: 'transport', route: true });
+  assert.deepEqual(diagnoseIncident({ code: 'rate_limit', retryable: true }), { category: 'transport', route: true });
+
+  const dir = await fs.mkdtemp(path.join(tmpdir(), 'g0d-agy-quota-'));
+  try {
+    const argLog = path.join(dir, 'args.log');
+    const fakeAgy = path.join(dir, 'fake-agy');
+    await fs.writeFile(fakeAgy, `#!/bin/sh
+echo "$*" >> "${argLog}"
+cat > /dev/null
+if [ "$FAKE_MODE" = "quota" ]; then
+  echo "error: Third-party quota reached. Please switch to Gemini models. Resets in 49m23s." >&2
+  exit 3
+fi
+if [ "$FAKE_MODE" = "429" ]; then
+  echo "error: HTTP 429 too many requests" >&2
+  exit 1
+fi
+printf '%s\\n' '{"conversation_id":"conv-warm-1","status":"SUCCESS","response":"{\\"type\\":\\"message\\",\\"calls\\":[],\\"text\\":\\"ok\\",\\"finish\\":\\"done\\"}","usage":{"input_tokens":100,"output_tokens":20,"cache_read_tokens":80}}'
+`);
+    await fs.chmod(fakeAgy, 0o755);
+
+    // 1. Warm KV-cache survives probeProgress and overseerGuidance changes
+    const pWarm = new AntigravityCliProvider({ binary: fakeAgy, model: 'gemini-4-neon-medium' });
+    try {
+      await pWarm.turn({
+        task: { id: 't-warm', objective: 'Fix bugs', calls: 1, contractVersion: 1, recoveries: 0 },
+        history: [{ seq: 1, type: 'user.message', data: { text: 'Fix bugs' } }],
+        tools: [], files: [],
+      }, { privacy: { localOnly: false } });
+      await pWarm.turn({
+        task: {
+          id: 't-warm', objective: 'Fix bugs', calls: 2, contractVersion: 1, recoveries: 0,
+          overseerGuidance: 'Check edge case 2', probeProgress: { passed: 10, total: 12, highWater: 10 },
+        },
+        history: [
+          { seq: 1, type: 'user.message', data: { text: 'Fix bugs' } },
+          { seq: 2, type: 'tool.completed', data: { name: 'repo.write' } },
+        ],
+        tools: [], files: [],
+      }, { privacy: { localOnly: false } });
+      const lines = (await fs.readFile(argLog, 'utf8')).trim().split('\n');
+      assert.equal(lines.length, 2);
+      assert.equal(lines[0].includes('--conversation'), false);
+      assert.equal(lines[1].includes('--conversation conv-warm-1'), true, 'Expected warm --conversation reuse across overseerGuidance/probeProgress delta');
+    } finally {
+      await pWarm.close();
+    }
+
+    // 2. Hard quota exhaustion sets code=quota_exhausted & retryAfterMs=300000 for instant failover
+    const fakeQuota = path.join(dir, 'fake-agy-quota');
+    await fs.writeFile(fakeQuota, `#!/bin/sh\ncat > /dev/null\necho "error: Third-party quota reached. Please switch to Gemini models. Resets in 49m23s." >&2\nexit 3\n`);
+    await fs.chmod(fakeQuota, 0o755);
+    const pQuota = new AntigravityCliProvider({ binary: fakeQuota, model: 'claude-sonnet-5-5-medium' });
+    try {
+      await assert.rejects(
+        () => pQuota.turn({ task: { id: 't-q', objective: 'Hi' }, history: [], tools: [], files: [] }, { privacy: { localOnly: false } }),
+        err => err?.code === 'quota_exhausted' && err?.retryable === true && err?.retryAfterMs === 300000 && /Resets in 49m23s/i.test(err.message)
+      );
+    } finally {
+      await pQuota.close();
+    }
+
+    // 3. Transient 429 sets code=rate_limit & retryAfterMs=2500
+    const fake429 = path.join(dir, 'fake-agy-429');
+    await fs.writeFile(fake429, `#!/bin/sh\ncat > /dev/null\necho "error: HTTP 429 too many requests" >&2\nexit 1\n`);
+    await fs.chmod(fake429, 0o755);
+    const p429 = new AntigravityCliProvider({ binary: fake429, model: 'gemini-4-neon-medium' });
+    try {
+      await assert.rejects(
+        () => p429.turn({ task: { id: 't-r', objective: 'Hi' }, history: [], tools: [], files: [] }, { privacy: { localOnly: false } }),
+        err => err?.code === 'rate_limit' && err?.retryable === true && err?.retryAfterMs === 2500
+      );
+    } finally {
+      await p429.close();
+    }
+  } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
 });

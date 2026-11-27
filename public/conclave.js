@@ -243,6 +243,7 @@
             <div class="conclave-standby-formations hidden" id="conclave-standby-formations"></div>
           </div>
           <div class="conclave-diff-actions hidden" id="conclave-diff-actions"></div>
+          <div class="conclave-round-banner hidden" id="conclave-round-banner" aria-live="polite"></div>
           <div class="conclave-live-ticker hidden" id="conclave-live-ticker" aria-label="Live latent activity feed"></div>
           <div class="conclave-legend" id="conclave-legend">
             <span><i class="p-dot p-dot-violet"></i>Streaming</span>
@@ -346,11 +347,13 @@
           builderDraft.engineType = 'api';
           builderDraft.providerId = val.slice(5);
           builderDraft.harnessId = null;
+          builderDraft.harnessCommand = '';
         } else if (val.startsWith('harness::')) {
           builderDraft.engineType = 'harness';
           builderDraft.harnessId = val.slice(9);
           const h = (rosterData?.harnesses || []).find(x => x.id === builderDraft.harnessId);
           builderDraft.providerId = h?.providerId || null;
+          builderDraft.harnessCommand = h?.command || '';
         } else if (val === 'custom_cli') {
           builderDraft.engineType = 'custom_cli';
           builderDraft.providerId = null;
@@ -359,6 +362,7 @@
           builderDraft.engineType = 'api';
           builderDraft.providerId = null;
           builderDraft.harnessId = null;
+          builderDraft.harnessCommand = '';
         }
         refreshBuilderStats();
         return;
@@ -464,11 +468,15 @@
           headers: { 'content-type': 'application/json', 'x-g0d-request': '1' },
           body: JSON.stringify({ workerId: selectedWorkerId, message: msg }),
         });
-        if (!res.ok) throw new Error('Failed to steer worker.');
-        const json = await res.json();
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(json.error || 'Failed to steer worker.');
         input.value = '';
         if (json.conclave) { data = json.conclave; renderAll(); }
-        if (typeof window.toast === 'function') window.toast(`Steer sent to ${selectedWorkerId}.`);
+        if (typeof window.toast === 'function') {
+          window.toast(json.target === 'note'
+            ? `Recorded note for ${selectedWorkerId} (worker is no longer active).`
+            : `Steer sent to ${selectedWorkerId}.`);
+        }
       } catch (err) {
         if (typeof window.toast === 'function') window.toast(err.message || 'Steer failed.');
       }
@@ -1077,7 +1085,7 @@
     return `${heading}:\n${rosterLines.join('\n')}\n\n${modeProtocol}\n\nMission:\n${cleanMission || '[Describe your goal here]'}`;
   }
 
-  function launchConclaveFromPad({ autoSend = true } = {}) {
+  async function launchConclaveFromPad({ autoSend = true } = {}) {
     const input = document.getElementById('conclave-mission-input');
     const mission = (input?.value ?? launchMission ?? '').trim();
     if (!mission) {
@@ -1085,8 +1093,28 @@
       input?.focus();
       return;
     }
+    stopDemo();
     const slugs = [...launchTeam];
-    const prompt = buildMissionPrompt(mission, { slugs, mode: launchMode });
+    const chosenMode = launchMode;
+    if (autoSend && typeof window.launchNativeConclave === 'function') {
+      const btn = document.getElementById('conclave-launch-btn');
+      if (btn) { btn.disabled = true; btn.textContent = '✦ Convening council…'; }
+      const launched = await window.launchNativeConclave({ mission, agents: slugs, mode: chosenMode });
+      if (btn) { btn.disabled = false; btn.textContent = '✦ Launch Conclave →'; }
+      if (!launched) return;
+      if (isExpanded) toggleExpand();
+      forceShowLaunchpad = false;
+      activeTemplateId = null;
+      launchManualTeam = false;
+      launchManualMode = false;
+      launchReasonLabel = '';
+      if (input) input.value = '';
+      launchMission = '';
+      renderAll();
+      if (typeof window.toast === 'function') window.toast(`✦ Conclave 2.0 launched (${slugs.length} specialists · ${chosenMode})!`);
+      return;
+    }
+    const prompt = buildMissionPrompt(mission, { slugs, mode: chosenMode });
     if (autoSend && typeof window.submitConclaveMission === 'function') {
       const sent = window.submitConclaveMission(prompt);
       if (!sent) return;
@@ -1098,17 +1126,8 @@
       launchReasonLabel = '';
       if (input) input.value = '';
       launchMission = '';
-      const btn = document.getElementById('conclave-launch-btn');
-      if (btn) {
-        btn.disabled = true;
-        btn.textContent = '✦ Convening team…';
-        setTimeout(() => {
-          btn.disabled = false;
-          btn.textContent = '✦ Launch Conclave →';
-        }, 2200);
-      }
       renderAll();
-      if (typeof window.toast === 'function') window.toast(`✦ Conclave launched (${slugs.length} specialists · ${launchMode})!`);
+      if (typeof window.toast === 'function') window.toast(`✦ Conclave launched (${slugs.length} specialists · ${chosenMode})!`);
       return;
     }
     const composer = document.getElementById('composer-input');
@@ -1220,13 +1239,19 @@
     const race = data?.worktreeRace;
     const show = Boolean(race?.candidates?.length) && activeLens === 'stage' && !forceShowLaunchpad;
     bar.classList.toggle('hidden', !show);
-    if (!show) return;
+    if (!show) {
+      bar.dataset.lastHtml = '';
+      return;
+    }
     const applied = race.appliedCandidateId;
-    bar.innerHTML = `<div class="pda-head"><strong>Code Diff Race</strong><span>${esc(race.repository)} · ${esc(race.branch)}</span>${race.lastCheck ? `<span class="conclave-status-pill tone-${race.lastCheck.ok ? 'sage' : 'coral'}">${race.lastCheck.ok ? 'Checks ✓' : 'Checks ✗'}</span>` : ''}</div><div class="pda-btns">${race.candidates.map(c => {
+    const html = `<div class="pda-head"><strong>Code Diff Race</strong><span>${esc(race.repository)} · ${esc(race.branch)}</span>${race.lastCheck ? `<span class="conclave-status-pill tone-${race.lastCheck.ok ? 'sage' : 'coral'}">${race.lastCheck.ok ? 'Checks ✓' : 'Checks ✗'}</span>` : ''}</div><div class="pda-btns">${race.candidates.map(c => {
       const isApplied = applied === c.id;
       const canAdopt = c.status === 'ready' && !applied;
       return `<button type="button" class="button ${isApplied ? 'button-primary' : 'button-secondary'} pda-btn" data-diff-wt="${esc(race.worktreeId)}" data-diff-adopt="${esc(c.id)}" ${canAdopt ? '' : 'disabled'}>${isApplied ? '✓ Adopted' : c.status === 'failed' ? '✗ Failed' : `✓ Adopt ${esc(c.slot)} (+${c.additions}/-${c.deletions})`}</button>`;
     }).join('')}</div>`;
+    if (bar.dataset.lastHtml === html) return;
+    bar.dataset.lastHtml = html;
+    bar.innerHTML = html;
   }
 
   async function adoptDiffCandidate(worktreeId, candidateId) {
@@ -1314,6 +1339,20 @@
       }
     }
 
+    const roundBanner = document.getElementById('conclave-round-banner');
+    if (roundBanner) {
+      const cs = data?.conclaveSession;
+      const showRound = Boolean(cs && activeLens === 'stage' && !forceShowLaunchpad && !demoMode);
+      roundBanner.classList.toggle('hidden', !showRound);
+      if (showRound) {
+        const html = `<span class="crb-badge">✦ ${esc(cs.modeLabel || cs.mode)}</span><strong class="crb-phase">${esc(cs.phase || `Round ${cs.round}/${cs.totalRounds}`)}</strong><span class="crb-count">${esc((cs.blackboard || []).length)} blackboard notes</span>`;
+        if (roundBanner.dataset.lastHtml !== html) {
+          roundBanner.dataset.lastHtml = html;
+          roundBanner.innerHTML = html;
+        }
+      }
+    }
+
     updateReplayBar();
     renderDiffActionsBar();
     renderLiveTicker();
@@ -1327,9 +1366,14 @@
   function renderCards() {
     const el = document.getElementById('conclave-view-cards');
     if (!el) return;
+    const commitCards = (html) => {
+      if (el.dataset.lastHtml === html) return;
+      el.dataset.lastHtml = html;
+      el.innerHTML = html;
+    };
     if (data?.mode === 'arena' && data?.arena) {
       const arena = data.arena;
-      el.innerHTML = `<div class="conclave-cards-grid">${(arena.contenders || []).map(c => `
+      commitCards(`<div class="conclave-cards-grid">${(arena.contenders || []).map(c => `
         <article class="conclave-card ${c.isWinner ? 'is-winner' : ''}">
           <header class="conclave-card-head">
             <span class="conclave-role-chip">Contender ${esc(c.slot)}</span>
@@ -1346,13 +1390,13 @@
           </header>
           <strong class="conclave-card-model">${esc(arena.judge.label)}</strong>
           <p class="conclave-card-tail">${esc(arena.note || 'Evaluates drafts blindly for fidelity, completeness, and clarity.')}</p>
-        </article>` : ''}</div>`;
+        </article>` : ''}</div>`);
       return;
     }
     if (data?.mode === 'diff_race' && data?.worktreeRace?.candidates?.length) {
       const race = data.worktreeRace;
       const applied = race.appliedCandidateId;
-      el.innerHTML = `<div class="conclave-cards-grid">${race.candidates.map(c => {
+      commitCards(`<div class="conclave-cards-grid">${race.candidates.map(c => {
         const isApplied = applied === c.id;
         const canAdopt = c.status === 'ready' && !applied;
         return `<article class="conclave-card ${isApplied ? 'is-winner' : ''}">
@@ -1368,16 +1412,26 @@
             <button type="button" class="button ${isApplied ? 'button-primary' : 'button-secondary'}" data-diff-wt="${esc(race.worktreeId)}" data-diff-adopt="${esc(c.id)}" ${canAdopt ? '' : 'disabled'}>${isApplied ? '✓ Winner Adopted' : '✓ Adopt Winner Patch'}</button>
           </footer>
         </article>`;
-      }).join('')}</div>`;
+      }).join('')}</div>`);
       return;
     }
     const workers = data?.workers || [];
     if (!workers.length) {
-      el.innerHTML = '<div class="conclave-empty-cards"><p>No active or completed workers yet. Switch to <strong>✦ Stage</strong> to launch a Parallel Research Squad or click <strong>Preview Swarm</strong>.</p></div>';
+      commitCards('<div class="conclave-empty-cards"><p>No active or completed workers yet. Switch to <strong>✦ Stage</strong> to launch a Parallel Research Squad or click <strong>Preview Swarm</strong>.</p></div>');
       return;
     }
     const conflictFiles = new Set((data?.fileConflicts || []).map(c => c.file));
-    el.innerHTML = `<div class="conclave-cards-grid">${workers.map(w => {
+    const bbEntries = data?.conclaveSession?.blackboard || [];
+    const bbHtml = bbEntries.length ? `
+      <section class="conclave-blackboard" aria-label="Shared Conclave Blackboard">
+        <div class="conclave-bb-title"><strong>✦ Shared Blackboard</strong><span>${esc(data.conclaveSession.modeLabel || 'Conclave')} · ${bbEntries.length} ${bbEntries.length === 1 ? 'note' : 'notes'}</span></div>
+        <div class="conclave-bb-list">${bbEntries.map(e => `
+          <details class="conclave-bb-entry">
+            <summary class="conclave-bb-head"><strong>R${esc(e.round)} · ${esc(e.sigil || '✦')} ${esc(e.agentName || e.role)}</strong><span class="conclave-bb-kind">${esc(e.kind || 'finding')} · ${esc(shortModel(e.modelLabel || 'Auto'))}</span></summary>
+            <p class="conclave-bb-excerpt">${esc(String(e.excerpt || '').slice(0, 900))}</p>
+          </details>`).join('')}</div>
+      </section>` : '';
+    commitCards(`<div class="conclave-cards-grid">${workers.map(w => {
       const st = statusInfo(w.status);
       const selected = w.workerId === selectedWorkerId;
       const files = (w.files || []).slice(0, 4);
@@ -1399,7 +1453,7 @@
           <button type="button" class="button button-secondary" data-conclave-select="${esc(w.workerId)}">${selected ? 'Inspecting' : 'Inspect & Steer'}</button>
         </footer>
       </article>`;
-    }).join('')}</div>`;
+    }).join('')}</div>${bbHtml}`);
   }
 
   function renderInspector() {
@@ -1412,19 +1466,36 @@
     }
     panel.classList.remove('hidden');
     const st = statusInfo(worker.status);
-    const setT = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = String(v); };
+    const setT = (id, v) => {
+      const el = document.getElementById(id);
+      const next = String(v);
+      if (el && el.textContent !== next) el.textContent = next;
+    };
     setT('pi-role', worker.role || 'worker');
     setT('pi-model', worker.modelLabel || worker.providerId || 'Auto');
     const stEl = document.getElementById('pi-status');
-    if (stEl) { stEl.textContent = worker.tool && st.active ? `${st.label} · ${worker.tool}` : st.label; stEl.className = `conclave-status-pill tone-${st.tone}`; }
+    if (stEl) {
+      const nextLabel = worker.tool && st.active ? `${st.label} · ${worker.tool}` : st.label;
+      if (stEl.textContent !== nextLabel) stEl.textContent = nextLabel;
+      const nextCls = `conclave-status-pill tone-${st.tone}`;
+      if (stEl.className !== nextCls) stEl.className = nextCls;
+    }
     setT('pi-meta', `${worker.kind === 'crew' ? 'Coding Crew' : worker.viaHarness ? 'External CLI Harness' : 'Specialist Subagent'} · ${worker.calls || 0} calls · ${fmtMs(worker.durationMs)}${worker.approxTokens ? ` · ${fmtTokens(worker.approxTokens)} (${fmtCost(worker.estimatedCostUsd)})` : ''}${worker.isMvp ? ' · ★ MVP' : ''}${worker.tools?.length ? ` · Tools: ${[...new Set(worker.tools)].join(', ')}` : ''}`);
     const filesEl = document.getElementById('pi-files');
     if (filesEl) {
       const files = worker.files || [];
       filesEl.classList.toggle('hidden', files.length === 0);
-      filesEl.innerHTML = files.map(f => `<span class="conclave-file-chip">${esc(f)}</span>`).join('');
+      const filesHtml = files.map(f => `<span class="conclave-file-chip">${esc(f)}</span>`).join('');
+      if (filesEl.dataset.lastHtml !== filesHtml) {
+        filesEl.dataset.lastHtml = filesHtml;
+        filesEl.innerHTML = filesHtml;
+      }
     }
-    setT('pi-output', worker.summary || worker.streamTail || worker.prompt || 'Working…');
+    const outEl = document.getElementById('pi-output');
+    const nextOut = String(worker.summary || worker.streamTail || worker.prompt || 'Working…');
+    const sel = window.getSelection?.();
+    const selectingOutput = Boolean(outEl && sel && !sel.isCollapsed && outEl.contains(sel.anchorNode));
+    if (outEl && outEl.textContent !== nextOut && !selectingOutput) outEl.textContent = nextOut;
   }
 
   function prepCanvas(canvas) {
@@ -2206,10 +2277,8 @@
       forceShowLaunchpad = false;
       replayPlaying = false;
       replayProgress = 100;
-      if (demoMode && nextId) {
-        demoMode = false;
-      }
-      if (!demoMode) data = null;
+      if (demoMode) stopDemo();
+      data = null;
     }
     if (nextId && !demoMode) {
       loadSnapshot(nextId);
@@ -2222,7 +2291,7 @@
   function ingestStreamEvent(delta) {
     if (!delta || !currentTaskId) return;
     if (demoMode && (delta.type === 'subagent.started' || delta.type === 'race.dispatched' || delta.type === 'race.contender')) {
-      demoMode = false;
+      stopDemo();
       data = null;
     }
     if (demoMode) return;
@@ -2526,9 +2595,11 @@
       if (!res.ok) throw new Error(json.error || 'Could not delete agent.');
       rosterData = json.roster;
       selectedSquad.delete(slug);
+      launchTeam.delete(slug);
       builderOpen = false;
       builderDraft = null;
       renderRosterView();
+      renderStandbyFormations();
       if (typeof window.toast === 'function') window.toast(`Removed custom agent "${slug}".`);
     } catch (err) {
       if (typeof window.toast === 'function') window.toast(err.message || 'Delete failed.');
@@ -2632,10 +2703,21 @@
     }
   }
 
-  function deployFormation(id) {
+  async function deployFormation(id) {
     const f = (rosterData?.formations || []).find(x => x.id === id);
     if (!f) return;
+    stopDemo();
     const mission = f.goal || launchMission || '';
+    if (f.goal && typeof window.launchNativeConclave === 'function') {
+      const launched = await window.launchNativeConclave({ mission: f.goal, agents: f.agents, mode: 'parallel', formationName: f.name });
+      if (!launched) return;
+      if (isExpanded) toggleExpand();
+      forceShowLaunchpad = false;
+      setLens('stage');
+      renderAll();
+      if (typeof window.toast === 'function') window.toast(`${f.sigil || '✦'} Launched "${f.name}" (${f.agents.length} specialists)!`);
+      return;
+    }
     const prompt = buildMissionPrompt(mission, { slugs: f.agents, mode: 'parallel', formationName: f.name });
     if (f.goal && typeof window.submitConclaveMission === 'function') {
       const sent = window.submitConclaveMission(prompt);
@@ -2785,12 +2867,15 @@
         </form>
       </section>` : '';
 
+    if (builderOpen && builderDraft) syncDraftTextFieldsFromDom();
+    const prevRfName = document.getElementById('rf-name')?.value ?? null;
+    const prevRfGoal = document.getElementById('rf-goal')?.value ?? null;
     const formations = rosterData.formations || [];
     const formationFormHtml = formationFormOpen ? `
       <form id="rf-form" class="rf-form" autocomplete="off">
         <div class="rf-row">
-          <input type="text" id="rf-name" placeholder="Formation name (e.g. Security Swarm)" maxlength="48" required>
-          <input type="text" id="rf-goal" placeholder="Optional starter mission prompt…" maxlength="400">
+          <input type="text" id="rf-name" placeholder="Formation name (e.g. Security Swarm)" maxlength="48" value="${esc(prevRfName || '')}" required>
+          <input type="text" id="rf-goal" placeholder="Optional starter mission prompt…" maxlength="400" value="${esc(prevRfGoal || '')}">
         </div>
         <div class="rf-actions">
           <span class="rf-hint">Saves ${selectedSquad.size ? `${selectedSquad.size} selected` : 'top 3'} roster agents as a 1-click preset</span>

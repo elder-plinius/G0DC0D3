@@ -14,6 +14,7 @@ let selectedData = null;
 let currentTab = 'timeline';
 let hasConnected = false;
 let refreshing = false;
+let refreshQueued = false;
 let selectionVersion = 0;
 let actionBusy = false;
 let createBusy = false;
@@ -29,6 +30,10 @@ let streamText = '';
 let streamThinking = '';
 let streamThinkingExpanded = false;
 let streamToolName = '';
+let streamTurnStartedAt = 0;
+let liveElapsedTimer = null;
+const tabScrollPositions = new Map();
+let overseerDirectivesDraft = null;
 let routeBusy = false;
 let detailSignature = '';
 let listSignature = '';
@@ -606,9 +611,13 @@ function renderComposer() {
     sendBtn.setAttribute('aria-label', canStop ? 'Stop generation' : busy ? 'Sending message' : queueing ? ($('#composer-delivery')?.value === 'steer' ? 'Steer current turn' : 'Queue next message') : 'Send message');
     sendBtn.title = canStop ? 'Stop current turn (Esc)' : 'Send message';
     sendBtn.setAttribute('aria-busy', String(busy));
-    sendBtn.innerHTML = canStop
-      ? '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="5" y="5" width="10" height="10" rx="2" fill="currentColor" stroke="none"/></svg>'
-      : '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 15V4M5 9l5-5 5 5"/></svg>';
+    const iconMode = canStop ? 'stop' : 'send';
+    if (sendBtn.dataset.iconMode !== iconMode) {
+      sendBtn.dataset.iconMode = iconMode;
+      sendBtn.innerHTML = canStop
+        ? '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="5" y="5" width="10" height="10" rx="2" fill="currentColor" stroke="none"/></svg>'
+        : '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 15V4M5 9l5-5 5 5"/></svg>';
+    }
   }
   $('#composer-project').disabled = loading || createBusy;
   $('#composer-model').disabled = loading || createBusy;
@@ -1435,6 +1444,9 @@ function renderTaskMetaStrip(task) {
     if (showCompactBtn) actionParts.push(`<button type="button" class="strip-action-btn" data-strip-action="compact" title="Compact context into fresh-eyes summary (/compact)" aria-label="Compact context" ${stripActionBusy ? 'disabled' : ''}>${compactSvg}<span>Compact</span></button>`);
     if (task.workspaceKind !== 'conversation') actionParts.push(`<button type="button" class="strip-action-btn" data-strip-action="undo" title="${undoTitle}" aria-label="Undo checkpoint" ${stripActionBusy || !canUndo ? 'disabled' : ''}>${undoSvg}<span>Undo</span></button>`);
     actionParts.push(`<button type="button" id="fork-task-btn" class="strip-action-btn" data-strip-action="fork" title="Fork into a new task branch (/fork)" aria-label="Fork task" ${stripActionBusy ? 'disabled' : ''}>${forkSvg}<span>Fork</span></button>`);
+    if (task.status === 'completed' || (task.calls || 0) > 0) {
+      actionParts.push(`<button type="button" id="save-skill-btn" class="strip-action-btn" data-strip-action="save-skill" title="Distill this run into a reusable /slash skill (/save-skill)" aria-label="Save run as reusable skill" ${stripActionBusy ? 'disabled' : ''}><span aria-hidden="true">✦</span><span>Save Skill</span></button>`);
+    }
   }
   const metaHtml = metaParts.map((part, i) => {
     if (i === 0) return part;
@@ -1532,7 +1544,12 @@ async function executeSlashCommand(raw) {
     return { handled: true };
   }
   if (cmd === '/build') {
-    if (task?.workspaceKind === 'conversation' && !task?.planMode) return { handled: false };
+    if (task?.workspaceKind === 'conversation') {
+      if (task?.planMode) await togglePlanMode(task, false);
+      if (arg || task?.codeWorkspace) return { handled: false };
+      clearInput();
+      return { handled: true };
+    }
     clearInput();
     await togglePlanMode(task, false);
     return { handled: true };
@@ -1778,10 +1795,22 @@ async function executeSlashCommand(raw) {
     if (/^(demo|preview)$/i.test(sub)) { clearInput(); window.G0DConclave?.open({ demo: true }); return { handled: true }; }
     if (/^(cards|timeline|stage|roster)$/i.test(sub)) { clearInput(); window.G0DConclave?.open({ lens: sub.toLowerCase() }); return { handled: true }; }
     if (/^(builder|forge)$/i.test(sub)) { clearInput(); window.G0DConclave?.open({ lens: 'roster' }); window.G0DConclave?.openBuilder(null); return { handled: true }; }
-    // Direct 1-command launch: `/conclave <any long-form mission>` auto-picks specialists and runs immediately!
+    // Direct 1-command launch: `/conclave <any long-form mission>` auto-picks specialists and runs native multi-round Conclave 2.0!
+    clearInput();
     window.G0DConclave?.open({ lens: 'stage' });
+    const rec = window.G0DConclave?.recommendTeam ? window.G0DConclave.recommendTeam(sub) : { agents: ['explore', 'analyst', 'strategist'], mode: 'parallel' };
+    if (typeof window.launchNativeConclave === 'function') {
+      void window.launchNativeConclave({ mission: sub, agents: rec.agents, mode: rec.mode });
+      return { handled: true };
+    }
     const built = window.G0DConclave?.buildMissionPrompt ? window.G0DConclave.buildMissionPrompt(sub) : sub;
     return { handled: false, overrideMessage: built };
+  }
+  if (cmd === '/save-skill') {
+    if (!task) { composerErrors.set(key, 'Select a task before running /save-skill.'); renderComposer(); return { handled: true }; }
+    clearInput();
+    await saveTaskAsSkillAction(task, arg.trim());
+    return { handled: true };
   }
   if (cmd === '/benchmark') {
     clearInput();
@@ -1817,6 +1846,50 @@ function closeAllRightDocks({ except = null } = {}) {
   }
 }
 window.closeAllRightDocks = closeAllRightDocks;
+window.launchNativeConclave = async function launchNativeConclave({ mission, agents, mode = 'parallel', formationName = null } = {}) {
+  const cleanMission = String(mission || '').trim();
+  if (!cleanMission) return false;
+  if ($('#connection') && !$('#connection').classList.contains('online')) {
+    toast('Server is offline — reconnect before launching a Conclave.');
+    return false;
+  }
+  const avail = typeof newConversationProviders === 'function' ? newConversationProviders() : [];
+  if (!selectedId && !avail.length) {
+    toast('Connect at least one AI provider in Settings → Models before launching a Conclave.');
+    return false;
+  }
+  const activeTask = selectedId && selectedData?.task?.id === selectedId ? selectedData.task : null;
+  if (activeTask && (ACTIVE.has(activeTask.status) || activeTask.status === 'cancelled' || activeTask.draining || isCrewBusy(activeTask))) {
+    toast('Current task is busy or unavailable — start a new chat or wait a moment.');
+    return false;
+  }
+  try {
+    const res = await api('/api/conclave/run', {
+      method: 'POST',
+      body: JSON.stringify({
+        ...(selectedId ? { taskId: selectedId } : { providerIds: avail }),
+        mission: cleanMission,
+        agents: Array.isArray(agents) && agents.length ? agents : ['explore', 'analyst', 'strategist'],
+        mode,
+        ...(formationName ? { formationName } : {}),
+      }),
+    });
+    if (res?.task?.id) {
+      if (res.task.id !== selectedId) {
+        state.tasks = [res.task, ...(state.tasks || []).filter(t => t.id !== res.task.id)];
+        await selectTask(res.task.id);
+      } else {
+        await refresh();
+      }
+      window.G0DConclave?.open?.({ lens: 'stage' });
+      window.G0DConclave?.syncTask?.(res.task);
+    }
+    return true;
+  } catch (err) {
+    toast(err?.message || 'Could not launch Conclave.');
+    return false;
+  }
+};
 window.submitConclaveMission = function submitConclaveMission(promptText) {
   const input = $('#composer-input');
   const form = $('#composer-form');
@@ -1857,6 +1930,29 @@ window.submitConclaveMission = function submitConclaveMission(promptText) {
   return false;
 };
 
+function closeAllPopovers(exceptId = null) {
+  if (exceptId !== 'theme-popover') {
+    $('#theme-popover')?.classList.add('hidden');
+    $('#theme-toggle')?.setAttribute('aria-expanded', 'false');
+  }
+  if (exceptId !== 'overseer-popover') {
+    $('#overseer-popover')?.classList.add('hidden');
+    $('#overseer-toggle')?.setAttribute('aria-expanded', 'false');
+  }
+  if (exceptId !== 'ultra-popover') {
+    $('#ultra-popover')?.classList.add('hidden');
+    $('#composer-race')?.setAttribute('aria-expanded', 'false');
+  }
+  if (exceptId !== 'effort-popover') {
+    $('#effort-popover')?.classList.add('hidden');
+    $('#composer-effort')?.setAttribute('aria-expanded', 'false');
+  }
+  if (exceptId !== 'composer-options') {
+    setComposerOptionsOpen(false);
+  }
+}
+window.closeAllPopovers = closeAllPopovers;
+
 function dismissDrawers() {
   let changed = false;
   if (document.body.classList.contains('sidebar-open')) {
@@ -1867,12 +1963,7 @@ function dismissDrawers() {
     document.body.classList.remove('inspector-open');
     changed = true;
   }
-  $('#theme-popover')?.classList.add('hidden');
-  $('#theme-toggle')?.setAttribute('aria-expanded', 'false');
-  $('#overseer-popover')?.classList.add('hidden');
-  $('#overseer-toggle')?.setAttribute('aria-expanded', 'false');
-  $('#ultra-popover')?.classList.add('hidden');
-  $('#effort-popover')?.classList.add('hidden');
+  closeAllPopovers();
   if (changed) syncPanels();
 }
 
@@ -1926,12 +2017,20 @@ function setInspector(open, focus = false) {
 
 function chooseTab(name) {
   if (!['timeline', 'changes', 'files', 'commands', 'activity'].includes(name)) return;
+  const scroller = $('#task-content');
+  const scopeKey = selectedId || 'welcome';
   const changed = currentTab !== name;
+  if (changed && scroller) {
+    tabScrollPositions.set(`${scopeKey}:${currentTab}`, scroller.scrollTop);
+  }
   currentTab = name;
   $$('.workspace-tab').forEach((element) => { const active = element.dataset.tab === name; element.classList.toggle('active', active); element.setAttribute('aria-selected', String(active)); element.tabIndex = active ? 0 : -1; });
   ['timeline', 'changes', 'files', 'commands', 'activity'].forEach((tab) => setVisible(`#panel-${tab}`, tab === name));
-  $('#task-content').setAttribute('aria-label', `${name === 'timeline' ? 'Conversation' : humanize(name)} content`);
-  if (changed) $('#task-content').scrollTop = 0;
+  scroller?.setAttribute('aria-label', `${name === 'timeline' ? 'Conversation' : humanize(name)} content`);
+  if (changed && scroller) {
+    const saved = tabScrollPositions.get(`${scopeKey}:${name}`);
+    scroller.scrollTop = typeof saved === 'number' ? saved : 0;
+  }
   updateLatestButton();
 }
 
@@ -2748,6 +2847,7 @@ async function updateOverseerSettings(patch) {
   try {
     overseerData = await api('/api/overseer', { method: 'PATCH', body: JSON.stringify(patch) });
     state.overseer = overseerData;
+    if (Object.hasOwn(patch, 'customInstructions')) overseerDirectivesDraft = null;
     const msg = overseerData.settings?.enabled && overseerData.selectedProvider
       ? `Overseer active: ${overseerData.selectedProvider.label}.`
       : 'Overseer settings saved.';
@@ -2832,7 +2932,7 @@ function renderOverseerEdge() {
   ];
   const curPosture = s.posture || (s.autoCoachLongRuns ? 'proactive' : s.autoAuditCompletion ? 'active' : 'reactive');
   const curPostureDesc = postures.find(p => p.id === curPosture)?.description || '';
-  const canConsult = Boolean(data.ready && selectedId && !overseerBusy);
+  const showConsult = Boolean(data.ready && selectedId);
   const nextHtml = `
     <div class="overseer-pop-row">
       <div class="overseer-pop-status">
@@ -2858,7 +2958,7 @@ function renderOverseerEdge() {
       <label class="check-setting"><input type="checkbox" id="overseer-pop-audit" ${s.autoAuditCompletion ? 'checked' : ''} ${overseerBusy || !s.providerId ? 'disabled' : ''}> Pre-finish stub &amp; completeness audit</label>
       <label class="check-setting"><input type="checkbox" id="overseer-pop-coach" ${s.autoCoachLongRuns ? 'checked' : ''} ${overseerBusy || !s.providerId ? 'disabled' : ''}> Mid-run long-task trajectory coaching</label>
     </div>
-    ${canConsult ? '<button type="button" class="button button-secondary overseer-consult-btn" data-overseer-consult-now>✦ Consult Overseer on Current Task</button>' : ''}
+    ${showConsult ? `<button type="button" class="button button-secondary overseer-consult-btn" data-overseer-consult-now ${overseerBusy ? 'disabled' : ''}>${overseerBusy ? '✦ Consulting Overseer…' : '✦ Consult Overseer on Current Task'}</button>` : ''}
     <div class="overseer-pop-foot">
       <span class="field-help">${patternCount} learned 0ms ${patternCount === 1 ? 'pattern' : 'patterns'} · ${stratCount} ${stratCount === 1 ? 'bandit' : 'bandits'}</span>
       <div class="overseer-pop-foot-actions">
@@ -2882,10 +2982,7 @@ function toggleOverseerPopover(force) {
   const btn = $('#overseer-toggle');
   if (!pop) return;
   const open = typeof force === 'boolean' ? force : pop.classList.contains('hidden');
-  if (open) {
-    $('#theme-popover')?.classList.add('hidden');
-    $('#theme-toggle')?.setAttribute('aria-expanded', 'false');
-  }
+  if (open) closeAllPopovers('overseer-popover');
   pop.classList.toggle('hidden', !open);
   btn?.setAttribute('aria-expanded', String(open));
   if (open) {
@@ -2976,9 +3073,10 @@ function renderOverseerSection() {
       </div>
       <div class="overseer-directives-field">
         <label for="overseer-custom-instructions">Custom Overseer Directives <span class="field-help">(optional — injected into every Overseer audit, unblock &amp; coaching prompt)</span></label>
-        <textarea id="overseer-custom-instructions" rows="2" maxlength="1200" placeholder="e.g. Reject TODO stubs or mock implementations, prefer minimal surgical patches, and require passing unit tests before finishing." ${overseerBusy ? 'disabled' : ''}>${escapeHTML(s.customInstructions || '')}</textarea>
+        <textarea id="overseer-custom-instructions" rows="2" maxlength="1200" placeholder="e.g. Reject TODO stubs or mock implementations, prefer minimal surgical patches, and require passing unit tests before finishing." ${overseerBusy ? 'disabled' : ''}>${escapeHTML(overseerDirectivesDraft ?? (s.customInstructions || ''))}</textarea>
         <div class="overseer-directives-actions">
           <button type="button" class="button button-secondary svc-action-btn" data-save-overseer-directives ${overseerBusy ? 'disabled' : ''}>Save directives</button>
+          ${overseerDirectivesDraft !== null && overseerDirectivesDraft !== (s.customInstructions || '') ? '<span class="overseer-directives-dirty">Unsaved changes</span>' : ''}
         </div>
       </div>
     </div>
@@ -3077,7 +3175,10 @@ function renderUltraRouterSection() {
     ['smart', 'Smart Framing (0ms)', 'Instant domain × model-family framing, 100% cache-safe (Recommended).'],
     ['auto_forge', 'Auto-Forge (LLM)', 'Smart framing + live LLM Megaprompt & Arena Judge rubric on complex Turn-1 tasks.']
   ];
-  container.innerHTML = `
+  const prevDetailsOpen = Boolean(container.querySelector('.ultra-json-details')?.open);
+  const focusedInRouter = document.activeElement && container.contains(document.activeElement)
+    && ['TEXTAREA', 'INPUT'].includes(document.activeElement.tagName);
+  const nextRouterHtml = `
     <div class="ultra-router-head">
       <div>
         <h3>Ultra-Plinian Intelligent Router</h3>
@@ -3104,12 +3205,16 @@ function renderUltraRouterSection() {
       <label class="ultra-weight-field"><span>Cost efficiency · <strong>${Math.round(w.cost * 100)}%</strong></span><input type="range" min="0" max="50" step="5" value="${Math.round(w.cost * 100)}" data-router-weight="cost"></label>
     </div>
     ${domains.length ? `<div class="ultra-domain-tabs" role="tablist" aria-label="Task domain leaderboards">${domainTabs}</div>${boardHtml}` : ''}
-    <details class="ultra-json-details">
+    <details class="ultra-json-details"${prevDetailsOpen ? ' open' : ''}>
       <summary>Customize Mega Model Strengths JSON (per-user overrides)</summary>
       <p class="field-help">Override any model's domain scores (0–100) or compliance rating locally. Example: <code>{"claude-opus-5-5":{"compliance":80,"domains":{"swe_coding":100}}}</code></p>
       <textarea id="ultra-benchmarks-json" class="ultra-json-editor" spellcheck="false" aria-label="Custom benchmark JSON overrides">${escapeHTML(customJson)}</textarea>
       <div class="ultra-json-actions"><button type="button" class="button button-secondary" data-router-save-json ${ultraRouterBusy ? 'disabled' : ''}>Save JSON overrides</button></div>
     </details>`;
+  if (focusedInRouter && !ultraRouterBusy) return;
+  if (container.dataset.lastHtml === nextRouterHtml) return;
+  container.dataset.lastHtml = nextRouterHtml;
+  container.innerHTML = nextRouterHtml;
 }
 
 async function setModelPreference(providerId, signal, domain = null) {
@@ -3462,7 +3567,7 @@ async function updateCliSettings(id, patch, feedbackMsg = '') {
     });
     await refresh();
     if ($('#settings-dialog')?.open) {
-      await Promise.all([loadModelConnections(), loadServices(), loadModelGroups(selectedModelSort)]);
+      await Promise.all([loadServices(), loadModelGroups(selectedModelSort)]);
       renderModelSettings();
     }
     if ($('#model-picker')?.open) renderModelPicker();
@@ -3772,6 +3877,8 @@ function eventDescription(event) {
     'overseer.judged': ['Overseer classified reply', '✦', '', `${data.classification || 'checked'} — ${data.reason || ''}`],
     'overseer.audited': [data.verdict === 'needs_work' ? 'Overseer caught gaps before finish' : 'Overseer verified completion', '✦', data.verdict === 'needs_work' ? 'warning' : 'success', `${Number.isFinite(data.completenessScore) ? `${data.completenessScore}% · ` : ''}${data.reason || ''}`],
     'overseer.coached': [data.manual ? 'Overseer consulted' : 'Overseer trajectory check', '✦', data.status === 'stuck' ? 'warning' : 'info', `${data.status || 'checked'} — ${data.diagnosis || data.reason || ''}`],
+    'memory.auto_learned': ['Brain 2.0 learned memory', '✦', 'info', Array.isArray(data.titles) && data.titles.length ? data.titles.join(' · ') : `${data.count || 1} episodic memory saved`],
+    'skill.created': ['Saved reusable skill', '✦', 'success', `${data.command || `/${data.name || 'skill'}`}${data.description ? ` — ${data.description}` : ''}`],
     'owner.refusal_reported': ['Refusal flagged by you', '↻', '', data.reason || 'Retrying with recovery / fallback.'],
     'routing.reframe_retry': ['G0DM0D3 reframed retry', '↻', '', `${providerById(data.providerId)?.label || data.providerId || 'Model'} (pass ${data.pass || 1} · ${data.level || 'reframe'})`],
     'evaluation.completed': ['Evaluation recorded', '◎', (data.status ?? data.result?.status) === 'pass' ? 'success' : 'warning', data.status ? humanize(data.status) : data.result?.status ? humanize(data.result.status) : 'Inspect the check results for this snapshot.'],
@@ -3931,6 +4038,19 @@ function renderTimeline(events, total, task) {
       }
     }
   }
+  const auditedDraftEvents = new Set();
+  for (let idx = 0; idx < conversationEvents.length; idx++) {
+    const ev = conversationEvents[idx];
+    if (ev.type === 'overseer.audited' && ev.data?.verdict === 'needs_work') {
+      for (let prev = idx - 1; prev >= 0; prev--) {
+        if (conversationEvents[prev].type === 'model.response' && !conversationEvents[prev].data?.superseded) {
+          auditedDraftEvents.add(conversationEvents[prev]);
+          break;
+        }
+        if (conversationEvents[prev].type === 'user.message') break;
+      }
+    }
+  }
   for (const event of conversationEvents) {
     const assistantText = event.data?.response?.text || (event.data?.response?.type === 'error' && event.data.replyOutcome ? event.data.response.message || event.data.replyOutcome.label : event.data?.text);
     if (event.type === 'user.message') {
@@ -3950,6 +4070,11 @@ function renderTimeline(events, total, task) {
       flush();
       const id = event.data.providerId;
       const provider = providerById(id);
+      if (auditedDraftEvents.has(event)) {
+        const draftKey = `audited-draft-${event.id ?? event.seq}`;
+        messages.push(`<details class="overseer-audited-draft" data-disclosure="${escapeHTML(draftKey)}" ${openDetails.has(draftKey) ? 'open' : ''}><summary>Earlier draft sent back for revision by Overseer (${escapeHTML(provider ? provider.label : id || 'worker')})</summary><div class="overseer-audited-draft-body">${formatMessageBody(assistantText, true)}</div></details>`);
+        continue;
+      }
       const rawData = event === lastAssistantEvent ? { ...event.data, __isLatestRegeneratable: true } : event.data;
       messages.push(conversationMessage({ role: 'assistant', text: assistantText, time: event.time, provider: provider ? provider.label : id, key: `assistant-${event.id ?? event.seq}`, raw: rawData, outcome: event.data.replyOutcome, thinking: event.data.response?.thinking }, openDetails));
     } else if (event.type === 'router.selected' && event.data?.selected) {
@@ -3962,12 +4087,34 @@ function renderTimeline(events, total, task) {
       const mc = rd.metacognition;
       const mcHtml = mc ? `<div class="router-receipt-metacog"><div class="router-receipt-metacog-head"><strong>${escapeHTML(mc.title || '✦ Metacognition Brief')}</strong><span>${escapeHTML(`${mc.tier === 'forged' ? 'LLM Forged' : '0ms Smart'} · ${mc.modelFamily || 'auto'}`)}</span></div>${mc.intentLock ? `<p class="router-receipt-metacog-intent">${escapeHTML(mc.intentLock)}</p>` : ''}${Array.isArray(mc.rubric) && mc.rubric.length ? `<ul class="router-receipt-metacog-rubric">${mc.rubric.slice(0, 4).map(r => `<li>${escapeHTML(r)}</li>`).join('')}</ul>` : ''}</div>` : '';
       messages.push(`<details class="router-receipt" data-disclosure="${escapeHTML(rKey)}" ${openDetails.has(rKey) ? 'open' : ''}><summary><span class="router-receipt-badge">✦ Ultra-Plinian · ${escapeHTML(rd.domainLabel || rd.domain || 'auto')}${mc ? ` · ${mc.tier === 'forged' ? 'Forged' : 'Framed'}` : ''}</span><span class="router-receipt-summary">${escapeHTML(sel.label || rd.selectedId)}</span><span>Bench ${escapeHTML(sel.benchmarkPrior)} · Elo ${escapeHTML(sel.userElo)} · Comp ${escapeHTML(sel.compliance)}%${riskPct >= 40 ? ` · Risk ${riskPct}%` : ''}</span></summary><div class="router-receipt-body">${[sel, ...runners].map((r, idx) => `<div class="router-receipt-row"><strong>#${idx + 1} ${escapeHTML(r.label || r.id)}</strong><span>Score ${escapeHTML(r.totalScore)} · Bench ${escapeHTML(r.benchmarkPrior)} · Elo ${escapeHTML(r.userElo)} · Comp ${escapeHTML(r.compliance)}%</span></div>`).join('')}${mcHtml}</div></details>`);
+    } else if (event.type === 'conclave.completed' && event.data) {
+      flush();
+      const cd = event.data;
+      const cKey = `conclave-done-${event.id ?? event.seq}`;
+      const entries = Array.isArray(cd.entries) ? cd.entries : [];
+      const specNames = (cd.specialists || []).map(s => `${s.sigil || '✦'} ${s.name || s.slug}`).join(' · ');
+      const bbHtml = entries.map(e => `<div class="conclave-bb-entry"><div class="conclave-bb-head"><strong>R${escapeHTML(e.round)} · ${escapeHTML(e.agentName || e.role)}</strong><span class="conclave-bb-kind">${escapeHTML(e.kind || 'finding')} · ${escapeHTML(e.modelLabel || 'Auto')}</span></div><p class="conclave-bb-excerpt">${escapeHTML(String(e.excerpt || '').slice(0, 600))}</p></div>`).join('');
+      messages.push(`<details class="overseer-receipt conclave-verdict-receipt" data-disclosure="${escapeHTML(cKey)}" ${openDetails.has(cKey) ? 'open' : ''}><summary><span aria-hidden="true">✦</span><span class="overseer-receipt-title">Conclave · ${escapeHTML(cd.modeLabel || cd.mode || 'Council')} (${escapeHTML(cd.rounds || 2)} rounds)</span><span>${escapeHTML(specNames || `${entries.length} specialist contributions`)}${cd.durationMs ? ` · ${escapeHTML(duration(cd.durationMs))}` : ''}</span></summary><div class="overseer-receipt-body">${bbHtml || '<p class="field-help">No blackboard notes recorded.</p>'}</div></details>`);
     } else if (event.type === 'subagent.completed' && event.data?.ok && event.data?.summary) {
       flush();
       const sa = event.data;
       const key = `subagent-${event.id ?? event.seq}`;
       messages.push(`<details class="subagent-card" data-disclosure="${escapeHTML(key)}" ${openDetails.has(key) ? 'open' : ''}><summary class="subagent-card-summary"><span class="subagent-badge">${escapeHTML(sa.role || 'explore')}</span><span class="subagent-provider">${escapeHTML(providerById(sa.providerId)?.label || sa.providerId || 'model')}</span><span class="subagent-meta">${escapeHTML(`${sa.calls || 1} call${sa.calls === 1 ? '' : 's'} · ${duration(sa.durationMs || 0)}`)}</span></summary><div class="subagent-card-body">${formatMessageBody(sa.summary, true)}</div></details>`);
-    } else if (['model.switched', 'providers.updated', 'routing.retry_scheduled', 'routing.strategy_changed', 'routing.profile_changed', 'routing.reframe_retry', 'overseer.advised', 'overseer.judged', 'overseer.audited', 'overseer.coached', 'owner.refusal_reported', 'permission.auto_approved', 'hook.blocked'].includes(event.type)) {
+    } else if (['overseer.advised', 'overseer.audited', 'overseer.coached'].includes(event.type)) {
+      flush();
+      const description = eventDescription(event);
+      const od = event.data || {};
+      const oKey = `overseer-${event.id ?? event.seq}`;
+      const guidance = od.guidance || '';
+      const bullets = Array.isArray(od.nextActions) && od.nextActions.length
+        ? od.nextActions
+        : (Array.isArray(od.missingItems) && od.missingItems.length ? od.missingItems : []);
+      if (guidance || bullets.length) {
+        messages.push(`<details class="overseer-receipt" data-disclosure="${escapeHTML(oKey)}" ${openDetails.has(oKey) ? 'open' : ''}><summary><span aria-hidden="true">✦</span><span class="overseer-receipt-title">${escapeHTML(description[0])}</span><span>${escapeHTML(description[3])}</span></summary><div class="overseer-receipt-body">${guidance ? `<p class="overseer-receipt-guidance">${escapeHTML(guidance)}</p>` : ''}${bullets.length ? `<ul class="overseer-receipt-list">${bullets.slice(0, 6).map(item => `<li>${escapeHTML(item)}</li>`).join('')}</ul>` : ''}</div></details>`);
+      } else {
+        messages.push(`<div class="recovery-event"><span aria-hidden="true">✦</span><span><strong>${escapeHTML(description[0])}</strong> ${escapeHTML(description[3])}</span></div>`);
+      }
+    } else if (['model.switched', 'providers.updated', 'routing.retry_scheduled', 'routing.strategy_changed', 'routing.profile_changed', 'routing.reframe_retry', 'overseer.judged', 'owner.refusal_reported', 'permission.auto_approved', 'hook.blocked', 'memory.auto_learned', 'skill.created'].includes(event.type)) {
       flush();
       const description = eventDescription(event);
       messages.push(`<div class="recovery-event"><span aria-hidden="true">↻</span><span><strong>${escapeHTML(description[0])}</strong> ${escapeHTML(description[3])}</span></div>`);
@@ -4021,7 +4168,10 @@ function renderTimeline(events, total, task) {
           return `<li class="live-trail-item state-${escapeHTML(evState || 'ok')}"><span class="live-trail-icon" aria-hidden="true">${icon}</span><span><strong>${escapeHTML(evTitle)}</strong>${escapeHTML(shortDetail)}</span></li>`;
         }).join('')}</ul>`
       : '';
-    messages.push(`<div class="live-work-card"><div class="live-work-head"><span class="spinner" aria-hidden="true"></span><span class="activity-label">${escapeHTML(phase)}${dots}</span></div>${planHtml}${trailHtml}</div><div id="stream-slot">${streamTaskId === task.id ? buildStreamPreviewHtml(openDetails) : ''}</div>`);
+    const turnAnchorTime = recent?.time ? Date.parse(recent.time) : (streamTurnStartedAt || Date.parse(task.updatedAt) || Date.now());
+    const elapsedSec = Math.max(0, Math.floor((Date.now() - turnAnchorTime) / 1000));
+    const elapsedLabel = elapsedSec >= 60 ? `${Math.floor(elapsedSec / 60)}m ${elapsedSec % 60}s` : `${elapsedSec}s`;
+    messages.push(`<div class="live-work-card"><div class="live-work-head"><span class="spinner" aria-hidden="true"></span><span class="activity-label"><span class="activity-phase-text">${escapeHTML(phase)}</span>${dots}</span><span class="live-work-elapsed" data-turn-started="${escapeHTML(String(turnAnchorTime))}">${escapeHTML(elapsedLabel)}</span></div>${planHtml}${trailHtml}</div><div id="stream-slot">${streamTaskId === task.id ? buildStreamPreviewHtml(openDetails) : ''}</div>`);
   } else if (task.draining) messages.push('<div class="conversation-state">Stopping the previous request…</div>');
   else if (task.status === 'waiting_input' && task.workspaceKind !== 'conversation' && task.followups?.length) messages.push('<div class="conversation-state">Ready for review · checks pending.</div>');
   const lastReplyEvent = conversationEvents.findLast(e => e.type === 'model.response' && !e.data?.superseded && typeof (e.data?.response?.text || e.data?.text) === 'string');
@@ -4226,58 +4376,66 @@ function renderDiffLineCode(text, lang, intraHtml) {
   return escapeHTML(text) || ' ';
 }
 
-function renderInlineCommentBox(filePath, lineNum) {
+const reviewedHunks = new Set();
+
+function renderInlineCommentBox(filePath, lineNum, side = 'new') {
   if (!diffCommentTarget || diffCommentTarget.path !== filePath || diffCommentTarget.line !== lineNum) return '';
+  if (diffCommentTarget.side && diffCommentTarget.side !== side) return '';
   return `<form class="diff-comment-box" data-diff-comment-form data-comment-path="${escapeHTML(filePath)}" data-comment-line="${lineNum}" autocomplete="off"><span class="diff-comment-ref">@${escapeHTML(filePath)}:L${lineNum}</span><input type="text" class="diff-comment-input" name="note" maxlength="1000" placeholder="Add review feedback for line ${lineNum}…" aria-label="Review comment for ${escapeHTML(filePath)} line ${lineNum}" required><button type="submit" class="button button-primary">Send to composer</button><button type="button" class="button button-quiet" data-diff-comment-cancel>Cancel</button></form>`;
 }
 
 function renderUnifiedDiff(hunks, file) {
+  if (file.binary) return `<div class="diff-empty">Binary file changed${file.beforeBytes != null || file.afterBytes != null ? ` (${file.beforeBytes != null ? `${file.beforeBytes.toLocaleString()} B` : 'new'} → ${file.afterBytes != null ? `${file.afterBytes.toLocaleString()} B` : 'deleted'})` : ''}.</div>`;
   if (!hunks || !hunks.length) return `<div class="diff-empty">No differences</div>`;
   const canEdit = selectedData?.task && !ACTIVE.has(selectedData.task.status) && !selectedData.task.draining;
   const lang = diffLanguageForPath(file.path);
   return hunks.map((hunk, idx) => {
     const oldCount = hunk.lines.filter(l => l.type !== 'add').length;
     const newCount = hunk.lines.filter(l => l.type !== 'remove').length;
-    const buttons = canEdit && hunks.length > 0 ? `<span class="hunk-actions"><button type="button" class="hunk-btn hunk-accept" data-hunk-index="${idx}" data-hunk-action="accept" data-hunk-path="${escapeHTML(file.path)}" title="Accept this change">&#10003;</button><button type="button" class="hunk-btn hunk-reject" data-hunk-index="${idx}" data-hunk-action="reject" data-hunk-path="${escapeHTML(file.path)}" title="Reject this change">&#10005;</button></span>` : '';
+    const isReviewed = reviewedHunks.has(`${selectedId}:${file.path}:${idx}`);
+    const buttons = canEdit && hunks.length > 0 ? `<span class="hunk-actions"><button type="button" class="hunk-btn hunk-accept" data-hunk-index="${idx}" data-hunk-action="accept" data-hunk-path="${escapeHTML(file.path)}" aria-pressed="${isReviewed ? 'true' : 'false'}" title="Accept this change">&#10003;</button><button type="button" class="hunk-btn hunk-reject" data-hunk-index="${idx}" data-hunk-action="reject" data-hunk-path="${escapeHTML(file.path)}" title="Reject this change">&#10005;</button></span>` : '';
     const paired = pairHunkLines(hunk.lines);
     const body = paired.map(row => {
       if (row.kind === 'equal') {
         const line = row.left;
         const lineNum = line.newLine ?? line.oldLine;
-        return `<div class="diff-line diff-equal"><span class="diff-ln">${line.oldLine}</span><span class="diff-ln">${line.newLine}</span><button type="button" class="diff-comment-trigger" data-diff-comment data-comment-path="${escapeHTML(file.path)}" data-comment-line="${lineNum}" title="Comment on line ${lineNum}" aria-label="Comment on line ${lineNum}">+</button><span class="diff-prefix"> </span><span class="diff-text hljs">${renderDiffLineCode(line.text, lang, null)}</span></div>${renderInlineCommentBox(file.path, lineNum)}`;
+        return `<div class="diff-line diff-equal"><span class="diff-ln">${line.oldLine}</span><span class="diff-ln">${line.newLine}</span><button type="button" class="diff-comment-trigger" data-diff-comment data-comment-path="${escapeHTML(file.path)}" data-comment-line="${lineNum}" data-comment-side="new" title="Comment on line ${lineNum}" aria-label="Comment on line ${lineNum}">+</button><span class="diff-prefix"> </span><span class="diff-text hljs">${renderDiffLineCode(line.text, lang, null)}</span></div>${renderInlineCommentBox(file.path, lineNum, 'new')}`;
       }
       let html = '';
       if (row.left) {
         const lineNum = row.left.oldLine;
-        html += `<div class="diff-line diff-remove"><span class="diff-ln">${row.left.oldLine}</span><span class="diff-ln"></span><button type="button" class="diff-comment-trigger" data-diff-comment data-comment-path="${escapeHTML(file.path)}" data-comment-line="${lineNum}" title="Comment on line ${lineNum}" aria-label="Comment on line ${lineNum}">+</button><span class="diff-prefix">-</span><span class="diff-text hljs">${renderDiffLineCode(row.left.text, lang, row.intra?.oldHtml)}</span></div>${renderInlineCommentBox(file.path, lineNum)}`;
+        html += `<div class="diff-line diff-remove"><span class="diff-ln">${row.left.oldLine}</span><span class="diff-ln"></span><button type="button" class="diff-comment-trigger" data-diff-comment data-comment-path="${escapeHTML(file.path)}" data-comment-line="${lineNum}" data-comment-side="old" title="Comment on line ${lineNum}" aria-label="Comment on line ${lineNum}">+</button><span class="diff-prefix">-</span><span class="diff-text hljs">${renderDiffLineCode(row.left.text, lang, row.intra?.oldHtml)}</span></div>${renderInlineCommentBox(file.path, lineNum, 'old')}`;
       }
       if (row.right) {
         const lineNum = row.right.newLine;
-        html += `<div class="diff-line diff-add"><span class="diff-ln"></span><span class="diff-ln">${row.right.newLine}</span><button type="button" class="diff-comment-trigger" data-diff-comment data-comment-path="${escapeHTML(file.path)}" data-comment-line="${lineNum}" title="Comment on line ${lineNum}" aria-label="Comment on line ${lineNum}">+</button><span class="diff-prefix">+</span><span class="diff-text hljs">${renderDiffLineCode(row.right.text, lang, row.intra?.newHtml)}</span></div>${renderInlineCommentBox(file.path, lineNum)}`;
+        html += `<div class="diff-line diff-add"><span class="diff-ln"></span><span class="diff-ln">${row.right.newLine}</span><button type="button" class="diff-comment-trigger" data-diff-comment data-comment-path="${escapeHTML(file.path)}" data-comment-line="${lineNum}" data-comment-side="new" title="Comment on line ${lineNum}" aria-label="Comment on line ${lineNum}">+</button><span class="diff-prefix">+</span><span class="diff-text hljs">${renderDiffLineCode(row.right.text, lang, row.intra?.newHtml)}</span></div>${renderInlineCommentBox(file.path, lineNum, 'new')}`;
       }
       return html;
     }).join('');
-    return `<div class="diff-hunk"><div class="diff-hunk-header"><span>@@ -${hunk.oldStart},${oldCount} +${hunk.newStart},${newCount} @@</span>${buttons}</div>${body}</div>`;
+    return `<div class="diff-hunk${isReviewed ? ' is-reviewed' : ''}"><div class="diff-hunk-header"><span>@@ -${hunk.oldStart},${oldCount} +${hunk.newStart},${newCount} @@</span>${buttons}</div>${body}</div>`;
   }).join('');
 }
 
 function renderSplitDiff(hunks, file) {
+  if (file.binary) return `<div class="diff-empty">Binary file changed${file.beforeBytes != null || file.afterBytes != null ? ` (${file.beforeBytes != null ? `${file.beforeBytes.toLocaleString()} B` : 'new'} → ${file.afterBytes != null ? `${file.afterBytes.toLocaleString()} B` : 'deleted'})` : ''}.</div>`;
   if (!hunks || !hunks.length) return `<div class="diff-empty">No differences</div>`;
   const canEdit = selectedData?.task && !ACTIVE.has(selectedData.task.status) && !selectedData.task.draining;
   const lang = diffLanguageForPath(file.path);
   return hunks.map((hunk, idx) => {
     const oldCount = hunk.lines.filter(l => l.type !== 'add').length;
     const newCount = hunk.lines.filter(l => l.type !== 'remove').length;
-    const buttons = canEdit && hunks.length > 0 ? `<span class="hunk-actions"><button type="button" class="hunk-btn hunk-accept" data-hunk-index="${idx}" data-hunk-action="accept" data-hunk-path="${escapeHTML(file.path)}" title="Accept this change">&#10003;</button><button type="button" class="hunk-btn hunk-reject" data-hunk-index="${idx}" data-hunk-action="reject" data-hunk-path="${escapeHTML(file.path)}" title="Reject this change">&#10005;</button></span>` : '';
+    const isReviewed = reviewedHunks.has(`${selectedId}:${file.path}:${idx}`);
+    const buttons = canEdit && hunks.length > 0 ? `<span class="hunk-actions"><button type="button" class="hunk-btn hunk-accept" data-hunk-index="${idx}" data-hunk-action="accept" data-hunk-path="${escapeHTML(file.path)}" aria-pressed="${isReviewed ? 'true' : 'false'}" title="Accept this change">&#10003;</button><button type="button" class="hunk-btn hunk-reject" data-hunk-index="${idx}" data-hunk-action="reject" data-hunk-path="${escapeHTML(file.path)}" title="Reject this change">&#10005;</button></span>` : '';
     const rows = pairHunkLines(hunk.lines).map(row => {
       const leftCls = row.left ? (row.kind === 'equal' ? 'diff-equal' : 'diff-remove') : 'diff-pad';
       const rightCls = row.right ? (row.kind === 'equal' ? 'diff-equal' : 'diff-add') : 'diff-pad';
       const leftHtml = row.left ? renderDiffLineCode(row.left.text, lang, row.intra?.oldHtml) : ' ';
       const rightHtml = row.right ? renderDiffLineCode(row.right.text, lang, row.intra?.newHtml) : ' ';
       const commentLine = row.right?.newLine ?? row.left?.oldLine ?? 1;
-      return `<div class="diff-split-row"><div class="diff-split-cell ${leftCls}"><span class="diff-ln">${row.left?.oldLine ?? ''}</span><span class="diff-prefix">${row.left ? (row.kind === 'equal' ? ' ' : '-') : ''}</span><span class="diff-text hljs">${leftHtml}</span></div><div class="diff-split-cell ${rightCls}"><span class="diff-ln">${row.right?.newLine ?? ''}</span><button type="button" class="diff-comment-trigger" data-diff-comment data-comment-path="${escapeHTML(file.path)}" data-comment-line="${commentLine}" title="Comment on line ${commentLine}" aria-label="Comment on line ${commentLine}">+</button><span class="diff-prefix">${row.right ? (row.kind === 'equal' ? ' ' : '+') : ''}</span><span class="diff-text hljs">${rightHtml}</span></div></div>${renderInlineCommentBox(file.path, commentLine)}`;
+      const commentSide = row.right ? 'new' : 'old';
+      return `<div class="diff-split-row"><div class="diff-split-cell ${leftCls}"><span class="diff-ln">${row.left?.oldLine ?? ''}</span><span class="diff-prefix">${row.left ? (row.kind === 'equal' ? ' ' : '-') : ''}</span><span class="diff-text hljs">${leftHtml}</span></div><div class="diff-split-cell ${rightCls}"><span class="diff-ln">${row.right?.newLine ?? ''}</span><button type="button" class="diff-comment-trigger" data-diff-comment data-comment-path="${escapeHTML(file.path)}" data-comment-line="${commentLine}" data-comment-side="${commentSide}" title="Comment on line ${commentLine}" aria-label="Comment on line ${commentLine}">+</button><span class="diff-prefix">${row.right ? (row.kind === 'equal' ? ' ' : '+') : ''}</span><span class="diff-text hljs">${rightHtml}</span></div></div>${renderInlineCommentBox(file.path, commentLine, commentSide)}`;
     }).join('');
-    return `<div class="diff-hunk"><div class="diff-hunk-header"><span>@@ -${hunk.oldStart},${oldCount} +${hunk.newStart},${newCount} @@</span>${buttons}</div><div class="diff-split-table">${rows}</div></div>`;
+    return `<div class="diff-hunk${isReviewed ? ' is-reviewed' : ''}"><div class="diff-hunk-header"><span>@@ -${hunk.oldStart},${oldCount} +${hunk.newStart},${newCount} @@</span>${buttons}</div><div class="diff-split-table">${rows}</div></div>`;
   }).join('');
 }
 
@@ -4369,8 +4527,18 @@ function renderChanges(diff) {
     ? `<form class="changes-commit-bar" id="changes-commit-form" autocomplete="off"><input id="changes-commit-message" type="text" maxlength="500" placeholder="Checkpoint commit message (default: checkpoint)" aria-label="Checkpoint commit message"><button type="submit" class="button button-primary" ${commitBusy ? 'disabled' : ''}>${commitBusy ? 'Committing…' : 'Save checkpoint'}</button><button type="button" class="button button-quiet" data-commit-cancel ${commitBusy ? 'disabled' : ''}>Cancel</button></form>`
     : '';
   const diffModeSwitch = `<span class="diff-mode-switch" role="group" aria-label="Diff view mode"><button type="button" class="diff-mode-btn ${diffViewMode === 'unified' ? 'active' : ''}" data-diff-view-mode="unified" aria-pressed="${diffViewMode === 'unified'}">Unified</button><button type="button" class="diff-mode-btn ${diffViewMode === 'split' ? 'active' : ''}" data-diff-view-mode="split" aria-pressed="${diffViewMode === 'split'}">Split</button></span>`;
-  const renderedDiff = hunks ? (diffViewMode === 'split' ? renderSplitDiff(hunks, file) : renderUnifiedDiff(hunks, file)) : `<div class="diff-grid"><div class="diff-side before"><div class="diff-label">Before</div><pre tabindex="0">${escapeHTML(file.before ?? 'File did not exist')}</pre></div><div class="diff-side after"><div class="diff-label">After</div><pre tabindex="0">${escapeHTML(file.after ?? 'File deleted')}</pre></div></div>`;
+  const prevViewerScroll = $('.diff-viewer', panel)?.scrollTop || 0;
+  const prevListScroll = $('.diff-file-list', panel)?.scrollTop || 0;
+  const prevCommitDraft = $('#changes-commit-message', panel)?.value ?? null;
+  const prevCommentDraft = $('.diff-comment-input', panel)?.value ?? null;
+  const renderedDiff = hunks ? (diffViewMode === 'split' ? renderSplitDiff(hunks, file) : renderUnifiedDiff(hunks, file)) : (file.binary ? renderUnifiedDiff([], file) : `<div class="diff-grid"><div class="diff-side before"><div class="diff-label">Before</div><pre tabindex="0">${escapeHTML(file.before ?? 'File did not exist')}</pre></div><div class="diff-side after"><div class="diff-label">After</div><pre tabindex="0">${escapeHTML(file.after ?? 'File deleted')}</pre></div></div>`);
   panel.innerHTML = sourceControls + `<div class="changes-toolbar"><span class="change-summary">${diff.length} changed ${diff.length === 1 ? 'file' : 'files'} ${totalStatsHtml}</span>${patchActions}</div>${commitBar}<div class="diff-layout"><aside class="diff-file-list" aria-label="Changed files">${fileListHtml}</aside><section class="diff-viewer" tabindex="0" role="region" aria-label="Diff for ${escapeHTML(file.path)}"><h3 class="diff-viewer-header"><span>${escapeHTML(file.path)}</span><span class="diff-header-right">${diffModeSwitch}<span class="file-size">${fileLabel} ${fileStatsHtml}</span></span></h3>${renderedDiff}</section></div>`;
+  const nextViewer = $('.diff-viewer', panel);
+  const nextList = $('.diff-file-list', panel);
+  if (nextViewer && prevViewerScroll > 0) nextViewer.scrollTop = prevViewerScroll;
+  if (nextList && prevListScroll > 0) nextList.scrollTop = prevListScroll;
+  if (prevCommitDraft !== null && $('#changes-commit-message', panel)) $('#changes-commit-message', panel).value = prevCommitDraft;
+  if (prevCommentDraft !== null && $('.diff-comment-input', panel)) $('.diff-comment-input', panel).value = prevCommentDraft;
 }
 
 function sourceStatus(status) {
@@ -5120,6 +5288,7 @@ async function openLivePreview({ taskId, entry, html, files, title, artifactKey,
           <button type="button" class="live-vp-btn${artifactDockState.viewport === 'mobile' ? ' active' : ''}" data-preview-vp="mobile" aria-pressed="${artifactDockState.viewport === 'mobile'}" title="Mobile (390px)">Mobile</button>
         </div>
         <div class="live-browser-actions">
+          <button type="button" class="button button-quiet live-browser-btn" data-preview-qa title="Run automated Chromium QA check on Desktop &amp; Mobile viewports (console errors, overflow, broken images, a11y)">✦ Auto-QA</button>
           <button type="button" class="button button-quiet live-browser-btn" data-preview-inspect aria-pressed="false" title="Click any element in the preview to reference it in chat">⌖ Inspect</button>
           <button type="button" class="button button-quiet live-browser-btn" data-preview-reload title="Reload preview">↻</button>
           <button type="button" class="button button-quiet live-browser-btn" data-preview-download title="Download standalone file">↓ Save</button>
@@ -5243,6 +5412,49 @@ async function openLivePreview({ taskId, entry, html, files, title, artifactKey,
 
     dock.onclick = event => {
       if (event.target.closest('[data-preview-close]')) { closeArtifactDock({ recordDismiss: true }); return; }
+      const qaBtn = event.target.closest('[data-preview-qa]');
+      if (qaBtn) {
+        const tId = artifactDockState.taskId || selectedId;
+        if (!tId || !session?.url) { toast('Open a task preview to run Auto-QA.'); return; }
+        qaBtn.disabled = true;
+        qaBtn.textContent = '✦ Auditing…';
+        api(`/api/tasks/${encodeURIComponent(tId)}/browser/qa-preview`, {
+          method: 'POST',
+          body: JSON.stringify({ url: session.url }),
+        }).then(report => {
+          const checks = Array.isArray(report.checks) ? report.checks : [];
+          for (const c of checks) {
+            artifactDockState.logs.push({
+              level: c.passed ? 'info' : 'error',
+              message: `${c.passed ? '✓' : '✗'} [Auto-QA] ${c.label}: ${c.detail}`,
+            });
+          }
+          if (artifactDockState.logs.length > 60) artifactDockState.logs = artifactDockState.logs.slice(-60);
+          artifactDockState.consoleOpen = true;
+          consolePane?.classList.remove('hidden');
+          consoleSplitter?.classList.remove('hidden');
+          consoleBtn?.setAttribute('aria-expanded', 'true');
+          renderConsole();
+          const failed = checks.filter(c => !c.passed);
+          if (failed.length) {
+            const summary = `Auto-QA found ${failed.length} issue${failed.length === 1 ? '' : 's'} in ${session.entry || label} (${report.score}%):\n${failed.map(f => `- ${f.label}: ${f.detail}`).join('\n')}\nPlease fix these issues cleanly.`;
+            const input = $('#composer-input');
+            if (input && !input.value.trim()) {
+              input.value = summary;
+              input.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+            toast(`✦ Auto-QA ${report.score}% — ${failed.length} issue${failed.length === 1 ? '' : 's'} logged & staged in composer.`);
+          } else {
+            toast(`✦ Auto-QA 100% PASSED (${checks.length}/${checks.length} checks clean on Desktop & Mobile)!`);
+          }
+        }).catch(err => {
+          toast(err?.message || 'Auto-QA failed.');
+        }).finally(() => {
+          qaBtn.disabled = false;
+          qaBtn.textContent = '✦ Auto-QA';
+        });
+        return;
+      }
       const modeBtn = event.target.closest('[data-artifact-mode]');
       if (modeBtn) {
         artifactDockState.viewMode = modeBtn.dataset.artifactMode;
@@ -5564,6 +5776,9 @@ function renderFilePreview() {
   const file = selectedData?.files?.find(file => file.path === fileSelections.get(selectedId));
   if (!file) return;
   const renderPane = (f, paneId) => {
+    if (f.content === null) {
+      return `<div class="editor-pane" id="${paneId}"><header class="file-preview-header"><code title="${escapeHTML(f.path)}">${escapeHTML(f.path)}</code>${paneId === 'pane-right' ? `<button type="button" class="button button-quiet" data-close-split>Close</button>` : ''}</header><div class="panel-empty"><div><h3>Binary file</h3><p>${Number.isFinite(f.bytes) ? `${f.bytes.toLocaleString()} bytes` : 'Binary content'} · text preview unavailable.</p></div></div></div>`;
+    }
     const text = typeof f.content === 'string' ? f.content : pretty(f.content);
     const lines = text.split('\n'), key = `${selectedId}:${f.path}:${paneId}`, pageSize = 300;
     const page = Math.max(0, Math.min(filePages.get(key) || 0, Math.ceil(lines.length / pageSize) - 1));
@@ -5576,6 +5791,10 @@ function renderFilePreview() {
     $('#file-preview').innerHTML = `<div class="split-pane-editor">${renderPane(file, 'pane-left')}${renderPane(splitFile, 'pane-right')}</div>`;
   } else {
     splitPaneFile = null;
+    if (file.content === null) {
+      $('#file-preview').innerHTML = `<header class="file-preview-header"><code title="${escapeHTML(file.path)}">${escapeHTML(file.path)}</code></header><div class="panel-empty"><div><h3>Binary file</h3><p>${Number.isFinite(file.bytes) ? `${file.bytes.toLocaleString()} bytes` : 'Binary content'} · text preview unavailable.</p></div></div>`;
+      return;
+    }
     const text = typeof file.content === 'string' ? file.content : pretty(file.content);
     const lines = text.split('\n'), key = `${selectedId}:${file.path}`, pageSize = 300;
     const page = Math.max(0, Math.min(filePages.get(key) || 0, Math.ceil(lines.length / pageSize) - 1));
@@ -5886,7 +6105,6 @@ function renderSelected(data, force = false, opts = {}) {
   if (isCodingWorkspaceTask(task) && appMode !== 'godcode') {
     applyAppMode('godcode', { persist: false, notify: false, switchView: false });
   }
-  window.restoreChatCode?.(task);
   const project = projectLabel(task);
   if (project) projectLabels.set(task.id, project);
   setText('#workspace-context', task.codeWorkspace?.repository || project || (task.workspaceKind === 'conversation' ? 'Conversation' : 'Local workspace'));
@@ -5897,12 +6115,15 @@ function renderSelected(data, force = false, opts = {}) {
   setVisible('#welcome-links', false);
   setVisible('#task-workspace', true);
   manageStream(task);
-  window.G0DConclave?.syncTask(task);
   window.G0DBrowserLive?.syncTask(task);
   const signature = JSON.stringify(data);
   if (!force && signature === detailSignature) return;
+  window.G0DConclave?.syncTask(task);
   const oldTaskId = $('#selected-id').dataset.fullId;
   const taskChanged = oldTaskId !== task.id;
+  if (taskChanged && !artifactDockState.open && !document.body.classList.contains('inspector-open') && !window.G0DConclave?.isOpen?.() && !window.G0DBrowserLive?.isOpen?.()) {
+    window.restoreChatCode?.(task);
+  }
   const scroller = $('#task-content');
   const nearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 95;
   const oldScroll = scroller.scrollTop;
@@ -6008,7 +6229,9 @@ function buildStreamPreviewHtml(openDetails = null) {
 function updateLiveStreamSlot() {
   const slot = $('#stream-slot');
   if (!slot) return;
-  if (!streamText && !streamThinking) { slot.innerHTML = ''; return; }
+  const scroller = $('#task-content');
+  const wasNearBottom = Boolean(scroller && (scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 140));
+  if (!streamText && !streamThinking) { slot.innerHTML = ''; updateLatestButton(); return; }
   const existingThinking = $('.stream-thinking-body', slot);
   const existingCode = $('.stream-code-body', slot);
   const existingText = $('.stream-text:not(.stream-prose)', slot);
@@ -6065,21 +6288,46 @@ function updateLiveStreamSlot() {
       if (streamBody && nearInnerBody) streamBody.scrollTop = streamBody.scrollHeight;
     }
   }
-  const scroller = $('#task-content');
-  if (scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 140) {
+  if (scroller && wasNearBottom) {
     scroller.scrollTop = scroller.scrollHeight;
   }
   updateLatestButton();
 }
 
+function syncLiveElapsedTimer(active) {
+  if (active && !liveElapsedTimer) {
+    liveElapsedTimer = setInterval(() => {
+      const el = $('.live-work-elapsed[data-turn-started]');
+      if (!el) return;
+      const started = Number(el.dataset.turnStarted || 0);
+      if (!started) return;
+      const sec = Math.max(0, Math.floor((Date.now() - started) / 1000));
+      el.textContent = sec >= 60 ? `${Math.floor(sec / 60)}m ${sec % 60}s` : `${sec}s`;
+    }, 1000);
+  } else if (!active && liveElapsedTimer) {
+    clearInterval(liveElapsedTimer);
+    liveElapsedTimer = null;
+  }
+}
+
 function manageStream(task) {
-  const shouldStream = task && (ACTIVE.has(task.status) || window.G0DBrowserLive?.isOpen?.());
+  const isActive = Boolean(task && ACTIVE.has(task.status));
+  syncLiveElapsedTimer(isActive);
+  const shouldStream = Boolean(task && (isActive || window.G0DBrowserLive?.isOpen?.()));
+  if (!isActive && (streamText || streamThinking || streamToolName)) {
+    streamText = '';
+    streamThinking = '';
+    streamToolName = '';
+    const slot = $('#stream-slot');
+    if (slot) slot.innerHTML = '';
+  }
   if (shouldStream && streamTaskId !== task.id) {
     disconnectStream();
     streamTaskId = task.id;
     streamText = '';
     streamThinking = '';
-    streamThinkingExpanded = false;
+    streamThinkingExpanded = Boolean(qolPrefs.expandThinking);
+    streamTurnStartedAt = Date.now();
     try {
       const source = new EventSource(`/api/tasks/${encodeURIComponent(task.id)}/stream`);
       streamSource = source;
@@ -6090,8 +6338,14 @@ function manageStream(task) {
           if (delta.type === 'turn_start') {
             streamText = '';
             streamThinking = '';
-            streamThinkingExpanded = false;
+            streamThinkingExpanded = Boolean(qolPrefs.expandThinking);
             streamToolName = '';
+            streamTurnStartedAt = Date.now();
+            const elapsedEl = $('.live-work-elapsed[data-turn-started]');
+            if (elapsedEl) {
+              elapsedEl.dataset.turnStarted = String(streamTurnStartedAt);
+              elapsedEl.textContent = '0s';
+            }
             updateLiveStreamSlot();
           } else if (delta.type === 'thinking' && delta.text) {
             streamThinking += delta.text;
@@ -6103,8 +6357,11 @@ function manageStream(task) {
             updateLiveStreamSlot();
           } else if (delta.type === 'tool.start') {
             streamToolName = delta.name || '';
-            const indicator = $('.activity-label');
-            if (indicator) indicator.textContent = toolPhaseLabel(delta.name, delta.args);
+            streamText = '';
+            streamThinking = '';
+            updateLiveStreamSlot();
+            const phaseEl = $('.activity-phase-text') || $('.activity-label');
+            if (phaseEl) phaseEl.textContent = toolPhaseLabel(delta.name, delta.args).replace(/…$/, '');
           } else if (delta.type === 'command.chunk' && delta.text) {
             const panel = $('#panel-commands');
             if (panel) {
@@ -6125,8 +6382,8 @@ function manageStream(task) {
             }
           } else if (delta.type === 'tool.completed') {
             streamToolName = '';
-            const indicator = $('.activity-label');
-            if (indicator) indicator.textContent = 'Thinking…';
+            const phaseEl = $('.activity-phase-text') || $('.activity-label');
+            if (phaseEl) phaseEl.textContent = 'Thinking';
             if (delta.ok && ['repo.write', 'repo.patch', 'repo.delete', 'repo.move', 'git.commit', 'task.todo'].includes(delta.name)) {
               setTimeout(refresh, 350);
             }
@@ -6177,6 +6434,8 @@ function disconnectStream() {
   streamThinking = '';
   streamThinkingExpanded = false;
   streamToolName = '';
+  streamTurnStartedAt = 0;
+  syncLiveElapsedTimer(false);
   const slot = $('#stream-slot');
   if (slot) slot.innerHTML = '';
 }
@@ -6204,7 +6463,7 @@ function renderEmpty() {
 
 async function selectTask(id) {
   if (id !== selectedId) {
-    window.closeChatCode?.();
+    window.closeChatCode?.({ remember: true });
     lastDetectedArtifact = null;
     splitPaneFile = null;
     diffCommentTarget = null;
@@ -6251,8 +6510,12 @@ async function selectTask(id) {
 }
 
 async function refresh() {
-  if (refreshing) return;
+  if (refreshing) {
+    refreshQueued = true;
+    return;
+  }
   refreshing = true;
+  refreshQueued = false;
   let reschedule = false;
   try {
     const versionAtStart = selectionVersion;
@@ -6327,7 +6590,10 @@ async function refresh() {
     errorIn('#global-error', new Error(`Cannot reach the local runtime. ${error.message} Retrying automatically.`));
   } finally {
     refreshing = false;
-    if (reschedule) setTimeout(refresh, 150);
+    if (reschedule || refreshQueued) {
+      refreshQueued = false;
+      setTimeout(refresh, 150);
+    }
   }
 }
 
@@ -6570,6 +6836,34 @@ function renderBenchmark(value, force = false) {
   $('#benchmark-content').innerHTML = html;
 }
 
+async function saveTaskAsSkillAction(task, explicitName = '') {
+  if (!task?.id || stripActionBusy) return;
+  const defaultSlug = String(explicitName || task.title || task.objective || 'saved-workflow')
+    .toLowerCase()
+    .replace(/^✦\s*conclave\s*:\s*/i, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 36) || 'saved-workflow';
+  const chosen = explicitName || window.prompt('Save this run as a reusable slash skill (lowercase letters, digits, - or _):', defaultSlug);
+  if (!chosen || !chosen.trim()) return;
+  stripActionBusy = true;
+  renderTaskMetaStrip(task);
+  try {
+    const res = await api(`/api/tasks/${encodeURIComponent(task.id)}/save-skill`, {
+      method: 'POST',
+      body: JSON.stringify({ name: chosen.trim() }),
+    });
+    await loadSkills(task.id);
+    await refresh();
+    toast(`✦ Saved reusable skill ${res.skill?.command || `/${chosen.trim()}`} — type it in any chat!`);
+  } catch (err) {
+    toast(err?.message || 'Could not save skill.');
+  } finally {
+    stripActionBusy = false;
+    if (selectedData?.task) renderTaskMetaStrip(selectedData.task);
+  }
+}
+
 async function openBenchmark() {
   dismissDrawers();
   setVisible('#benchmark-error', false);
@@ -6591,10 +6885,15 @@ async function runBenchmark() {
 }
 
 function renderAbout() {
+  const el = $('#about-content');
+  if (!el) return;
   const capabilities = Array.isArray(state.capabilities) ? state.capabilities : [];
   const limitations = Array.isArray(state.limitations) ? state.limitations : [];
   const list = (items) => items.map((item) => `<li>${escapeHTML(typeof item === 'string' ? item : pretty(item))}</li>`).join('');
-  $('#about-content').innerHTML = `<p class="modal-intro"><span class="wordmark" role="img" aria-label="GodMode">GODMODƎ</span> ${escapeHTML(state.version ?? 'MVP')} · local-first experimental research demo. Provided AS IS without warranty of any kind.</p><section class="about-section"><h3>LICENSE &amp; LEGAL NOTICE</h3><ul><li><strong>License:</strong> Dual-licensed under GNU AGPL-3.0 (open source) or Commercial license. Bundles Highlight.js (BSD-3-Clause) and GodMode Display / JetBrains Mono (SIL OFL 1.1).</li><li><strong>No Warranty &amp; User Responsibility:</strong> Experimental research software provided &ldquo;AS IS&rdquo; with no warranty or author liability. You are solely responsible for complying with applicable local laws and the Terms of Service of any third-party AI providers, CLI subscriptions, or websites you access.</li><li><strong>Trademarks:</strong> Third-party names (Anthropic, Claude, OpenAI, ChatGPT, Codex, Google, Gemini, GitHub, Copilot, OpenRouter, Venice, Nous, Ollama, Apple) belong to their respective owners; this independent project is not affiliated with or endorsed by them.</li></ul></section><section class="about-section"><h3>REPORTED CAPABILITIES</h3>${capabilities.length ? `<ul>${list(capabilities)}</ul>` : '<p class="small-copy muted">The runtime has not returned a capability list.</p>'}</section><section class="about-section"><h3>REPORTED LIMITATIONS</h3>${limitations.length ? `<ul>${list(limitations)}</ul>` : '<p class="small-copy muted">The runtime has not returned a limitation list. This is an early build; do not infer production guarantees.</p>'}</section><section class="about-section"><h3>EVIDENCE LABELS</h3><ul><li>Scripted providers produce deterministic responses for testing the controller.</li><li>Live providers send requests to the configured model service. Availability is reported by the server.</li><li>Benchmark passes report scripted fault checks, not universal recovery or live coding quality.</li></ul></section>`;
+  const nextHtml = `<p class="modal-intro"><span class="wordmark" role="img" aria-label="GodMode">GODMODƎ</span> ${escapeHTML(state.version ?? 'MVP')} · local-first experimental research demo. Provided AS IS without warranty of any kind.</p><section class="about-section"><h3>LICENSE &amp; LEGAL NOTICE</h3><ul><li><strong>License:</strong> Dual-licensed under GNU AGPL-3.0 (open source) or Commercial license. Bundles Highlight.js (BSD-3-Clause) and GodMode Display / JetBrains Mono (SIL OFL 1.1).</li><li><strong>No Warranty &amp; User Responsibility:</strong> Experimental research software provided &ldquo;AS IS&rdquo; with no warranty or author liability. You are solely responsible for complying with applicable local laws and the Terms of Service of any third-party AI providers, CLI subscriptions, or websites you access.</li><li><strong>Trademarks:</strong> Third-party names (Anthropic, Claude, OpenAI, ChatGPT, Codex, Google, Gemini, GitHub, Copilot, OpenRouter, Venice, Nous, Ollama, Apple) belong to their respective owners; this independent project is not affiliated with or endorsed by them.</li></ul></section><section class="about-section"><h3>REPORTED CAPABILITIES</h3>${capabilities.length ? `<ul>${list(capabilities)}</ul>` : '<p class="small-copy muted">The runtime has not returned a capability list.</p>'}</section><section class="about-section"><h3>REPORTED LIMITATIONS</h3>${limitations.length ? `<ul>${list(limitations)}</ul>` : '<p class="small-copy muted">The runtime has not returned a limitation list. This is an early build; do not infer production guarantees.</p>'}</section><section class="about-section"><h3>EVIDENCE LABELS</h3><ul><li>Scripted providers produce deterministic responses for testing the controller.</li><li>Live providers send requests to the configured model service. Availability is reported by the server.</li><li>Benchmark passes report scripted fault checks, not universal recovery or live coding quality.</li></ul></section>`;
+  if (el.dataset.lastHtml === nextHtml) return;
+  el.dataset.lastHtml = nextHtml;
+  el.innerHTML = nextHtml;
 }
 
 document.addEventListener('click', (event) => {
@@ -6769,8 +7068,16 @@ document.addEventListener('click', (event) => {
   if (stripAction) {
     const task = selectedData?.task;
     if (task && stripAction.dataset.stripAction === 'compact') compactTaskAction(task);
-    else if (task && stripAction.dataset.stripAction === 'undo') rewindTaskAction(task, 1);
+    else if (task && stripAction.dataset.stripAction === 'undo') {
+      confirmModal({
+        title: 'Undo latest workspace checkpoint?',
+        message: 'This resets workspace files to the previous git checkpoint and discards uncommitted edits.',
+        confirmLabel: 'Undo checkpoint',
+        danger: true,
+      }).then(ok => { if (ok) rewindTaskAction(task, 1); });
+    }
     else if (task && stripAction.dataset.stripAction === 'fork') forkTaskAction(task);
+    else if (task && stripAction.dataset.stripAction === 'save-skill') saveTaskAsSkillAction(task);
     return;
   }
   const wrapCode = event.target.closest('[data-wrap-code]');
@@ -7053,7 +7360,11 @@ document.addEventListener('click', event => {
   }
   const diffCommentBtn = event.target.closest('[data-diff-comment]');
   if (diffCommentBtn) {
-    diffCommentTarget = { path: diffCommentBtn.dataset.commentPath, line: Number(diffCommentBtn.dataset.commentLine) || 1 };
+    diffCommentTarget = {
+      path: diffCommentBtn.dataset.commentPath,
+      line: Number(diffCommentBtn.dataset.commentLine) || 1,
+      side: diffCommentBtn.dataset.commentSide || 'new',
+    };
     changesSignature = '';
     if (selectedData) renderChanges(selectedData.diff || []);
     setTimeout(() => $('.diff-comment-input')?.focus(), 0);
@@ -7094,7 +7405,10 @@ document.addEventListener('click', event => {
     const action = hunkBtn.dataset.hunkAction;
     if (action === 'accept') {
       const hunkEl = hunkBtn.closest('.diff-hunk');
+      const rKey = `${selectedId}:${filePath}:${hunkIndex}`;
       const reviewed = hunkEl?.classList.toggle('is-reviewed');
+      if (reviewed) reviewedHunks.add(rKey);
+      else reviewedHunks.delete(rKey);
       hunkBtn.setAttribute('aria-pressed', String(Boolean(reviewed)));
       toast(reviewed ? 'Hunk marked reviewed.' : 'Hunk review mark cleared.');
       return;
@@ -7311,9 +7625,15 @@ $('#composer-input').addEventListener('keydown', (event) => {
   } else if (event.shiftKey) {
     return;
   }
-  if (composerAutocompleteState.visible && composerAutocompleteState.shouldDeferEnter()) return;
+  if (composerAutocompleteState.visible && composerAutocompleteState.shouldDeferEnter()) {
+    if (!event.metaKey && !event.ctrlKey) return;
+    composerAutocompleteState.hide?.();
+  }
   event.preventDefault();
-  if (!$('#composer-send').disabled) $('#composer-form').requestSubmit();
+  const sendBtn = $('#composer-send');
+  if (sendBtn && !sendBtn.disabled && sendBtn.dataset.composerStop !== '1') {
+    $('#composer-form').requestSubmit();
+  }
 });
 $('#composer-project').addEventListener('click', () => {
   const task = selectedData?.task;
@@ -7480,8 +7800,7 @@ async function toggleUltraPopover(force) {
   if (!pop) return;
   const open = typeof force === 'boolean' ? force : pop.classList.contains('hidden');
   if (!open) { closeUltraPopover(); return; }
-  closeEffortPopover();
-  window.G0DThemes?.togglePopover?.(false);
+  closeAllPopovers('ultra-popover');
   pop.classList.remove('hidden');
   $('#composer-race')?.setAttribute('aria-expanded', 'true');
   renderUltraPopover();
@@ -7588,8 +7907,7 @@ function toggleEffortPopover(force) {
   if (!pop) return;
   const open = typeof force === 'boolean' ? force : pop.classList.contains('hidden');
   if (!open) { closeEffortPopover(); return; }
-  closeUltraPopover();
-  window.G0DThemes?.togglePopover?.(false);
+  closeAllPopovers('effort-popover');
   pop.classList.remove('hidden');
   $('#composer-effort')?.setAttribute('aria-expanded', 'true');
   renderEffortPopover();
@@ -7760,11 +8078,16 @@ $('#overseer-section')?.addEventListener('change', event => {
     updateOverseerSettings({ autoCoachLongRuns: event.target.checked });
   }
 });
+$('#overseer-section')?.addEventListener('input', event => {
+  if (event.target?.id === 'overseer-custom-instructions') {
+    overseerDirectivesDraft = event.target.value;
+  }
+});
 $('#overseer-section')?.addEventListener('click', event => {
   const postureBtn = event.target.closest('[data-overseer-posture]');
   if (postureBtn) { updateOverseerSettings({ posture: postureBtn.dataset.overseerPosture }); return; }
   if (event.target.closest('[data-save-overseer-directives]')) {
-    const val = $('#overseer-custom-instructions')?.value || '';
+    const val = overseerDirectivesDraft ?? $('#overseer-custom-instructions')?.value ?? '';
     updateOverseerSettings({ customInstructions: val });
     return;
   }
@@ -8389,7 +8712,7 @@ document.addEventListener('keydown', (event) => {
   if(taskMenu){taskMenu.open=false;$('summary',taskMenu)?.focus();event.preventDefault();return;}
   if (document.body.classList.contains('inspector-open')) { setInspector(false, true); event.preventDefault(); return; }
   if (narrowLayout.matches && document.body.classList.contains('sidebar-open')) { setSidebar(false); $('#sidebar-toggle').focus(); event.preventDefault(); return; }
-  if (artifactDockState.open && !artifactDockState.inspecting) { closeArtifactDock({ recordDismiss: true }); event.preventDefault(); return; }
+  if (artifactDockState.open && !artifactDockState.inspectMode && !artifactDockState.fullscreen) { closeArtifactDock({ recordDismiss: true }); event.preventDefault(); return; }
   const activeTaskNow = selectedData?.task?.id === selectedId ? selectedData.task : null;
   if (activeTaskNow && ACTIVE.has(activeTaskNow.status) && !$('#composer-input')?.value?.trim()) {
     event.preventDefault();
@@ -8436,7 +8759,7 @@ latestResizeObs.observe($('#task-content'));
 if ($('#panel-timeline')) latestResizeObs.observe($('#panel-timeline'));
 $('#jump-latest').addEventListener('click', () => {
   const scroller = $('#task-content');
-  scroller.scrollTop = scroller.scrollHeight;
+  scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' });
   scroller.focus({ preventScroll: true });
   updateLatestButton();
 });
@@ -9081,9 +9404,14 @@ function renderModelPicker() {
       : query
         ? '<p class="model-picker-empty">No matching models. Try another name.</p>'
         : '<p class="model-picker-empty">Connect a provider to choose a model.</p>';
-  $('#model-picker-results').innerHTML = pickerModels.length
-    ? rowsHtml + overflowNote
-    : emptyPickerHtml;
+  const resultsEl = $('#model-picker-results');
+  const nextPickerHtml = pickerModels.length ? rowsHtml + overflowNote : emptyPickerHtml;
+  if (resultsEl && resultsEl.dataset.lastHtml !== nextPickerHtml) {
+    const prevScroll = resultsEl.scrollTop;
+    resultsEl.dataset.lastHtml = nextPickerHtml;
+    resultsEl.innerHTML = nextPickerHtml;
+    resultsEl.scrollTop = prevScroll;
+  }
   highlightPickerModel(Math.max(0, pickerModels.findIndex(p => p.id === previous)));
   positionModelPicker();
 }

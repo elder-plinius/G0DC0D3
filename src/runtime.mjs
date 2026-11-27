@@ -64,6 +64,7 @@ import {
   slugifyAgent,
   STARTER_FORMATIONS
 } from './conclave-roster.mjs';
+import { normalizeConclaveRunInput, runConclaveSession } from './conclave-engine.mjs';
 import { validateExecution, validateChecks } from './runner.mjs';
 import { SourceChanges } from './source-changes.mjs';
 import { CrewController } from './crew.mjs';
@@ -71,6 +72,8 @@ import { replyOutcome } from './outcomes.mjs';
 import { reframe as reframeObjective, rewritePrompt } from './reframe.mjs';
 import { gitAutoCommit, gitCheckpoints, gitCommit, gitDiffSummary, gitRewind, hasGit } from './git.mjs';
 import { MemoryStore } from './memory.mjs';
+import { distillTaskToSkill, extractEpisodicMemories } from './brain.mjs';
+import { saveUserSkill } from './skills.mjs';
 import { validatePermissionRules, evaluatePermission, derivePatternRule, assessToolRisk, insertTaskAllowRule, DEFAULT_SAFE_PRESET, PERMISSION_PRESETS } from './permissions.mjs';
 import { discoverHooks, runLifecycleHooks } from './hooks.mjs';
 import {
@@ -197,7 +200,10 @@ function withFollowups(task, followups) {
   const primaryDeclined = stickyRefusal && declinedProviders.includes(task.providers[0]);
   const cleanObjective = task.routing?.originalObjective || task.objective;
   const cleanFollowups = followups.map(f => f?.originalMessage ? { ...f, message: f.originalMessage, originalMessage: undefined } : f);
-  const proposed = { ...task, objective: cleanObjective, followups: cleanFollowups, acceptance: { mode: 'owner', reason: 'followup', contractVersion }, verification: null, completionKind: null, contractVersion, blocker: null, strategy: 'continue', stallSignature: null, stallTurns: 0, recentToolCalls: [], lastIncident: null, routing: { primaryId: task.providers[0], cooldowns: {}, primaryReturnUsed: primaryDeclined, contributions: {}, ...(primaryDeclined ? { declinedProviders } : {}) } };
+  const carryGuidance = task.routing?.overseerGuidanceStickyOnce && task.routing?.overseerGuidance
+    ? { overseerGuidance: task.routing.overseerGuidance }
+    : {};
+  const proposed = { ...task, objective: cleanObjective, followups: cleanFollowups, acceptance: { mode: 'owner', reason: 'followup', contractVersion }, verification: null, completionKind: null, contractVersion, blocker: null, strategy: 'continue', stallSignature: null, stallTurns: 0, recentToolCalls: [], lastIncident: null, routing: { primaryId: task.providers[0], cooldowns: {}, primaryReturnUsed: primaryDeclined, contributions: {}, ...(primaryDeclined ? { declinedProviders } : {}), ...carryGuidance } };
   if (isCatalogModel(task.providers[0]) && task.policy.returnToPrimary && !primaryDeclined) {
     proposed.providerId = task.providers[0];
     proposed.providerIndex = 0;
@@ -700,9 +706,12 @@ export class Runtime {
     this.outboundAudit = new OutboundAuditLog({ maxEntries: 100 });
     this.activeSubagents = new Map();
     this._workerSteers = new Map();
+    this._liveTurn = new Map();
+    this._conclaveRuns = new Map();
     this.cron = new CronScheduler({
       store: this.store,
       tickMs: schedulerTickMs,
+      reconcileOnBoot: Boolean(startScheduler),
       onTrigger: (job, run) => this._executeScheduledJob(job, run),
     });
     if (startScheduler) this.cron.start();
@@ -710,9 +719,43 @@ export class Runtime {
   subscribeStream(taskId, callback) {
     if (!this._streamSubs.has(taskId)) this._streamSubs.set(taskId, new Set());
     this._streamSubs.get(taskId).add(callback);
+    const live = this._liveTurn.get(taskId);
+    if (live && this.runs.has(taskId)) {
+      try {
+        callback({ type: 'turn_start', replay: true });
+        if (live.thinking) callback({ type: 'thinking', text: live.thinking });
+        if (live.text) callback({ type: 'text', text: live.text });
+        if (live.toolName) callback({ type: 'tool.start', name: live.toolName, ...(live.toolArgs ? { args: live.toolArgs } : {}) });
+      } catch {}
+    }
     return () => { const subs = this._streamSubs.get(taskId); if (subs) { subs.delete(callback); if (!subs.size) this._streamSubs.delete(taskId); } };
   }
   _emitStream(taskId, event) {
+    if (event && typeof event === 'object') {
+      if (event.type === 'turn_start') {
+        this._liveTurn.set(taskId, { text: '', thinking: '', toolName: '', toolArgs: null, startedAt: Date.now() });
+      } else if (event.type === 'thinking' && typeof event.text === 'string') {
+        const cur = this._liveTurn.get(taskId) || { text: '', thinking: '', toolName: '', toolArgs: null, startedAt: Date.now() };
+        if (cur.thinking.length < 24576) cur.thinking = (cur.thinking + event.text).slice(0, 24576);
+        cur.toolName = '';
+        this._liveTurn.set(taskId, cur);
+      } else if (event.type === 'text' && typeof event.text === 'string') {
+        const cur = this._liveTurn.get(taskId) || { text: '', thinking: '', toolName: '', toolArgs: null, startedAt: Date.now() };
+        if (cur.text.length < 65536) cur.text = (cur.text + event.text).slice(0, 65536);
+        cur.toolName = '';
+        this._liveTurn.set(taskId, cur);
+      } else if (event.type === 'tool.start') {
+        const cur = this._liveTurn.get(taskId) || { text: '', thinking: '', toolName: '', toolArgs: null, startedAt: Date.now() };
+        cur.text = '';
+        cur.thinking = '';
+        cur.toolName = event.name || '';
+        cur.toolArgs = event.args || null;
+        this._liveTurn.set(taskId, cur);
+      } else if (event.type === 'tool.completed') {
+        const cur = this._liveTurn.get(taskId);
+        if (cur) { cur.toolName = ''; cur.toolArgs = null; }
+      }
+    }
     const subs = this._streamSubs.get(taskId);
     if (subs) for (const cb of subs) try { cb(event); } catch {}
   }
@@ -737,10 +780,18 @@ export class Runtime {
       if (crewRole === 'verifier') {
         throw fault('INVALID_STEER', 'Independent verifier checks cannot be steered mid-run.');
       }
-      // Record crew steer out-of-band without mutating pendingMessages (which would invalidate contractVersion)
-      this.store.appendEvent(taskId, 'conclave.steered', { workerId: cleanWorkerId, role: crewRole, message: text, target: 'crew_worker' });
-      this._emitStream(taskId, { type: 'conclave.steered', workerId: cleanWorkerId, role: crewRole, message: text, target: 'crew_worker' });
-      return { ok: true, target: 'crew_worker', workerId: cleanWorkerId, queued: 1 };
+      // Deliver steer directly into the active crew worker's child task when running, plus record event on parent.
+      let deliveredToChild = false;
+      try {
+        const childTask = this.store.getTask(cleanWorkerId);
+        if (childTask && active.has(childTask.status)) {
+          await this.submitMessage(cleanWorkerId, `[Conclave steer → ${crewRole}] ${text}`, undefined, 'steer');
+          deliveredToChild = true;
+        }
+      } catch {}
+      this.store.appendEvent(taskId, 'conclave.steered', { workerId: cleanWorkerId, role: crewRole, message: text, target: deliveredToChild ? 'crew_worker' : 'note' });
+      this._emitStream(taskId, { type: 'conclave.steered', workerId: cleanWorkerId, role: crewRole, message: text, target: deliveredToChild ? 'crew_worker' : 'note' });
+      return { ok: true, target: deliveredToChild ? 'crew_worker' : 'note', workerId: cleanWorkerId, queued: 1 };
     }
     if (active.has(task.status)) {
       const res = await this.submitMessage(task.id, `[Conclave steer → ${cleanWorkerId}] ${text}`, undefined, 'steer');
@@ -757,6 +808,35 @@ export class Runtime {
     if (!list?.length) return [];
     this._workerSteers.delete(key);
     return list;
+  }
+  startConclaveRun(taskId, input = {}, { recordUserMessage = true } = {}) {
+    if (this.closed) throw fault('RUNTIME_CLOSED', 'Runtime is closed.');
+    const task = this.getTask(taskId);
+    if (task.crewMember) throw fault('CREW_MEMBER', 'Control crew workers through their parent conversation.');
+    if (this.runs.has(taskId) || active.has(task.status)) {
+      throw Object.assign(new Error('This task is already running — wait for it to finish or pause it before launching a new Conclave.'), { code: 'TASK_BUSY', status: 409 });
+    }
+    if (task.status === 'cancelled') throw fault('TASK_TERMINAL', 'Cancelled tasks cannot run a Conclave.');
+    const normalized = normalizeConclaveRunInput(input);
+    const controller = new AbortController();
+    const entry = { controller, promise: null };
+    this.runs.set(taskId, entry);
+    entry.promise = runConclaveSession({
+      runtime: this,
+      taskId,
+      mission: normalized.mission,
+      agents: normalized.agents,
+      mode: normalized.mode,
+      formationName: normalized.formationName,
+      recordUserMessage,
+      signal: controller.signal,
+    }).catch(err => {
+      if (err?.code !== 'cancelled') process.stderr.write(`Conclave ${taskId}: ${err?.message || err}\n`);
+      return null;
+    }).finally(() => {
+      if (this.runs.get(taskId) === entry) this.runs.delete(taskId);
+    });
+    return { task: this.getTask(taskId), promise: entry.promise, ...normalized };
   }
   async _executeAgentSpawn(id, epoch, call, signal) {
     validateTool('agent.spawn', call.args || {});
@@ -1071,11 +1151,51 @@ export class Runtime {
       }
     }
 
+    // Surface Conclave 2.0 multi-round session & Shared Blackboard (live or most recent persisted)
+    let conclaveSession = null;
+    const liveConclave = this._conclaveRuns.get(taskId);
+    if (liveConclave) {
+      conclaveSession = {
+        runId: liveConclave.runId,
+        mode: liveConclave.mode,
+        modeLabel: liveConclave.modeLabel,
+        formationName: liveConclave.formationName || null,
+        round: liveConclave.round,
+        totalRounds: liveConclave.totalRounds,
+        phase: liveConclave.phase,
+        active: true,
+        specialists: liveConclave.specialists,
+        blackboard: liveConclave.blackboard.map(e => ({
+          id: e.id, round: e.round, roundLabel: e.roundLabel, role: e.role,
+          agentName: e.agentName, sigil: e.sigil, modelLabel: e.modelLabel,
+          kind: e.kind, ok: e.ok, excerpt: String(e.content || '').slice(0, 1200), durationMs: e.durationMs,
+        })),
+      };
+    } else {
+      const lastDone = [...events].reverse().find(e => e.type === 'conclave.completed');
+      if (lastDone?.data) {
+        conclaveSession = {
+          runId: lastDone.data.conclaveRunId || null,
+          mode: lastDone.data.mode || 'parallel',
+          modeLabel: lastDone.data.modeLabel || 'Conclave',
+          formationName: lastDone.data.formationName || null,
+          round: lastDone.data.rounds || 2,
+          totalRounds: lastDone.data.rounds || 2,
+          phase: 'Completed',
+          active: false,
+          durationMs: lastDone.data.durationMs || 0,
+          specialists: Array.isArray(lastDone.data.specialists) ? lastDone.data.specialists : [],
+          blackboard: Array.isArray(lastDone.data.entries) ? lastDone.data.entries : [],
+        };
+      }
+    }
+
     return {
       taskId: task.id,
       title: task.title,
       status: task.status,
       mode,
+      conclaveSession,
       orchestrator: {
         providerId: task.providerId,
         modelLabel: providerLabel(task.providerId) || 'Orchestrator',
@@ -1196,6 +1316,47 @@ export class Runtime {
     try { return this.memory.relevantForTask(task, { limit: 6, maxChars: 1800 }); }
     catch { return []; }
   }
+  autoLearnFromTask(id) {
+    if (this.closed) return { learned: 0, titles: [] };
+    const privacy = this.getPrivacy().settings || {};
+    if (privacy.ephemeralSession === true) return { learned: 0, titles: [], skipped: 'ephemeral' };
+    const task = this.getTask(id);
+    if (!task || task.fixtureId || task.crewMember || task.status !== 'completed') return { learned: 0, titles: [] };
+    const events = this.getEvents(id);
+    const items = extractEpisodicMemories(task, events, { extraSecrets: this.outboundSecrets?.() });
+    if (!items.length) return { learned: 0, titles: [] };
+    const savedTitles = [];
+    for (const item of items) {
+      try {
+        const res = this.memory.saveMemory(item);
+        if (res?.memory?.title) savedTitles.push(res.memory.title);
+      } catch {}
+    }
+    if (!savedTitles.length) return { learned: 0, titles: [] };
+    try { this.memory.syncMarkdown(); } catch {}
+    this.store.appendEvent(id, 'memory.auto_learned', { count: savedTitles.length, titles: savedTitles, source: 'brain_v2' });
+    return { learned: savedTitles.length, titles: savedTitles };
+  }
+  async saveTaskAsSkill(id, { name = '', description = '', mode = null } = {}) {
+    if (this.closed) throw fault('RUNTIME_CLOSED', 'Runtime is closed.');
+    const privacy = this.getPrivacy().settings || {};
+    if (privacy.ephemeralSession === true) {
+      throw Object.assign(new Error('Persistent skills cannot be saved during an Ephemeral (Burn Bag) engagement.'), { code: 'EPHEMERAL_SESSION', status: 403 });
+    }
+    const task = this.getTask(id);
+    const events = this.getEvents(id);
+    const draft = distillTaskToSkill({
+      task,
+      events,
+      name,
+      description,
+      mode,
+      extraSecrets: this.outboundSecrets?.(),
+    });
+    const skill = await saveUserSkill(this.store.dataDir, draft);
+    this.store.appendEvent(id, 'skill.created', { name: skill.name, command: skill.command, description: skill.description, source: 'owner' });
+    return { ok: true, skill };
+  }
   _effectivePermissionRules(task) {
     if (Array.isArray(task.permissionRules)) return task.permissionRules;
     if (task.fixtureId || task.crewMember) return [];
@@ -1239,6 +1400,20 @@ export class Runtime {
     const provider = this.selectedProvider(task.providerId, task.workspaceKind);
     return buildContext({ task, provider, history: this.getRecentEvents(id), totalHistoryCount: task.eventSeq, files: snapshot.files, snapshotHash: snapshot.snapshotHash, learning: this.getLearning(), memories: this._memoriesForTask(task), transparency: task.fixtureId ? null : this.getTransparencyConfig() });
   }
+  getAcpStatus() {
+    const activeSessions = [];
+    for (const provider of new Set(this.providers.values())) {
+      if (typeof provider?.acpStatus === 'function') {
+        const sessions = provider.acpStatus();
+        if (Array.isArray(sessions)) {
+          for (const sess of sessions) {
+            activeSessions.push({ providerId: provider.id, ...sess });
+          }
+        }
+      }
+    }
+    return activeSessions;
+  }
   getLearning() { return this.store.getLearning(); }
   resetLearning() { return this.store.resetLearning(); }
   run(id) {
@@ -1263,17 +1438,29 @@ export class Runtime {
         const [message, ...rest] = current.deferredMessages || [];
         if (!message) break;
         const followup = { ...message, appliedAt: new Date().toISOString(), contractVersion: current.contractVersion + 1 };
-        const proposed = { ...withFollowups(current, [...(current.followups || []), followup]), deferredMessages: rest, status: 'queued' };
+        const proposed = {
+          ...withFollowups(current, [...(current.followups || []), followup]),
+          deferredMessages: rest,
+          status: 'queued',
+          ...(Array.isArray(message.attachments) && message.attachments.length ? { attachments: message.attachments } : {}),
+        };
         const deferredProvider = this.selectedProvider(proposed.providerId, proposed.workspaceKind);
         buildContext({ task: proposed, provider: deferredProvider, history: this.getRecentEvents(id), totalHistoryCount: current.eventSeq + 2, files: snapshot.files, snapshotHash: snapshot.snapshotHash, learning: this.getLearning(), memories: this._memoriesForTask(proposed), transparency: current.fixtureId ? null : this.getTransparencyConfig() });
         this.store.updateTask(id, () => proposed, 'user.messages.applied', { ids: [message.id], contractVersion: proposed.contractVersion, source: 'owner' });
       } while (!controller.signal.aborted);
-      return this.getTask(id);
+      const finalTask = this.getTask(id);
+      if (finalTask?.status === 'completed') {
+        try { this.autoLearnFromTask(id); } catch {}
+      }
+      return finalTask;
     })().catch(cause => {
       const current = this.getTask(id);
       if (active.has(current.status) || (current.status === 'completed' && current.deferredMessages?.length)) return this.store.updateTask(id, value => { value.status = 'failed'; value.blocker = { code: cause.code || 'RUNTIME_ERROR', message: cause.message }; return value; }, 'task.status', { status: 'failed', error: cause.message });
       return current;
-    }).finally(() => { if (this.runs.get(id) === entry) this.runs.delete(id); });
+    }).finally(() => {
+      if (this.runs.get(id) === entry) this.runs.delete(id);
+      this._liveTurn.delete(id);
+    });
     return entry.promise;
   }
   async _run(id, controller) {
@@ -1459,7 +1646,7 @@ export class Runtime {
         response = { type: 'error', code: timeout ? 'PROVIDER_TIMEOUT' : 'PROVIDER_ERROR',
           message: timeout ? 'The Venice request timed out.' : 'The Venice connection ended before a complete response arrived.' };
       } else if (turnError) {
-        await this._recover(id, epoch, { code: turnError.name === 'TimeoutError' ? 'PROVIDER_TIMEOUT' : turnError.code || 'PROVIDER_ERROR', message: turnError.message, kind: 'provider_error', retryable: turnError.retryable, durationMs: turnDurationMs }, controller.signal);
+        await this._recover(id, epoch, { code: turnError.name === 'TimeoutError' ? 'PROVIDER_TIMEOUT' : turnError.code || 'PROVIDER_ERROR', message: turnError.message, kind: 'provider_error', retryable: turnError.retryable, ...(Number.isFinite(turnError.retryAfterMs) ? { retryAfterMs: turnError.retryAfterMs } : {}), durationMs: turnDurationMs }, controller.signal);
         continue;
       }
       const superseded = Boolean(this.getTask(id).pendingMessages?.length);
@@ -1959,8 +2146,8 @@ export class Runtime {
           }
           // Proactive Overseer mid-run trajectory coaching every 6 turns on long non-fixture runs
           if (!stalled.fixtureId && stalled.calls >= 6 && stalled.calls % 6 === 0 && (stalled.routing?.lastOverseerCoachCall || 0) < stalled.calls) {
-            const overseer = this._resolveOverseer();
-            if (overseer && overseer.settings.autoCoachLongRuns && overseer.provider.id !== stalled.providerId) {
+            const overseer = this._resolveOverseerForWorker(stalled.providerId);
+            if (overseer && overseer.settings.autoCoachLongRuns) {
               const ev = this._overseerEvidence(id, stalled);
               const coach = await coachTrajectory({
                 provider: overseer.provider,
@@ -1979,12 +2166,14 @@ export class Runtime {
                   current.routing ||= {};
                   current.routing.lastOverseerCoachCall = stalled.calls;
                   if (coach.guidance && coach.status !== 'on_track') current.routing.overseerGuidance = coach.guidance;
+                  else if (coach.status === 'on_track') delete current.routing.overseerGuidance;
                   return current;
                 }, 'overseer.coached', {
                   overseerId: coach.providerId || overseer.provider.id,
                   ...(coach.failoverFrom ? { failoverFrom: coach.failoverFrom } : {}),
                   status: coach.status,
                   diagnosis: coach.diagnosis,
+                  guidance: coach.guidance || null,
                   reason: coach.reason,
                   nextActions: coach.nextActions,
                   hasGuidance: Boolean(coach.guidance && coach.status !== 'on_track'),
@@ -2241,8 +2430,8 @@ export class Runtime {
       const refusal = (!provider.directChat || godmodeActive) && detectRefusal(response, { learnedPatterns });
       if (refusal) { await this._recover(id, epoch, refusal); continue; }
       if (godmodeActive && looksAmbiguousEvasion(response)) {
-        const overseer = this._resolveOverseer();
-        if (overseer && overseer.settings.autoJudgeAmbiguous && overseer.provider.id !== task.providerId) {
+        const overseer = this._resolveOverseerForWorker(task.providerId);
+        if (overseer && overseer.settings.autoJudgeAmbiguous) {
           const verdict = await judgeAmbiguousReply({
             provider: overseer.provider,
             backupProviders: overseer.backupProviders,
@@ -2285,8 +2474,8 @@ export class Runtime {
         && typeof response.text === 'string' && response.text.trim()
         && task.calls < (task.policy?.maxCalls || 0)
         && (task.routing?.overseerAuditedContract || 0) !== (task.contractVersion || 1)) {
-        const overseer = this._resolveOverseer();
-        if (overseer && overseer.settings.autoAuditCompletion && overseer.provider.id !== task.providerId) {
+        const overseer = this._resolveOverseerForWorker(task.providerId, { allowSameModel: true });
+        if (overseer && overseer.settings.autoAuditCompletion) {
           const ev = this._overseerEvidence(id, task);
           const hasSubstance = ev.modifiedFiles.length > 0 || ev.recentToolTrace.length > 0 || String(task.objective || '').length >= 80;
           if (hasSubstance) {
@@ -2416,7 +2605,12 @@ export class Runtime {
     if (this.getOperations(id).some(operation => !['succeeded', 'failed'].includes(operation.status))) throw fault('OUTCOME_UNKNOWN', 'Reconcile unresolved operations before applying queued instructions.');
     const appliedAt = new Date().toISOString();
     const additions = messages.map((message, index) => ({ ...message, appliedAt, contractVersion: (task.contractVersion || 1) + index + 1 }));
-    const proposed = { ...withFollowups(task, [...(task.followups || []), ...additions]), pendingMessages: [] };
+    const queuedAttachments = additions.flatMap(m => (Array.isArray(m.attachments) ? m.attachments : [])).slice(-4);
+    const proposed = {
+      ...withFollowups(task, [...(task.followups || []), ...additions]),
+      pendingMessages: [],
+      ...(queuedAttachments.length ? { attachments: queuedAttachments } : {}),
+    };
     // Preflight the complete new contract before atomically consuming the queue.
     const pendingProvider = this.selectedProvider(proposed.providerId, proposed.workspaceKind);
     buildContext({ task: { ...proposed, calls: proposed.calls + 1, version: task.version + 2, eventSeq: task.eventSeq + 2 }, provider: pendingProvider, history: this.getRecentEvents(id), totalHistoryCount: task.eventSeq + 2, files: snapshot.files, snapshotHash: snapshot.snapshotHash, learning: this.getLearning(), memories: this._memoriesForTask(proposed) });
@@ -3558,7 +3752,10 @@ export class Runtime {
     }
     const updated = this.store.updateTask(id, current => {
       current.routing ||= {};
-      if (advice.guidance) current.routing.overseerGuidance = advice.guidance;
+      if (advice.guidance) {
+        current.routing.overseerGuidance = advice.guidance;
+        current.routing.overseerGuidanceStickyOnce = true;
+      }
       if (advice.recommendedEffort) current.effort = normalizeEffort(advice.recommendedEffort);
       current.routing.lastOverseerCoachCall = current.calls || 0;
       return current;
@@ -3568,6 +3765,7 @@ export class Runtime {
       manual: true,
       status: advice.status,
       diagnosis: advice.diagnosis,
+      guidance: advice.guidance || null,
       reason: advice.reason,
       nextActions: advice.nextActions,
       recommendedProviderId: advice.recommendedProviderId,
@@ -3575,6 +3773,16 @@ export class Runtime {
       hasGuidance: Boolean(advice.guidance)
     });
     return { ok: true, advice, task: updated };
+  }
+  _resolveOverseerForWorker(workerProviderId, { allowSameModel = false } = {}) {
+    const overseer = this._resolveOverseer();
+    if (!overseer) return null;
+    const all = [overseer.provider, ...(overseer.backupProviders || [])].filter(Boolean);
+    const distinct = all.filter(p => p.id !== workerProviderId);
+    if (distinct.length) {
+      return { settings: overseer.settings, provider: distinct[0], backupProviders: distinct.slice(1) };
+    }
+    return allowSameModel ? overseer : null;
   }
   updateOverseer(patch = {}) {
     const current = this.getOverseer().settings;
@@ -3989,6 +4197,21 @@ export class Runtime {
         current.forkedFromHash = forkedFromHash;
         if (source.sourcePath) current.sourcePath = source.sourcePath;
         if (source.importManifest) current.importManifest = structuredClone(source.importManifest);
+        if (source.initialSnapshot?.files) {
+          if (source.sourcePath && Array.isArray(source.sourceApplications) && source.sourceApplications.length) {
+            try {
+              const baseMap = this.sourceChanges.base(source);
+              current.initialSnapshot = {
+                ...structuredClone(source.initialSnapshot),
+                files: [...baseMap.entries()].map(([p, v]) => ({ path: p, content: v.content, bytes: v.bytes ?? (typeof v.content === 'string' ? Buffer.byteLength(v.content) : 0), sha256: v.sha256 })),
+              };
+            } catch {
+              current.initialSnapshot = structuredClone(source.initialSnapshot);
+            }
+          } else {
+            current.initialSnapshot = structuredClone(source.initialSnapshot);
+          }
+        }
         if (Array.isArray(source.followups) && source.followups.length) {
           current.followups = structuredClone(source.followups);
           current.contractVersion = source.contractVersion || 1;
@@ -4291,13 +4514,36 @@ export class Runtime {
       }
       if (this.getEvents(id).some(event => event.type === 'user.message.removed' && event.data.id === messageId)) throw fault('MESSAGE_REMOVED', 'This message was removed. Send it again with a new message ID.');
     }
-    if (active.has(task.status) || task.pendingMessages?.length || task.deferredMessages?.length) {
-      if (terminal.has(task.status)) throw fault('TASK_TERMINAL', 'This task cannot receive queued instructions.');
-      const pending = { id: messageId || randomUUID(), message, createdAt: new Date().toISOString(), mode };
+    const isRunning = active.has(task.status) || this.runs.has(id);
+    if (isRunning || task.pendingMessages?.length || task.deferredMessages?.length) {
+      if (task.status === 'cancelled' || (isRunning && terminal.has(task.status))) {
+        throw fault('TASK_TERMINAL', 'This task cannot receive queued instructions.');
+      }
+      const pending = {
+        id: messageId || randomUUID(),
+        message,
+        createdAt: new Date().toISOString(),
+        mode,
+        ...(validAttachments.length ? { attachments: validAttachments } : {}),
+      };
       const field = mode === 'queue' ? 'deferredMessages' : 'pendingMessages';
-      const proposed = { ...task, [field]: [...(task[field] || []), pending], ...(validAttachments.length ? { attachments: validAttachments } : {}) };
+      const proposed = { ...task, [field]: [...(task[field] || []), pending] };
       checkMessageLimit([...(task.followups || []), ...(proposed.pendingMessages || []), ...(proposed.deferredMessages || [])]);
-      return { task: this.store.updateTask(id, () => proposed, 'user.message.queued', { ...pending, source: 'owner' }), queued: true };
+      // If the task is currently idle (paused/waiting/blocked/failed/completed with residual deferred items), wake it!
+      const shouldStart = !isRunning;
+      if (shouldStart) {
+        proposed.status = 'queued';
+        proposed.blocker = null;
+        if (proposed.status === 'queued') {
+          proposed.completionKind = null;
+          delete proposed.completedAt;
+        }
+      }
+      return {
+        task: this.store.updateTask(id, () => proposed, 'user.message.queued', { ...pending, source: 'owner' }),
+        queued: true,
+        ...(shouldStart ? { start: true } : {}),
+      };
     }
     return { task: await this.addMessage(id, message, messageId, validAttachments), queued: false, start: true };
   }
