@@ -1444,6 +1444,9 @@ function renderTaskMetaStrip(task) {
     if (showCompactBtn) actionParts.push(`<button type="button" class="strip-action-btn" data-strip-action="compact" title="Compact context into fresh-eyes summary (/compact)" aria-label="Compact context" ${stripActionBusy ? 'disabled' : ''}>${compactSvg}<span>Compact</span></button>`);
     if (task.workspaceKind !== 'conversation') actionParts.push(`<button type="button" class="strip-action-btn" data-strip-action="undo" title="${undoTitle}" aria-label="Undo checkpoint" ${stripActionBusy || !canUndo ? 'disabled' : ''}>${undoSvg}<span>Undo</span></button>`);
     actionParts.push(`<button type="button" id="fork-task-btn" class="strip-action-btn" data-strip-action="fork" title="Fork into a new task branch (/fork)" aria-label="Fork task" ${stripActionBusy ? 'disabled' : ''}>${forkSvg}<span>Fork</span></button>`);
+    if (task.status === 'completed' || (task.calls || 0) > 0) {
+      actionParts.push(`<button type="button" id="save-skill-btn" class="strip-action-btn" data-strip-action="save-skill" title="Distill this run into a reusable /slash skill (/save-skill)" aria-label="Save run as reusable skill" ${stripActionBusy ? 'disabled' : ''}><span aria-hidden="true">✦</span><span>Save Skill</span></button>`);
+    }
   }
   const metaHtml = metaParts.map((part, i) => {
     if (i === 0) return part;
@@ -1792,10 +1795,22 @@ async function executeSlashCommand(raw) {
     if (/^(demo|preview)$/i.test(sub)) { clearInput(); window.G0DConclave?.open({ demo: true }); return { handled: true }; }
     if (/^(cards|timeline|stage|roster)$/i.test(sub)) { clearInput(); window.G0DConclave?.open({ lens: sub.toLowerCase() }); return { handled: true }; }
     if (/^(builder|forge)$/i.test(sub)) { clearInput(); window.G0DConclave?.open({ lens: 'roster' }); window.G0DConclave?.openBuilder(null); return { handled: true }; }
-    // Direct 1-command launch: `/conclave <any long-form mission>` auto-picks specialists and runs immediately!
+    // Direct 1-command launch: `/conclave <any long-form mission>` auto-picks specialists and runs native multi-round Conclave 2.0!
+    clearInput();
     window.G0DConclave?.open({ lens: 'stage' });
+    const rec = window.G0DConclave?.recommendTeam ? window.G0DConclave.recommendTeam(sub) : { agents: ['explore', 'analyst', 'strategist'], mode: 'parallel' };
+    if (typeof window.launchNativeConclave === 'function') {
+      void window.launchNativeConclave({ mission: sub, agents: rec.agents, mode: rec.mode });
+      return { handled: true };
+    }
     const built = window.G0DConclave?.buildMissionPrompt ? window.G0DConclave.buildMissionPrompt(sub) : sub;
     return { handled: false, overrideMessage: built };
+  }
+  if (cmd === '/save-skill') {
+    if (!task) { composerErrors.set(key, 'Select a task before running /save-skill.'); renderComposer(); return { handled: true }; }
+    clearInput();
+    await saveTaskAsSkillAction(task, arg.trim());
+    return { handled: true };
   }
   if (cmd === '/benchmark') {
     clearInput();
@@ -1831,6 +1846,50 @@ function closeAllRightDocks({ except = null } = {}) {
   }
 }
 window.closeAllRightDocks = closeAllRightDocks;
+window.launchNativeConclave = async function launchNativeConclave({ mission, agents, mode = 'parallel', formationName = null } = {}) {
+  const cleanMission = String(mission || '').trim();
+  if (!cleanMission) return false;
+  if ($('#connection') && !$('#connection').classList.contains('online')) {
+    toast('Server is offline — reconnect before launching a Conclave.');
+    return false;
+  }
+  const avail = typeof newConversationProviders === 'function' ? newConversationProviders() : [];
+  if (!selectedId && !avail.length) {
+    toast('Connect at least one AI provider in Settings → Models before launching a Conclave.');
+    return false;
+  }
+  const activeTask = selectedId && selectedData?.task?.id === selectedId ? selectedData.task : null;
+  if (activeTask && (ACTIVE.has(activeTask.status) || activeTask.status === 'cancelled' || activeTask.draining || isCrewBusy(activeTask))) {
+    toast('Current task is busy or unavailable — start a new chat or wait a moment.');
+    return false;
+  }
+  try {
+    const res = await api('/api/conclave/run', {
+      method: 'POST',
+      body: JSON.stringify({
+        ...(selectedId ? { taskId: selectedId } : { providerIds: avail }),
+        mission: cleanMission,
+        agents: Array.isArray(agents) && agents.length ? agents : ['explore', 'analyst', 'strategist'],
+        mode,
+        ...(formationName ? { formationName } : {}),
+      }),
+    });
+    if (res?.task?.id) {
+      if (res.task.id !== selectedId) {
+        state.tasks = [res.task, ...(state.tasks || []).filter(t => t.id !== res.task.id)];
+        await selectTask(res.task.id);
+      } else {
+        await refresh();
+      }
+      window.G0DConclave?.open?.({ lens: 'stage' });
+      window.G0DConclave?.syncTask?.(res.task);
+    }
+    return true;
+  } catch (err) {
+    toast(err?.message || 'Could not launch Conclave.');
+    return false;
+  }
+};
 window.submitConclaveMission = function submitConclaveMission(promptText) {
   const input = $('#composer-input');
   const form = $('#composer-form');
@@ -3818,6 +3877,8 @@ function eventDescription(event) {
     'overseer.judged': ['Overseer classified reply', '✦', '', `${data.classification || 'checked'} — ${data.reason || ''}`],
     'overseer.audited': [data.verdict === 'needs_work' ? 'Overseer caught gaps before finish' : 'Overseer verified completion', '✦', data.verdict === 'needs_work' ? 'warning' : 'success', `${Number.isFinite(data.completenessScore) ? `${data.completenessScore}% · ` : ''}${data.reason || ''}`],
     'overseer.coached': [data.manual ? 'Overseer consulted' : 'Overseer trajectory check', '✦', data.status === 'stuck' ? 'warning' : 'info', `${data.status || 'checked'} — ${data.diagnosis || data.reason || ''}`],
+    'memory.auto_learned': ['Brain 2.0 learned memory', '✦', 'info', Array.isArray(data.titles) && data.titles.length ? data.titles.join(' · ') : `${data.count || 1} episodic memory saved`],
+    'skill.created': ['Saved reusable skill', '✦', 'success', `${data.command || `/${data.name || 'skill'}`}${data.description ? ` — ${data.description}` : ''}`],
     'owner.refusal_reported': ['Refusal flagged by you', '↻', '', data.reason || 'Retrying with recovery / fallback.'],
     'routing.reframe_retry': ['G0DM0D3 reframed retry', '↻', '', `${providerById(data.providerId)?.label || data.providerId || 'Model'} (pass ${data.pass || 1} · ${data.level || 'reframe'})`],
     'evaluation.completed': ['Evaluation recorded', '◎', (data.status ?? data.result?.status) === 'pass' ? 'success' : 'warning', data.status ? humanize(data.status) : data.result?.status ? humanize(data.result.status) : 'Inspect the check results for this snapshot.'],
@@ -4026,6 +4087,14 @@ function renderTimeline(events, total, task) {
       const mc = rd.metacognition;
       const mcHtml = mc ? `<div class="router-receipt-metacog"><div class="router-receipt-metacog-head"><strong>${escapeHTML(mc.title || '✦ Metacognition Brief')}</strong><span>${escapeHTML(`${mc.tier === 'forged' ? 'LLM Forged' : '0ms Smart'} · ${mc.modelFamily || 'auto'}`)}</span></div>${mc.intentLock ? `<p class="router-receipt-metacog-intent">${escapeHTML(mc.intentLock)}</p>` : ''}${Array.isArray(mc.rubric) && mc.rubric.length ? `<ul class="router-receipt-metacog-rubric">${mc.rubric.slice(0, 4).map(r => `<li>${escapeHTML(r)}</li>`).join('')}</ul>` : ''}</div>` : '';
       messages.push(`<details class="router-receipt" data-disclosure="${escapeHTML(rKey)}" ${openDetails.has(rKey) ? 'open' : ''}><summary><span class="router-receipt-badge">✦ Ultra-Plinian · ${escapeHTML(rd.domainLabel || rd.domain || 'auto')}${mc ? ` · ${mc.tier === 'forged' ? 'Forged' : 'Framed'}` : ''}</span><span class="router-receipt-summary">${escapeHTML(sel.label || rd.selectedId)}</span><span>Bench ${escapeHTML(sel.benchmarkPrior)} · Elo ${escapeHTML(sel.userElo)} · Comp ${escapeHTML(sel.compliance)}%${riskPct >= 40 ? ` · Risk ${riskPct}%` : ''}</span></summary><div class="router-receipt-body">${[sel, ...runners].map((r, idx) => `<div class="router-receipt-row"><strong>#${idx + 1} ${escapeHTML(r.label || r.id)}</strong><span>Score ${escapeHTML(r.totalScore)} · Bench ${escapeHTML(r.benchmarkPrior)} · Elo ${escapeHTML(r.userElo)} · Comp ${escapeHTML(r.compliance)}%</span></div>`).join('')}${mcHtml}</div></details>`);
+    } else if (event.type === 'conclave.completed' && event.data) {
+      flush();
+      const cd = event.data;
+      const cKey = `conclave-done-${event.id ?? event.seq}`;
+      const entries = Array.isArray(cd.entries) ? cd.entries : [];
+      const specNames = (cd.specialists || []).map(s => `${s.sigil || '✦'} ${s.name || s.slug}`).join(' · ');
+      const bbHtml = entries.map(e => `<div class="conclave-bb-entry"><div class="conclave-bb-head"><strong>R${escapeHTML(e.round)} · ${escapeHTML(e.agentName || e.role)}</strong><span class="conclave-bb-kind">${escapeHTML(e.kind || 'finding')} · ${escapeHTML(e.modelLabel || 'Auto')}</span></div><p class="conclave-bb-excerpt">${escapeHTML(String(e.excerpt || '').slice(0, 600))}</p></div>`).join('');
+      messages.push(`<details class="overseer-receipt conclave-verdict-receipt" data-disclosure="${escapeHTML(cKey)}" ${openDetails.has(cKey) ? 'open' : ''}><summary><span aria-hidden="true">✦</span><span class="overseer-receipt-title">Conclave · ${escapeHTML(cd.modeLabel || cd.mode || 'Council')} (${escapeHTML(cd.rounds || 2)} rounds)</span><span>${escapeHTML(specNames || `${entries.length} specialist contributions`)}${cd.durationMs ? ` · ${escapeHTML(duration(cd.durationMs))}` : ''}</span></summary><div class="overseer-receipt-body">${bbHtml || '<p class="field-help">No blackboard notes recorded.</p>'}</div></details>`);
     } else if (event.type === 'subagent.completed' && event.data?.ok && event.data?.summary) {
       flush();
       const sa = event.data;
@@ -4045,7 +4114,7 @@ function renderTimeline(events, total, task) {
       } else {
         messages.push(`<div class="recovery-event"><span aria-hidden="true">✦</span><span><strong>${escapeHTML(description[0])}</strong> ${escapeHTML(description[3])}</span></div>`);
       }
-    } else if (['model.switched', 'providers.updated', 'routing.retry_scheduled', 'routing.strategy_changed', 'routing.profile_changed', 'routing.reframe_retry', 'overseer.judged', 'owner.refusal_reported', 'permission.auto_approved', 'hook.blocked'].includes(event.type)) {
+    } else if (['model.switched', 'providers.updated', 'routing.retry_scheduled', 'routing.strategy_changed', 'routing.profile_changed', 'routing.reframe_retry', 'overseer.judged', 'owner.refusal_reported', 'permission.auto_approved', 'hook.blocked', 'memory.auto_learned', 'skill.created'].includes(event.type)) {
       flush();
       const description = eventDescription(event);
       messages.push(`<div class="recovery-event"><span aria-hidden="true">↻</span><span><strong>${escapeHTML(description[0])}</strong> ${escapeHTML(description[3])}</span></div>`);
@@ -5219,6 +5288,7 @@ async function openLivePreview({ taskId, entry, html, files, title, artifactKey,
           <button type="button" class="live-vp-btn${artifactDockState.viewport === 'mobile' ? ' active' : ''}" data-preview-vp="mobile" aria-pressed="${artifactDockState.viewport === 'mobile'}" title="Mobile (390px)">Mobile</button>
         </div>
         <div class="live-browser-actions">
+          <button type="button" class="button button-quiet live-browser-btn" data-preview-qa title="Run automated Chromium QA check on Desktop &amp; Mobile viewports (console errors, overflow, broken images, a11y)">✦ Auto-QA</button>
           <button type="button" class="button button-quiet live-browser-btn" data-preview-inspect aria-pressed="false" title="Click any element in the preview to reference it in chat">⌖ Inspect</button>
           <button type="button" class="button button-quiet live-browser-btn" data-preview-reload title="Reload preview">↻</button>
           <button type="button" class="button button-quiet live-browser-btn" data-preview-download title="Download standalone file">↓ Save</button>
@@ -5342,6 +5412,49 @@ async function openLivePreview({ taskId, entry, html, files, title, artifactKey,
 
     dock.onclick = event => {
       if (event.target.closest('[data-preview-close]')) { closeArtifactDock({ recordDismiss: true }); return; }
+      const qaBtn = event.target.closest('[data-preview-qa]');
+      if (qaBtn) {
+        const tId = artifactDockState.taskId || selectedId;
+        if (!tId || !session?.url) { toast('Open a task preview to run Auto-QA.'); return; }
+        qaBtn.disabled = true;
+        qaBtn.textContent = '✦ Auditing…';
+        api(`/api/tasks/${encodeURIComponent(tId)}/browser/qa-preview`, {
+          method: 'POST',
+          body: JSON.stringify({ url: session.url }),
+        }).then(report => {
+          const checks = Array.isArray(report.checks) ? report.checks : [];
+          for (const c of checks) {
+            artifactDockState.logs.push({
+              level: c.passed ? 'info' : 'error',
+              message: `${c.passed ? '✓' : '✗'} [Auto-QA] ${c.label}: ${c.detail}`,
+            });
+          }
+          if (artifactDockState.logs.length > 60) artifactDockState.logs = artifactDockState.logs.slice(-60);
+          artifactDockState.consoleOpen = true;
+          consolePane?.classList.remove('hidden');
+          consoleSplitter?.classList.remove('hidden');
+          consoleBtn?.setAttribute('aria-expanded', 'true');
+          renderConsole();
+          const failed = checks.filter(c => !c.passed);
+          if (failed.length) {
+            const summary = `Auto-QA found ${failed.length} issue${failed.length === 1 ? '' : 's'} in ${session.entry || label} (${report.score}%):\n${failed.map(f => `- ${f.label}: ${f.detail}`).join('\n')}\nPlease fix these issues cleanly.`;
+            const input = $('#composer-input');
+            if (input && !input.value.trim()) {
+              input.value = summary;
+              input.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+            toast(`✦ Auto-QA ${report.score}% — ${failed.length} issue${failed.length === 1 ? '' : 's'} logged & staged in composer.`);
+          } else {
+            toast(`✦ Auto-QA 100% PASSED (${checks.length}/${checks.length} checks clean on Desktop & Mobile)!`);
+          }
+        }).catch(err => {
+          toast(err?.message || 'Auto-QA failed.');
+        }).finally(() => {
+          qaBtn.disabled = false;
+          qaBtn.textContent = '✦ Auto-QA';
+        });
+        return;
+      }
       const modeBtn = event.target.closest('[data-artifact-mode]');
       if (modeBtn) {
         artifactDockState.viewMode = modeBtn.dataset.artifactMode;
@@ -6723,6 +6836,34 @@ function renderBenchmark(value, force = false) {
   $('#benchmark-content').innerHTML = html;
 }
 
+async function saveTaskAsSkillAction(task, explicitName = '') {
+  if (!task?.id || stripActionBusy) return;
+  const defaultSlug = String(explicitName || task.title || task.objective || 'saved-workflow')
+    .toLowerCase()
+    .replace(/^✦\s*conclave\s*:\s*/i, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 36) || 'saved-workflow';
+  const chosen = explicitName || window.prompt('Save this run as a reusable slash skill (lowercase letters, digits, - or _):', defaultSlug);
+  if (!chosen || !chosen.trim()) return;
+  stripActionBusy = true;
+  renderTaskMetaStrip(task);
+  try {
+    const res = await api(`/api/tasks/${encodeURIComponent(task.id)}/save-skill`, {
+      method: 'POST',
+      body: JSON.stringify({ name: chosen.trim() }),
+    });
+    await loadSkills(task.id);
+    await refresh();
+    toast(`✦ Saved reusable skill ${res.skill?.command || `/${chosen.trim()}`} — type it in any chat!`);
+  } catch (err) {
+    toast(err?.message || 'Could not save skill.');
+  } finally {
+    stripActionBusy = false;
+    if (selectedData?.task) renderTaskMetaStrip(selectedData.task);
+  }
+}
+
 async function openBenchmark() {
   dismissDrawers();
   setVisible('#benchmark-error', false);
@@ -6936,6 +7077,7 @@ document.addEventListener('click', (event) => {
       }).then(ok => { if (ok) rewindTaskAction(task, 1); });
     }
     else if (task && stripAction.dataset.stripAction === 'fork') forkTaskAction(task);
+    else if (task && stripAction.dataset.stripAction === 'save-skill') saveTaskAsSkillAction(task);
     return;
   }
   const wrapCode = event.target.closest('[data-wrap-code]');

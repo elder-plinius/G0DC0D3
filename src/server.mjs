@@ -247,6 +247,30 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
       if(req.method==='POST' && url.pathname==='/api/conclave/formations')return send(res,201,runtime.saveConclaveFormation(await readBody(req)));
       const formDelMatch = req.method === 'DELETE' && url.pathname.match(/^\/api\/conclave\/formations\/([^/]+)$/);
       if (formDelMatch) return send(res, 200, runtime.deleteConclaveFormation(decodeURIComponent(formDelMatch[1])));
+      if(req.method==='POST' && url.pathname==='/api/conclave/run') {
+        const body = await readBody(req);
+        let taskId = typeof body.taskId === 'string' && body.taskId.trim() ? body.taskId.trim() : null;
+        let recordUserMessage = true;
+        if (!taskId) {
+          const requestedIds = Array.isArray(body.providerIds) && body.providerIds.length
+            ? body.providerIds
+            : [...providers.values()].filter(p => p.available !== false && p.kind !== 'scripted').map(p => p.id);
+          const fallbackIds = requestedIds.length ? requestedIds : [...providers.values()].filter(p => p.available !== false).map(p => p.id);
+          if (!fallbackIds.length) throw Object.assign(new Error('Connect at least one AI provider in Settings → Models before launching a Conclave.'), { code: 'NO_PROVIDER', status: 400 });
+          await loadSelected(fallbackIds);
+          const cleanMission = String(body.mission || '').trim();
+          const title = (body.formationName ? `${body.formationName}: ` : '✦ Conclave: ') + (cleanMission.slice(0, 56) || 'Multi-Agent Mission');
+          const created = await createConversationTask(runtime, dataDir, {
+            title,
+            objective: `✦ Conclave (${body.mode || 'parallel'}): ${cleanMission}`,
+            providerIds: fallbackIds.slice(0, 6),
+          });
+          taskId = created.id;
+          recordUserMessage = false;
+        }
+        const started = runtime.startConclaveRun(taskId, body, { recordUserMessage });
+        return send(res, 202, { ok: true, task: publicTask(started.task, runtime), mode: started.mode, agents: started.agents, conclave: runtime.getConclaveState(taskId) });
+      }
       if(req.method==='DELETE' && url.pathname==='/api/router/reset') {
         await readBody(req).catch(()=>({}));
         runtime.resetRouter();
@@ -780,7 +804,7 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
         res.on('error', cleanup);
         return;
       }
-      const conclaveMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/conclave(?:\/(steer))?$/);
+      const conclaveMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/conclave(?:\/(steer|run))?$/);
       if (conclaveMatch) {
         const id = decodeURIComponent(conclaveMatch[1]);
         const subAction = conclaveMatch[2] || '';
@@ -792,6 +816,11 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
           const body = await readBody(req);
           const result = await runtime.queueWorkerSteer(id, body.workerId || 'orchestrator', body.message || '');
           return send(res, 200, { ...result, conclave: runtime.getConclaveState(id) });
+        }
+        if (req.method === 'POST' && subAction === 'run') {
+          const body = await readBody(req);
+          const started = runtime.startConclaveRun(id, body, { recordUserMessage: true });
+          return send(res, 202, { ok: true, task: publicTask(started.task, runtime), mode: started.mode, agents: started.agents, conclave: runtime.getConclaveState(id) });
         }
       }
       const crewMatch=url.pathname.match(/^\/api\/tasks\/([^/]+)\/crew(?:\/(pause|cancel|resume|inspect|candidate|apply))?$/);
@@ -831,13 +860,36 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
         res.end(frame.buffer);
         return;
       }
-      const browserCtrlMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/browser\/(status|mode|screencast|close)$/);
+      const browserCtrlMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/browser\/(status|mode|screencast|close|takeover|interact|grounding|qa-preview)$/);
       if (browserCtrlMatch) {
         const taskId = decodeURIComponent(browserCtrlMatch[1]);
         const sub = browserCtrlMatch[2];
         runtime.getTask(taskId);
         if (req.method === 'GET' && sub === 'status') {
           return send(res, 200, runtime.broker.browser.getStatus(taskId));
+        }
+        if (req.method === 'GET' && sub === 'grounding') {
+          return send(res, 200, await runtime.broker.browser.getGrounding(taskId));
+        }
+        if (req.method === 'POST' && sub === 'takeover') {
+          const body = await readBody(req);
+          const status = runtime.broker.browser.setTakeover(taskId, Boolean(body.active));
+          return send(res, 200, status);
+        }
+        if (req.method === 'POST' && sub === 'interact') {
+          const body = await readBody(req);
+          const result = await runtime.broker.browser.interact(taskId, body, runtime.outboundOptions());
+          return send(res, 200, result);
+        }
+        if (req.method === 'POST' && sub === 'qa-preview') {
+          const body = await readBody(req);
+          const rawUrl = String(body.url || '').trim();
+          const parsed = new URL(rawUrl, `http://${expectedHost}`);
+          if (!hosts.has(parsed.host) || !parsed.pathname.startsWith('/preview/')) {
+            throw Object.assign(new Error('Auto-QA only accepts local /preview/<token>/ URLs on this server.'), { status: 400, code: 'INVALID_QA_URL' });
+          }
+          const report = await runtime.broker.browser.runPreviewQa(taskId, parsed.toString(), runtime.outboundOptions());
+          return send(res, 200, report);
         }
         if (req.method === 'POST' && sub === 'mode') {
           const body = await readBody(req);
@@ -859,7 +911,7 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
           return send(res, 200, runtime.broker.browser.getStatus(taskId));
         }
       }
-      const match=url.pathname.match(/^\/api\/tasks\/([^/]+)(?:\/(run|pause|resume|cancel|accept|report-refusal|overseer-consult|policy|providers|answer-race|message|export|patch|execution|checks|persona|effort|prompt|apply-preview|apply-source|inspect-apply|undo-apply|source-backup|hunk|generation|rewind|plan-mode|compact|checkpoints|permissions|approval|fork|transcript|commit|title))?$/);
+      const match=url.pathname.match(/^\/api\/tasks\/([^/]+)(?:\/(run|pause|resume|cancel|accept|report-refusal|overseer-consult|save-skill|policy|providers|answer-race|message|export|patch|execution|checks|persona|effort|prompt|apply-preview|apply-source|inspect-apply|undo-apply|source-backup|hunk|generation|rewind|plan-mode|compact|checkpoints|permissions|approval|fork|transcript|commit|title))?$/);
       if(match) {
         const [,id,action]=match;
         if(mutation&&runtime.getTask(id).crewMember)throw Object.assign(new Error('Control crew workers through their parent conversation.'),{code:'CREW_MEMBER'});
@@ -1067,6 +1119,11 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
           const body=await readBody(req);
           const result=await runtime.consultOverseer(id,{question:body.question||''});
           return send(res,200,{ok:true,advice:result.advice,task:publicTask(result.task,runtime)});
+        }
+        if(req.method==='POST'&&action==='save-skill') {
+          const body=await readBody(req);
+          const result=await runtime.saveTaskAsSkill(id,{name:body.name||'',description:body.description||'',mode:body.mode||null});
+          return send(res,201,result);
         }
         if(req.method==='POST'&&['run','pause','resume','cancel','accept'].includes(action)) {
           await readBody(req);

@@ -10,6 +10,10 @@
   let recentActions = [];
   let consoleOpen = false;
   let modeBusy = false;
+  let groundingOn = false;
+  let groundingElements = [];
+  let groundingViewport = { width: 1280, height: 800 };
+  let lastDrawBox = null; // { ox, oy, drawW, drawH, vpW, vpH }
 
   // Live frame & reticle animation state
   let currentImg = null;
@@ -63,6 +67,8 @@
         </div>
         <div class="bl-header-actions">
           <span class="bl-mode-chip" id="bl-mode-chip">Standby</span>
+          <button type="button" class="button button-secondary bl-takeover-btn hidden" id="bl-takeover-toggle" title="Pause agent browser actions and take direct control (for logins, 2FA, or manual clicks)">✋ Take Over</button>
+          <button type="button" class="button button-quiet bl-grounding-btn hidden" id="bl-grounding-toggle" aria-pressed="false" title="Show numbered visual element grounding boxes">◎ Ground</button>
           <button type="button" class="button button-secondary bl-mode-btn" id="bl-mode-toggle" title="Switch between headless mirror and visible Chromium window">↗ Pop Out</button>
           <button type="button" class="icon-button" id="bl-expand" title="Expand or restore browser mirror" aria-label="Expand browser mirror" aria-pressed="false">⤢</button>
           <button type="button" class="icon-button" id="bl-close" title="Close live browser panel" aria-label="Close live browser panel">×</button>
@@ -73,6 +79,10 @@
         <code class="bl-url-text" id="bl-url-text">about:blank</code>
         <button type="button" class="button button-quiet bl-console-btn hidden" id="bl-console-toggle" title="Toggle browser console &amp; network log">0 logs</button>
         <button type="button" class="button button-quiet bl-stop-btn hidden" id="bl-stop-session" title="Close contained browser session">Stop</button>
+      </div>
+      <div class="bl-takeover-banner hidden" id="bl-takeover-banner">
+        <span>✋ <strong>Human Control Active</strong> — click or type directly on the viewport below (or pop out) for logins &amp; 2FA. Agent waits until resumed.</span>
+        <button type="button" class="button button-primary" id="bl-resume-agent">▶ Resume Agent</button>
       </div>
       <div class="bl-window-banner hidden" id="bl-window-banner">
         <span>Visible Chromium window is open — click directly inside it for logins, 2FA, or 60fps interaction.</span>
@@ -99,12 +109,40 @@
       if (e.target.closest('#bl-close')) { close(); return; }
       if (e.target.closest('#bl-expand')) { toggleExpand(); return; }
       if (e.target.closest('#bl-mode-toggle')) { toggleWindowMode(); return; }
+      if (e.target.closest('#bl-takeover-toggle')) { setTakeover(!statusData?.takeover); return; }
+      if (e.target.closest('#bl-resume-agent')) { setTakeover(false); return; }
+      if (e.target.closest('#bl-grounding-toggle')) { toggleGrounding(); return; }
       if (e.target.closest('#bl-return-headless')) { setWindowMode(false); return; }
       if (e.target.closest('#bl-empty-mode-btn')) { toggleDefaultVisibleWindow(); return; }
       if (e.target.closest('#bl-stop-session')) { stopSession(); return; }
       if (e.target.closest('#bl-console-toggle')) {
         consoleOpen = !consoleOpen;
         renderConsole();
+      }
+    });
+
+    const canvasEl = dock.querySelector('#browser-live-canvas');
+    canvasEl?.addEventListener('click', (e) => {
+      if (!statusData?.active || !statusData?.takeover || !lastDrawBox || !currentTaskId) return;
+      const rect = canvasEl.getBoundingClientRect();
+      const cx = e.clientX - rect.left;
+      const cy = e.clientY - rect.top;
+      const { ox, oy, drawW, drawH, vpW, vpH } = lastDrawBox;
+      if (cx < ox || cx > ox + drawW || cy < oy || cy > oy + drawH) return;
+      const vx = Math.round(((cx - ox) / drawW) * vpW);
+      const vy = Math.round(((cy - oy) / drawH) * vpH);
+      sendInteraction({ kind: 'click', x: vx, y: vy });
+    });
+    canvasEl?.setAttribute('tabindex', '0');
+    canvasEl?.addEventListener('keydown', (e) => {
+      if (!statusData?.active || !statusData?.takeover || !currentTaskId) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (['Enter', 'Tab', 'Backspace', 'Escape'].includes(e.key)) {
+        e.preventDefault();
+        sendInteraction({ kind: 'key', key: e.key });
+      } else if (e.key.length === 1) {
+        e.preventDefault();
+        sendInteraction({ kind: 'type', text: e.key });
       }
     });
 
@@ -192,6 +230,23 @@
       emptyModeBtn.textContent = browserSettings?.visibleWindow
         ? 'Visible Window Default: ON (Switch to Headless)'
         : 'Enable Visible Window by Default';
+    }
+
+    const takeoverBtn = document.getElementById('bl-takeover-toggle');
+    const takeoverBanner = document.getElementById('bl-takeover-banner');
+    const isTakeover = Boolean(active && statusData?.takeover);
+    if (takeoverBtn) {
+      takeoverBtn.classList.toggle('hidden', !active);
+      takeoverBtn.classList.toggle('is-active', isTakeover);
+      takeoverBtn.textContent = isTakeover ? '▶ Resume Agent' : '✋ Take Over';
+    }
+    if (takeoverBanner) takeoverBanner.classList.toggle('hidden', !isTakeover);
+
+    const groundBtn = document.getElementById('bl-grounding-toggle');
+    if (groundBtn) {
+      groundBtn.classList.toggle('hidden', !active);
+      groundBtn.classList.toggle('active', groundingOn);
+      groundBtn.setAttribute('aria-pressed', String(groundingOn));
     }
 
     const banner = document.getElementById('bl-window-banner');
@@ -312,12 +367,39 @@
     const drawH = currentImg.naturalHeight * scale;
     const ox = (w - drawW) / 2;
     const oy = (h - drawH) / 2;
+    const vpWNow = statusData?.viewport?.width || currentImg.naturalWidth || 1280;
+    const vpHNow = statusData?.viewport?.height || currentImg.naturalHeight || 800;
+    lastDrawBox = { ox, oy, drawW, drawH, vpW: vpWNow, vpH: vpHNow };
 
     ctx.save();
     ctx.drawImage(currentImg, ox, oy, drawW, drawH);
     ctx.strokeStyle = pal.line;
     ctx.lineWidth = 1;
     ctx.strokeRect(ox + 0.5, oy + 0.5, drawW - 1, drawH - 1);
+
+    // Visual Element Grounding numbered bounding boxes (Live Browser 2.0)
+    if (groundingOn && groundingElements.length) {
+      const gW = groundingViewport?.width || vpWNow;
+      const gH = groundingViewport?.height || vpHNow;
+      ctx.font = '700 9px ui-monospace, SFMono-Regular, monospace';
+      for (const el of groundingElements) {
+        const bx = ox + (el.x / gW) * drawW;
+        const by = oy + (el.y / gH) * drawH;
+        const bw = Math.max(4, (el.w / gW) * drawW);
+        const bh = Math.max(4, (el.h / gH) * drawH);
+        ctx.strokeStyle = pal.violet;
+        ctx.lineWidth = 1.25;
+        ctx.strokeRect(bx, by, bw, bh);
+        const badge = `#${el.id}`;
+        const tw = ctx.measureText(badge).width + 6;
+        ctx.fillStyle = pal.violet;
+        ctx.fillRect(bx, Math.max(oy, by - 13), tw, 13);
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(badge, bx + 3, Math.max(oy, by - 13) + 6.5);
+      }
+    }
 
     // Animated agent cursor + click-ripple reticle
     if (reticle && Number.isFinite(reticle.x) && Number.isFinite(reticle.y)) {
@@ -525,6 +607,65 @@
     return setWindowMode(!curVisible);
   }
 
+  async function setTakeover(active) {
+    const taskId = currentTaskId;
+    if (!taskId) return;
+    try {
+      const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/browser/takeover`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-g0d-request': '1' },
+        body: JSON.stringify({ active: Boolean(active) }),
+      });
+      if (!res.ok) return;
+      statusData = await res.json();
+      renderUI();
+      if (active) {
+        document.getElementById('browser-live-canvas')?.focus?.();
+        if (typeof window.toast === 'function') window.toast('✋ Human takeover active — agent paused until you click Resume Agent.');
+      } else {
+        if (typeof window.toast === 'function') window.toast('▶ Agent resumed browser control.');
+      }
+    } catch {}
+  }
+
+  async function sendInteraction(payload) {
+    const taskId = currentTaskId;
+    if (!taskId) return;
+    try {
+      const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/browser/interact`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-g0d-request': '1' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) return;
+      const json = await res.json();
+      if (json.status) statusData = json.status;
+      fetchFrame(`/api/tasks/${encodeURIComponent(taskId)}/browser/frame?v=${Date.now()}`, Date.now(), taskId);
+      if (groundingOn) void refreshGrounding();
+    } catch {}
+  }
+
+  async function refreshGrounding() {
+    const taskId = currentTaskId;
+    if (!taskId || !groundingOn) return;
+    try {
+      const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/browser/grounding`);
+      if (!res.ok) return;
+      const json = await res.json();
+      if (taskId !== currentTaskId) return;
+      groundingElements = Array.isArray(json.elements) ? json.elements : [];
+      if (json.viewport) groundingViewport = json.viewport;
+      drawCanvas();
+    } catch {}
+  }
+
+  function toggleGrounding() {
+    groundingOn = !groundingOn;
+    if (groundingOn) void refreshGrounding();
+    else { groundingElements = []; drawCanvas(); }
+    renderUI();
+  }
+
   async function stopSession() {
     const taskId = currentTaskId;
     if (!taskId) return;
@@ -669,6 +810,8 @@
     loadStatus,
     setWindowMode,
     toggleWindowMode,
+    setTakeover,
+    toggleGrounding,
     stopSession,
     isOpen: () => isOpenState,
     getStatus: () => statusData,

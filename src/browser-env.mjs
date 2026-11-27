@@ -1109,6 +1109,7 @@ export class BrowserPool {
     this.transitions = new Map();
     this.sessionVisibleOverrides = new Map();
     this.screencastWatchers = new Set();
+    this.takeoverGates = new Map();
     this.getSettings = typeof getSettings === 'function' ? getSettings : (() => DEFAULT_BROWSER_SETTINGS);
     this.onEvent = typeof onEvent === 'function' ? onEvent : null;
     this.forceHeadless = Boolean(forceHeadless);
@@ -1244,7 +1245,202 @@ export class BrowserPool {
       frameSeq: active ? session.frameSeq : 0,
       lastAction: active ? session.lastAction : null,
       consoleErrors: active ? session.consoleLogs.slice(-15) : [],
+      takeover: Boolean(this.takeoverGates.get(taskId)?.active),
       settings,
+    };
+  }
+
+  async _waitIfTakeover(taskId) {
+    const gate = this.takeoverGates.get(taskId);
+    if (gate?.active && gate.promise) {
+      await gate.promise;
+    }
+  }
+
+  setTakeover(taskId, active) {
+    const want = Boolean(active);
+    const existing = this.takeoverGates.get(taskId);
+    if (want) {
+      if (!existing?.active) {
+        let resolve;
+        const promise = new Promise(r => { resolve = r; });
+        this.takeoverGates.set(taskId, { active: true, promise, resolve });
+      }
+    } else if (existing) {
+      existing.active = false;
+      this.takeoverGates.delete(taskId);
+      try { existing.resolve?.(); } catch {}
+    }
+    const status = this.getStatus(taskId);
+    if (this.onEvent) {
+      try { this.onEvent({ type: 'browser.status', taskId, ...status }); } catch {}
+    }
+    return status;
+  }
+
+  async interact(taskId, action = {}, outboundOpts = {}) {
+    await this._waitTransition(taskId);
+    const session = this.sessions.get(taskId);
+    if (!this._isLive(session)) throw fault('BROWSER_NOT_OPEN', 'No contained browser session is open for this task.');
+    session.touch();
+    const kind = String(action.kind || '').toLowerCase();
+    if (kind === 'click') {
+      const x = Math.max(0, Math.round(Number(action.x) || 0));
+      const y = Math.max(0, Math.round(Number(action.y) || 0));
+      await session.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none', clickCount: 0 });
+      await session.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
+      await session.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
+      await new Promise(r => setTimeout(r, 120));
+      await session.captureScreenshot().catch(() => {});
+      return { ok: true, kind: 'click', x, y, status: this.getStatus(taskId) };
+    }
+    if (kind === 'type') {
+      const text = String(action.text || '').slice(0, 1000);
+      if (text) await session.send('Input.insertText', { text });
+      await new Promise(r => setTimeout(r, 80));
+      await session.captureScreenshot().catch(() => {});
+      return { ok: true, kind: 'type', length: text.length, status: this.getStatus(taskId) };
+    }
+    if (kind === 'key') {
+      const key = String(action.key || 'Enter').slice(0, 32);
+      const code = key === 'Enter' ? '\r' : key === 'Tab' ? '\t' : key === 'Backspace' ? '\b' : '';
+      await session.send('Input.dispatchKeyEvent', { type: 'keyDown', key, ...(code ? { text: code } : {}) });
+      await session.send('Input.dispatchKeyEvent', { type: 'keyUp', key });
+      await new Promise(r => setTimeout(r, 80));
+      await session.captureScreenshot().catch(() => {});
+      return { ok: true, kind: 'key', key, status: this.getStatus(taskId) };
+    }
+    if (kind === 'scroll') {
+      const x = Math.max(0, Math.round(Number(action.x) || 640));
+      const y = Math.max(0, Math.round(Number(action.y) || 400));
+      const deltaY = Math.max(-1600, Math.min(1600, Math.round(Number(action.deltaY) || 240)));
+      await session.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x, y, deltaX: 0, deltaY });
+      await new Promise(r => setTimeout(r, 120));
+      await session.captureScreenshot().catch(() => {});
+      return { ok: true, kind: 'scroll', deltaY, status: this.getStatus(taskId) };
+    }
+    if (kind === 'navigate' && typeof action.url === 'string') {
+      assertBrowserUrlAllowed(action.url, outboundOpts);
+      await session.open({ url: action.url, waitMs: 300 }, outboundOpts);
+      return { ok: true, kind: 'navigate', url: session.lastUrl, status: this.getStatus(taskId) };
+    }
+    throw fault('INVALID_INTERACT', 'Unsupported browser interaction kind.');
+  }
+
+  async getGrounding(taskId) {
+    await this._waitTransition(taskId);
+    const session = this.sessions.get(taskId);
+    if (!this._isLive(session)) return { ok: true, active: false, elements: [], viewport: { width: 1280, height: 800 } };
+    session.touch();
+    const expr = `(() => {
+      const sel = 'a[href],button,input,select,textarea,[role="button"],[role="link"],[tabindex]:not([tabindex="-1"])';
+      const nodes = [...document.querySelectorAll(sel)];
+      const out = [];
+      for (const el of nodes) {
+        if (out.length >= 40) break;
+        const r = el.getBoundingClientRect();
+        if (r.width < 6 || r.height < 6) continue;
+        if (r.bottom < 0 || r.right < 0 || r.top > window.innerHeight || r.left > window.innerWidth) continue;
+        const cs = getComputedStyle(el);
+        if (cs.visibility === 'hidden' || cs.display === 'none' || Number(cs.opacity) === 0) continue;
+        const label = (el.innerText || el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('title') || el.name || el.id || el.tagName).replace(/\\s+/g, ' ').trim().slice(0, 48);
+        out.push({ id: out.length + 1, tag: el.tagName.toLowerCase(), label, x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) });
+      }
+      return { elements: out, viewport: { width: window.innerWidth, height: window.innerHeight } };
+    })()`;
+    try {
+      const evalRes = await session.send('Runtime.evaluate', { expression: expr, returnByValue: true }, 4000);
+      const val = evalRes?.result?.value || { elements: [], viewport: session.viewport };
+      return { ok: true, active: true, elements: Array.isArray(val.elements) ? val.elements : [], viewport: val.viewport || session.viewport };
+    } catch {
+      return { ok: true, active: true, elements: [], viewport: session.viewport };
+    }
+  }
+
+  async runPreviewQa(taskId, previewUrl, outboundOpts = {}) {
+    assertBrowserUrlAllowed(previewUrl, outboundOpts);
+    const session = await this._getOrCreate(taskId, { width: 1280, height: 800 });
+    session.consoleLogs = [];
+    await session.open({ url: previewUrl, waitMs: 500 }, outboundOpts);
+    const probeExpr = `(() => {
+      const textLen = (document.body?.innerText || '').trim().length;
+      const canvasCount = document.querySelectorAll('canvas,svg').length;
+      const brokenImgs = [...document.querySelectorAll('img')].filter(i => i.complete && i.naturalWidth === 0).map(i => i.getAttribute('src') || 'img');
+      const interactive = [...document.querySelectorAll('button,a[href],input,select,textarea,[role="button"]')];
+      const unlabeledButtons = [...document.querySelectorAll('button')].filter(b => !(b.innerText || b.getAttribute('aria-label') || b.getAttribute('title') || '').trim()).length;
+      const overflowPx = Math.max(0, Math.round(document.documentElement.scrollWidth - window.innerWidth));
+      return {
+        title: document.title || '',
+        textLen,
+        canvasCount,
+        brokenImgs: brokenImgs.slice(0, 8),
+        interactiveCount: interactive.length,
+        unlabeledButtons,
+        overflowPx,
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+      };
+    })()`;
+
+    const desktopEval = await session.send('Runtime.evaluate', { expression: probeExpr, returnByValue: true }, 5000);
+    const desktop = desktopEval?.result?.value || {};
+    const shot = await session.captureScreenshot().catch(() => null);
+
+    // Responsive check at mobile 390x844
+    await session.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true }).catch(() => {});
+    await new Promise(r => setTimeout(r, 150));
+    const mobileEval = await session.send('Runtime.evaluate', { expression: probeExpr, returnByValue: true }, 4000);
+    const mobile = mobileEval?.result?.value || {};
+    await session.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false }).catch(() => {});
+
+    const consoleErrors = (session.consoleLogs || []).filter(l => l.level === 'error' || l.level === 'network');
+    const checks = [
+      {
+        id: 'render_non_empty',
+        label: 'Non-empty render',
+        passed: (desktop.textLen || 0) > 0 || (desktop.canvasCount || 0) > 0,
+        detail: `${desktop.textLen || 0} chars · ${desktop.canvasCount || 0} canvas/svg`,
+      },
+      {
+        id: 'zero_runtime_errors',
+        label: 'Zero console/network errors',
+        passed: consoleErrors.length === 0,
+        detail: consoleErrors.length ? consoleErrors.slice(0, 3).map(e => e.message).join(' | ') : 'Clean console',
+      },
+      {
+        id: 'no_broken_images',
+        label: 'No broken images',
+        passed: !Array.isArray(desktop.brokenImgs) || desktop.brokenImgs.length === 0,
+        detail: desktop.brokenImgs?.length ? `Broken: ${desktop.brokenImgs.join(', ')}` : 'All images loaded',
+      },
+      {
+        id: 'desktop_no_overflow',
+        label: 'Desktop layout (1280px)',
+        passed: (desktop.overflowPx || 0) <= 4,
+        detail: (desktop.overflowPx || 0) > 4 ? `Horizontal overflow: +${desktop.overflowPx}px` : 'No horizontal overflow',
+      },
+      {
+        id: 'mobile_no_overflow',
+        label: 'Mobile layout (390px)',
+        passed: (mobile.overflowPx || 0) <= 8,
+        detail: (mobile.overflowPx || 0) > 8 ? `Horizontal overflow: +${mobile.overflowPx}px` : 'Responsive cleanly',
+      },
+      {
+        id: 'accessible_buttons',
+        label: 'Accessible controls',
+        passed: (desktop.unlabeledButtons || 0) === 0,
+        detail: desktop.unlabeledButtons ? `${desktop.unlabeledButtons} unlabeled <button> element(s)` : `${desktop.interactiveCount || 0} interactive elements verified`,
+      },
+    ];
+    const passCount = checks.filter(c => c.passed).length;
+    const score = Math.round((passCount / checks.length) * 100);
+    return {
+      ok: true,
+      passed: passCount === checks.length,
+      score,
+      checks,
+      consoleErrors: consoleErrors.slice(0, 10),
+      screenshotUrl: shot?.screenshotUrl || null,
+      summary: `Auto-QA ${passCount}/${checks.length} checks passed (${score}%).`,
     };
   }
 
@@ -1324,6 +1520,7 @@ export class BrowserPool {
   }
 
   async open(taskId, args, outboundOpts) {
+    await this._waitIfTakeover(taskId);
     // Validate URL before even launching a browser process!
     assertBrowserUrlAllowed(args?.url, outboundOpts);
     const session = await this._getOrCreate(taskId, args?.viewport);
@@ -1331,6 +1528,7 @@ export class BrowserPool {
   }
 
   async snapshot(taskId, args) {
+    await this._waitIfTakeover(taskId);
     await this._waitTransition(taskId);
     const session = this.sessions.get(taskId);
     if (!this._isLive(session)) throw fault('BROWSER_NOT_OPEN', 'No contained browser session is open for this task. Call browser.open first.');
@@ -1344,6 +1542,7 @@ export class BrowserPool {
   }
 
   async act(taskId, args, outboundOpts) {
+    await this._waitIfTakeover(taskId);
     await this._waitTransition(taskId);
     const session = this.sessions.get(taskId);
     if (!this._isLive(session)) throw fault('BROWSER_NOT_OPEN', 'No contained browser session is open for this task. Call browser.open first.');
@@ -1351,6 +1550,7 @@ export class BrowserPool {
   }
 
   async screenshot(taskId, args) {
+    await this._waitIfTakeover(taskId);
     await this._waitTransition(taskId);
     const session = this.sessions.get(taskId);
     if (!this._isLive(session)) throw fault('BROWSER_NOT_OPEN', 'No contained browser session is open for this task. Call browser.open first.');
@@ -1367,6 +1567,7 @@ export class BrowserPool {
   }
 
   async evaluate(taskId, args) {
+    await this._waitIfTakeover(taskId);
     await this._waitTransition(taskId);
     const session = this.sessions.get(taskId);
     if (!this._isLive(session)) throw fault('BROWSER_NOT_OPEN', 'No contained browser session is open for this task. Call browser.open first.');
@@ -1375,6 +1576,12 @@ export class BrowserPool {
 
   closeSession(taskId, { resetPreferences = false } = {}) {
     return this._serialize(taskId, async () => {
+      const gate = this.takeoverGates.get(taskId);
+      if (gate) {
+        gate.active = false;
+        this.takeoverGates.delete(taskId);
+        try { gate.resolve?.(); } catch {}
+      }
       if (resetPreferences) {
         this.sessionVisibleOverrides.delete(taskId);
         this.screencastWatchers.delete(taskId);

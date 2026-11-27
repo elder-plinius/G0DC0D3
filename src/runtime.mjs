@@ -64,6 +64,7 @@ import {
   slugifyAgent,
   STARTER_FORMATIONS
 } from './conclave-roster.mjs';
+import { normalizeConclaveRunInput, runConclaveSession } from './conclave-engine.mjs';
 import { validateExecution, validateChecks } from './runner.mjs';
 import { SourceChanges } from './source-changes.mjs';
 import { CrewController } from './crew.mjs';
@@ -71,6 +72,8 @@ import { replyOutcome } from './outcomes.mjs';
 import { reframe as reframeObjective, rewritePrompt } from './reframe.mjs';
 import { gitAutoCommit, gitCheckpoints, gitCommit, gitDiffSummary, gitRewind, hasGit } from './git.mjs';
 import { MemoryStore } from './memory.mjs';
+import { distillTaskToSkill, extractEpisodicMemories } from './brain.mjs';
+import { saveUserSkill } from './skills.mjs';
 import { validatePermissionRules, evaluatePermission, derivePatternRule, assessToolRisk, insertTaskAllowRule, DEFAULT_SAFE_PRESET, PERMISSION_PRESETS } from './permissions.mjs';
 import { discoverHooks, runLifecycleHooks } from './hooks.mjs';
 import {
@@ -704,6 +707,7 @@ export class Runtime {
     this.activeSubagents = new Map();
     this._workerSteers = new Map();
     this._liveTurn = new Map();
+    this._conclaveRuns = new Map();
     this.cron = new CronScheduler({
       store: this.store,
       tickMs: schedulerTickMs,
@@ -804,6 +808,35 @@ export class Runtime {
     if (!list?.length) return [];
     this._workerSteers.delete(key);
     return list;
+  }
+  startConclaveRun(taskId, input = {}, { recordUserMessage = true } = {}) {
+    if (this.closed) throw fault('RUNTIME_CLOSED', 'Runtime is closed.');
+    const task = this.getTask(taskId);
+    if (task.crewMember) throw fault('CREW_MEMBER', 'Control crew workers through their parent conversation.');
+    if (this.runs.has(taskId) || active.has(task.status)) {
+      throw Object.assign(new Error('This task is already running — wait for it to finish or pause it before launching a new Conclave.'), { code: 'TASK_BUSY', status: 409 });
+    }
+    if (task.status === 'cancelled') throw fault('TASK_TERMINAL', 'Cancelled tasks cannot run a Conclave.');
+    const normalized = normalizeConclaveRunInput(input);
+    const controller = new AbortController();
+    const entry = { controller, promise: null };
+    this.runs.set(taskId, entry);
+    entry.promise = runConclaveSession({
+      runtime: this,
+      taskId,
+      mission: normalized.mission,
+      agents: normalized.agents,
+      mode: normalized.mode,
+      formationName: normalized.formationName,
+      recordUserMessage,
+      signal: controller.signal,
+    }).catch(err => {
+      if (err?.code !== 'cancelled') process.stderr.write(`Conclave ${taskId}: ${err?.message || err}\n`);
+      return null;
+    }).finally(() => {
+      if (this.runs.get(taskId) === entry) this.runs.delete(taskId);
+    });
+    return { task: this.getTask(taskId), promise: entry.promise, ...normalized };
   }
   async _executeAgentSpawn(id, epoch, call, signal) {
     validateTool('agent.spawn', call.args || {});
@@ -1118,11 +1151,51 @@ export class Runtime {
       }
     }
 
+    // Surface Conclave 2.0 multi-round session & Shared Blackboard (live or most recent persisted)
+    let conclaveSession = null;
+    const liveConclave = this._conclaveRuns.get(taskId);
+    if (liveConclave) {
+      conclaveSession = {
+        runId: liveConclave.runId,
+        mode: liveConclave.mode,
+        modeLabel: liveConclave.modeLabel,
+        formationName: liveConclave.formationName || null,
+        round: liveConclave.round,
+        totalRounds: liveConclave.totalRounds,
+        phase: liveConclave.phase,
+        active: true,
+        specialists: liveConclave.specialists,
+        blackboard: liveConclave.blackboard.map(e => ({
+          id: e.id, round: e.round, roundLabel: e.roundLabel, role: e.role,
+          agentName: e.agentName, sigil: e.sigil, modelLabel: e.modelLabel,
+          kind: e.kind, ok: e.ok, excerpt: String(e.content || '').slice(0, 1200), durationMs: e.durationMs,
+        })),
+      };
+    } else {
+      const lastDone = [...events].reverse().find(e => e.type === 'conclave.completed');
+      if (lastDone?.data) {
+        conclaveSession = {
+          runId: lastDone.data.conclaveRunId || null,
+          mode: lastDone.data.mode || 'parallel',
+          modeLabel: lastDone.data.modeLabel || 'Conclave',
+          formationName: lastDone.data.formationName || null,
+          round: lastDone.data.rounds || 2,
+          totalRounds: lastDone.data.rounds || 2,
+          phase: 'Completed',
+          active: false,
+          durationMs: lastDone.data.durationMs || 0,
+          specialists: Array.isArray(lastDone.data.specialists) ? lastDone.data.specialists : [],
+          blackboard: Array.isArray(lastDone.data.entries) ? lastDone.data.entries : [],
+        };
+      }
+    }
+
     return {
       taskId: task.id,
       title: task.title,
       status: task.status,
       mode,
+      conclaveSession,
       orchestrator: {
         providerId: task.providerId,
         modelLabel: providerLabel(task.providerId) || 'Orchestrator',
@@ -1243,6 +1316,47 @@ export class Runtime {
     try { return this.memory.relevantForTask(task, { limit: 6, maxChars: 1800 }); }
     catch { return []; }
   }
+  autoLearnFromTask(id) {
+    if (this.closed) return { learned: 0, titles: [] };
+    const privacy = this.getPrivacy().settings || {};
+    if (privacy.ephemeralSession === true) return { learned: 0, titles: [], skipped: 'ephemeral' };
+    const task = this.getTask(id);
+    if (!task || task.fixtureId || task.crewMember || task.status !== 'completed') return { learned: 0, titles: [] };
+    const events = this.getEvents(id);
+    const items = extractEpisodicMemories(task, events, { extraSecrets: this.outboundSecrets?.() });
+    if (!items.length) return { learned: 0, titles: [] };
+    const savedTitles = [];
+    for (const item of items) {
+      try {
+        const res = this.memory.saveMemory(item);
+        if (res?.memory?.title) savedTitles.push(res.memory.title);
+      } catch {}
+    }
+    if (!savedTitles.length) return { learned: 0, titles: [] };
+    try { this.memory.syncMarkdown(); } catch {}
+    this.store.appendEvent(id, 'memory.auto_learned', { count: savedTitles.length, titles: savedTitles, source: 'brain_v2' });
+    return { learned: savedTitles.length, titles: savedTitles };
+  }
+  async saveTaskAsSkill(id, { name = '', description = '', mode = null } = {}) {
+    if (this.closed) throw fault('RUNTIME_CLOSED', 'Runtime is closed.');
+    const privacy = this.getPrivacy().settings || {};
+    if (privacy.ephemeralSession === true) {
+      throw Object.assign(new Error('Persistent skills cannot be saved during an Ephemeral (Burn Bag) engagement.'), { code: 'EPHEMERAL_SESSION', status: 403 });
+    }
+    const task = this.getTask(id);
+    const events = this.getEvents(id);
+    const draft = distillTaskToSkill({
+      task,
+      events,
+      name,
+      description,
+      mode,
+      extraSecrets: this.outboundSecrets?.(),
+    });
+    const skill = await saveUserSkill(this.store.dataDir, draft);
+    this.store.appendEvent(id, 'skill.created', { name: skill.name, command: skill.command, description: skill.description, source: 'owner' });
+    return { ok: true, skill };
+  }
   _effectivePermissionRules(task) {
     if (Array.isArray(task.permissionRules)) return task.permissionRules;
     if (task.fixtureId || task.crewMember) return [];
@@ -1320,7 +1434,11 @@ export class Runtime {
         buildContext({ task: proposed, provider: deferredProvider, history: this.getRecentEvents(id), totalHistoryCount: current.eventSeq + 2, files: snapshot.files, snapshotHash: snapshot.snapshotHash, learning: this.getLearning(), memories: this._memoriesForTask(proposed), transparency: current.fixtureId ? null : this.getTransparencyConfig() });
         this.store.updateTask(id, () => proposed, 'user.messages.applied', { ids: [message.id], contractVersion: proposed.contractVersion, source: 'owner' });
       } while (!controller.signal.aborted);
-      return this.getTask(id);
+      const finalTask = this.getTask(id);
+      if (finalTask?.status === 'completed') {
+        try { this.autoLearnFromTask(id); } catch {}
+      }
+      return finalTask;
     })().catch(cause => {
       const current = this.getTask(id);
       if (active.has(current.status) || (current.status === 'completed' && current.deferredMessages?.length)) return this.store.updateTask(id, value => { value.status = 'failed'; value.blocker = { code: cause.code || 'RUNTIME_ERROR', message: cause.message }; return value; }, 'task.status', { status: 'failed', error: cause.message });

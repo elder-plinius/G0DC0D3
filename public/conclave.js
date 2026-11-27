@@ -243,6 +243,7 @@
             <div class="conclave-standby-formations hidden" id="conclave-standby-formations"></div>
           </div>
           <div class="conclave-diff-actions hidden" id="conclave-diff-actions"></div>
+          <div class="conclave-round-banner hidden" id="conclave-round-banner" aria-live="polite"></div>
           <div class="conclave-live-ticker hidden" id="conclave-live-ticker" aria-label="Live latent activity feed"></div>
           <div class="conclave-legend" id="conclave-legend">
             <span><i class="p-dot p-dot-violet"></i>Streaming</span>
@@ -1084,7 +1085,7 @@
     return `${heading}:\n${rosterLines.join('\n')}\n\n${modeProtocol}\n\nMission:\n${cleanMission || '[Describe your goal here]'}`;
   }
 
-  function launchConclaveFromPad({ autoSend = true } = {}) {
+  async function launchConclaveFromPad({ autoSend = true } = {}) {
     const input = document.getElementById('conclave-mission-input');
     const mission = (input?.value ?? launchMission ?? '').trim();
     if (!mission) {
@@ -1092,8 +1093,28 @@
       input?.focus();
       return;
     }
+    stopDemo();
     const slugs = [...launchTeam];
-    const prompt = buildMissionPrompt(mission, { slugs, mode: launchMode });
+    const chosenMode = launchMode;
+    if (autoSend && typeof window.launchNativeConclave === 'function') {
+      const btn = document.getElementById('conclave-launch-btn');
+      if (btn) { btn.disabled = true; btn.textContent = '✦ Convening council…'; }
+      const launched = await window.launchNativeConclave({ mission, agents: slugs, mode: chosenMode });
+      if (btn) { btn.disabled = false; btn.textContent = '✦ Launch Conclave →'; }
+      if (!launched) return;
+      if (isExpanded) toggleExpand();
+      forceShowLaunchpad = false;
+      activeTemplateId = null;
+      launchManualTeam = false;
+      launchManualMode = false;
+      launchReasonLabel = '';
+      if (input) input.value = '';
+      launchMission = '';
+      renderAll();
+      if (typeof window.toast === 'function') window.toast(`✦ Conclave 2.0 launched (${slugs.length} specialists · ${chosenMode})!`);
+      return;
+    }
+    const prompt = buildMissionPrompt(mission, { slugs, mode: chosenMode });
     if (autoSend && typeof window.submitConclaveMission === 'function') {
       const sent = window.submitConclaveMission(prompt);
       if (!sent) return;
@@ -1105,17 +1126,8 @@
       launchReasonLabel = '';
       if (input) input.value = '';
       launchMission = '';
-      const btn = document.getElementById('conclave-launch-btn');
-      if (btn) {
-        btn.disabled = true;
-        btn.textContent = '✦ Convening team…';
-        setTimeout(() => {
-          btn.disabled = false;
-          btn.textContent = '✦ Launch Conclave →';
-        }, 2200);
-      }
       renderAll();
-      if (typeof window.toast === 'function') window.toast(`✦ Conclave launched (${slugs.length} specialists · ${launchMode})!`);
+      if (typeof window.toast === 'function') window.toast(`✦ Conclave launched (${slugs.length} specialists · ${chosenMode})!`);
       return;
     }
     const composer = document.getElementById('composer-input');
@@ -1327,6 +1339,20 @@
       }
     }
 
+    const roundBanner = document.getElementById('conclave-round-banner');
+    if (roundBanner) {
+      const cs = data?.conclaveSession;
+      const showRound = Boolean(cs && activeLens === 'stage' && !forceShowLaunchpad && !demoMode);
+      roundBanner.classList.toggle('hidden', !showRound);
+      if (showRound) {
+        const html = `<span class="crb-badge">✦ ${esc(cs.modeLabel || cs.mode)}</span><strong class="crb-phase">${esc(cs.phase || `Round ${cs.round}/${cs.totalRounds}`)}</strong><span class="crb-count">${esc((cs.blackboard || []).length)} blackboard notes</span>`;
+        if (roundBanner.dataset.lastHtml !== html) {
+          roundBanner.dataset.lastHtml = html;
+          roundBanner.innerHTML = html;
+        }
+      }
+    }
+
     updateReplayBar();
     renderDiffActionsBar();
     renderLiveTicker();
@@ -1395,6 +1421,16 @@
       return;
     }
     const conflictFiles = new Set((data?.fileConflicts || []).map(c => c.file));
+    const bbEntries = data?.conclaveSession?.blackboard || [];
+    const bbHtml = bbEntries.length ? `
+      <section class="conclave-blackboard" aria-label="Shared Conclave Blackboard">
+        <div class="conclave-bb-title"><strong>✦ Shared Blackboard</strong><span>${esc(data.conclaveSession.modeLabel || 'Conclave')} · ${bbEntries.length} ${bbEntries.length === 1 ? 'note' : 'notes'}</span></div>
+        <div class="conclave-bb-list">${bbEntries.map(e => `
+          <details class="conclave-bb-entry">
+            <summary class="conclave-bb-head"><strong>R${esc(e.round)} · ${esc(e.sigil || '✦')} ${esc(e.agentName || e.role)}</strong><span class="conclave-bb-kind">${esc(e.kind || 'finding')} · ${esc(shortModel(e.modelLabel || 'Auto'))}</span></summary>
+            <p class="conclave-bb-excerpt">${esc(String(e.excerpt || '').slice(0, 900))}</p>
+          </details>`).join('')}</div>
+      </section>` : '';
     commitCards(`<div class="conclave-cards-grid">${workers.map(w => {
       const st = statusInfo(w.status);
       const selected = w.workerId === selectedWorkerId;
@@ -1417,7 +1453,7 @@
           <button type="button" class="button button-secondary" data-conclave-select="${esc(w.workerId)}">${selected ? 'Inspecting' : 'Inspect & Steer'}</button>
         </footer>
       </article>`;
-    }).join('')}</div>`);
+    }).join('')}</div>${bbHtml}`);
   }
 
   function renderInspector() {
@@ -2667,11 +2703,21 @@
     }
   }
 
-  function deployFormation(id) {
+  async function deployFormation(id) {
     const f = (rosterData?.formations || []).find(x => x.id === id);
     if (!f) return;
     stopDemo();
     const mission = f.goal || launchMission || '';
+    if (f.goal && typeof window.launchNativeConclave === 'function') {
+      const launched = await window.launchNativeConclave({ mission: f.goal, agents: f.agents, mode: 'parallel', formationName: f.name });
+      if (!launched) return;
+      if (isExpanded) toggleExpand();
+      forceShowLaunchpad = false;
+      setLens('stage');
+      renderAll();
+      if (typeof window.toast === 'function') window.toast(`${f.sigil || '✦'} Launched "${f.name}" (${f.agents.length} specialists)!`);
+      return;
+    }
     const prompt = buildMissionPrompt(mission, { slugs: f.agents, mode: 'parallel', formationName: f.name });
     if (f.goal && typeof window.submitConclaveMission === 'function') {
       const sent = window.submitConclaveMission(prompt);

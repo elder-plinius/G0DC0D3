@@ -8605,3 +8605,84 @@ body.browser-open.sidebar-collapsed .browser-dock { grid-column: 2; }
 @media (max-width: 560px) {
   .overseer-receipt, .overseer-audited-draft { margin-left: 0; }
 }
+
+/* Conclave 2.0 multi-round progress banner & Shared Blackboard */
+.conclave-round-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 12px 8px;
+  padding: 7px 11px;
+  border-radius: 8px;
+  border: 1px solid rgba(180, 156, 255, .35);
+  background: rgba(180, 156, 255, .08);
+  font-size: .76rem;
+}
+.crb-badge {
+  font-weight: 700;
+  color: var(--violet, #c4b5fd);
+}
+.crb-phase { color: var(--text); }
+.crb-count { margin-left: auto; color: var(--muted); font-family: var(--mono); font-size: .7rem; }
+.conclave-blackboard {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.conclave-bb-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: .78rem;
+  margin-bottom: 8px;
+  color: var(--text);
+}
+.conclave-bb-title span { color: var(--muted); font-size: .72rem; }
+.conclave-bb-list { display: grid; gap: 6px; }
+.conclave-bb-entry {
+  border: 1px solid var(--line-subtle, var(--line));
+  border-radius: 8px;
+  background: var(--panel-soft, rgba(255, 255, 255, .02));
+  padding: 6px 10px;
+}
+.conclave-bb-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+  font-size: .76rem;
+  color: var(--text);
+}
+.conclave-bb-kind {
+  font-family: var(--mono);
+  font-size: .68rem;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+.conclave-bb-excerpt {
+  margin: 6px 0 2px;
+  font-size: .75rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+}
+
+/* Live Browser 2.0 Human Takeover banner & interactive controls */
+.bl-takeover-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  background: rgba(245, 158, 11, .14);
+  border-bottom: 1px solid rgba(245, 158, 11, .4);
+  font-size: .76rem;
+  color: var(--text);
+}
+.bl-takeover-btn.is-active,
+.bl-grounding-btn.active {
+  border-color: var(--violet, #a78bfa);
+  color: var(--text);
+}
