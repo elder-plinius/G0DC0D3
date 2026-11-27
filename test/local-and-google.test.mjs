@@ -560,3 +560,86 @@ test('Round 2 regressions: all CLI bridges expose .draft(), forkTask preserves i
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
+
+test('AntigravityCliProvider keeps KV-cache warm across probeProgress/overseerGuidance updates and classifies quota_exhausted vs transient rate_limit with retryAfterMs', async () => {
+  const { diagnoseIncident } = await import('../src/routing.mjs');
+  assert.deepEqual(diagnoseIncident({ code: 'quota_exhausted', retryable: true }), { category: 'transport', route: true });
+  assert.deepEqual(diagnoseIncident({ code: 'rate_limit', retryable: true }), { category: 'transport', route: true });
+
+  const dir = await fs.mkdtemp(path.join(tmpdir(), 'g0d-agy-quota-'));
+  try {
+    const argLog = path.join(dir, 'args.log');
+    const fakeAgy = path.join(dir, 'fake-agy');
+    await fs.writeFile(fakeAgy, `#!/bin/sh
+echo "$*" >> "${argLog}"
+cat > /dev/null
+if [ "$FAKE_MODE" = "quota" ]; then
+  echo "error: Third-party quota reached. Please switch to Gemini models. Resets in 49m23s." >&2
+  exit 3
+fi
+if [ "$FAKE_MODE" = "429" ]; then
+  echo "error: HTTP 429 too many requests" >&2
+  exit 1
+fi
+printf '%s\\n' '{"conversation_id":"conv-warm-1","status":"SUCCESS","response":"{\\"type\\":\\"message\\",\\"calls\\":[],\\"text\\":\\"ok\\",\\"finish\\":\\"done\\"}","usage":{"input_tokens":100,"output_tokens":20,"cache_read_tokens":80}}'
+`);
+    await fs.chmod(fakeAgy, 0o755);
+
+    // 1. Warm KV-cache survives probeProgress and overseerGuidance changes
+    const pWarm = new AntigravityCliProvider({ binary: fakeAgy, model: 'gemini-4-neon-medium' });
+    try {
+      await pWarm.turn({
+        task: { id: 't-warm', objective: 'Fix bugs', calls: 1, contractVersion: 1, recoveries: 0 },
+        history: [{ seq: 1, type: 'user.message', data: { text: 'Fix bugs' } }],
+        tools: [], files: [],
+      }, { privacy: { localOnly: false } });
+      await pWarm.turn({
+        task: {
+          id: 't-warm', objective: 'Fix bugs', calls: 2, contractVersion: 1, recoveries: 0,
+          overseerGuidance: 'Check edge case 2', probeProgress: { passed: 10, total: 12, highWater: 10 },
+        },
+        history: [
+          { seq: 1, type: 'user.message', data: { text: 'Fix bugs' } },
+          { seq: 2, type: 'tool.completed', data: { name: 'repo.write' } },
+        ],
+        tools: [], files: [],
+      }, { privacy: { localOnly: false } });
+      const lines = (await fs.readFile(argLog, 'utf8')).trim().split('\n');
+      assert.equal(lines.length, 2);
+      assert.equal(lines[0].includes('--conversation'), false);
+      assert.equal(lines[1].includes('--conversation conv-warm-1'), true, 'Expected warm --conversation reuse across overseerGuidance/probeProgress delta');
+    } finally {
+      await pWarm.close();
+    }
+
+    // 2. Hard quota exhaustion sets code=quota_exhausted & retryAfterMs=300000 for instant failover
+    const fakeQuota = path.join(dir, 'fake-agy-quota');
+    await fs.writeFile(fakeQuota, `#!/bin/sh\ncat > /dev/null\necho "error: Third-party quota reached. Please switch to Gemini models. Resets in 49m23s." >&2\nexit 3\n`);
+    await fs.chmod(fakeQuota, 0o755);
+    const pQuota = new AntigravityCliProvider({ binary: fakeQuota, model: 'claude-sonnet-5-5-medium' });
+    try {
+      await assert.rejects(
+        () => pQuota.turn({ task: { id: 't-q', objective: 'Hi' }, history: [], tools: [], files: [] }, { privacy: { localOnly: false } }),
+        err => err?.code === 'quota_exhausted' && err?.retryable === true && err?.retryAfterMs === 300000 && /Resets in 49m23s/i.test(err.message)
+      );
+    } finally {
+      await pQuota.close();
+    }
+
+    // 3. Transient 429 sets code=rate_limit & retryAfterMs=2500
+    const fake429 = path.join(dir, 'fake-agy-429');
+    await fs.writeFile(fake429, `#!/bin/sh\ncat > /dev/null\necho "error: HTTP 429 too many requests" >&2\nexit 1\n`);
+    await fs.chmod(fake429, 0o755);
+    const p429 = new AntigravityCliProvider({ binary: fake429, model: 'gemini-4-neon-medium' });
+    try {
+      await assert.rejects(
+        () => p429.turn({ task: { id: 't-r', objective: 'Hi' }, history: [], tools: [], files: [] }, { privacy: { localOnly: false } }),
+        err => err?.code === 'rate_limit' && err?.retryable === true && err?.retryAfterMs === 2500
+      );
+    } finally {
+      await p429.close();
+    }
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});

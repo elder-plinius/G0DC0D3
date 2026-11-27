@@ -2056,8 +2056,12 @@ function runSubprocessPlanner(owner, { args, cwd, signal, turnTimeoutMs, timeout
         return;
       }
       const lowerErr = errSnippet.toLowerCase();
-      if (/429|rate[\s_-]?limit|quota|too many requests|resource_exhausted|overloaded|temporarily unavailable/i.test(lowerErr)) {
-        done(Object.assign(new Error(`${label} CLI is temporarily rate-limited or overloaded.`), { code: 'rate_limit', retryable: true }));
+      if (/quota\s+reached|third-party\s+quota|daily\s+limit\s+reached|resets?\s+in\s+\d+\s*[mh]/i.test(lowerErr)) {
+        const resetMatch = errSnippet.match(/resets?\s+in\s+[0-9]+[mh](?:[0-9]+[ms])?/i);
+        const resetHint = resetMatch ? ` (${resetMatch[0]})` : '';
+        done(Object.assign(new Error(`${label} CLI quota reached${resetHint}. Switch models or wait before retrying.`), { code: 'quota_exhausted', retryable: true, quotaExhausted: true, retryAfterMs: 300000 }));
+      } else if (/429|rate[\s_-]?limit|quota|too many requests|resource_exhausted|overloaded|temporarily unavailable/i.test(lowerErr)) {
+        done(Object.assign(new Error(`${label} CLI is temporarily rate-limited or overloaded.`), { code: 'rate_limit', retryable: true, retryAfterMs: 2500 }));
       } else if (/not logged in|unauthenticated|sign[\s-]?in|login required|expired token|invalid credentials/i.test(lowerErr)) {
         const hint = label === 'Antigravity' ? ' Run `agy login` to re-authenticate.' : '';
         done(Object.assign(new Error(`${label} CLI authentication required.${hint}`), { code: 'provider_configuration', retryable: false }));
@@ -2171,7 +2175,8 @@ function compactToolCatalog(tools = []) {
 
 function antigravityContractSignature(context) {
   const task = context.task || {};
-  const pp = task.probeProgress || null;
+  // Keep overseerGuidance and probeProgress out of the session-busting hash — they are
+  // already delivered in buildAntigravityDeltaPayload so Neon retains its warm KV-cache!
   return createHash('sha256').update(JSON.stringify({
     objective: task.objective || '',
     constraints: task.constraints || [],
@@ -2180,9 +2185,6 @@ function antigravityContractSignature(context) {
     execution: task.execution || null,
     checks: (task.checks || []).map(c => ({ name: c?.name, command: c?.command })),
     persona: task.persona || 'plinian',
-    overseerGuidance: task.overseerGuidance || null,
-    probeHasProgress: Boolean((pp?.passed || 0) > 0 || (pp?.highWater || 0) > 0),
-    probeRolledBack: Boolean(pp?.rolledBack),
   })).digest('hex');
 }
 
@@ -2223,7 +2225,7 @@ function buildAntigravityDeltaPayload(context, cached) {
     ...(task.overseerGuidance ? { overseerGuidance: String(task.overseerGuidance).slice(0, 600) } : {}),
   };
   return `Continue the task. CRITICAL: planner-only JSON bridge — DO NOT invoke any Antigravity CLI built-in tools. Return ONLY one raw JSON decision envelope (no markdown fences, no prose): {"type":"tool"|"message","calls":[{"id":"unique","name":"tool.name","arguments":"JSON string"}],"text":"","finish":"continue"|"done"|"refusal"}.\n` +
-    `On repo.write, OMIT expectedHash (the broker tracks hashes automatically). Batch independent file edits in one turn.\n\n` +
+    `EFFICIENCY: Calls in calls:[...] execute sequentially in order — batch repo.write/repo.patch AND verification (process.run / check.run) in ONE turn. Omit expectedHash on repo.write. Clean up any temporary test files inside the same shell command. Once verified, immediately return type="message", finish="done".\n\n` +
     `Delta since your last turn (JSON):\n${JSON.stringify(delta)}`;
 }
 
@@ -2355,9 +2357,10 @@ export class AntigravityCliProvider extends CodexProvider {
       const buildFullPayload = () =>
         `CRITICAL: You are running inside a planner-only JSON bridge. DO NOT invoke any Antigravity CLI built-in tools (no read_file, write_file, run_command, etc.). Return ONLY one raw JSON object matching the decision envelope below (no markdown fences, no prose).\n` +
         `EFFICIENCY RULES:\n` +
-        `- Batch all independent file edits (repo.write / repo.patch) in a SINGLE type="tool" turn.\n` +
+        `- Files already shown with content in your workspace snapshot below are ALREADY loaded — do NOT waste a turn calling repo.list or repo.read on them.\n` +
+        `- Calls in calls:[...] execute sequentially in order: batch all independent repo.write/repo.patch edits AND your verification process.run (or check.run if configured) in the SAME type="tool" turn whenever possible.\n` +
         `- On repo.write, OMIT expectedHash (the broker tracks file hashes automatically).\n` +
-        `- After writing files, verify with check.run or process.run before returning finish="done".\n\n` +
+        `- If you run ad-hoc verification commands via process.run, use inline scripts or clean up any temporary test/binary files inside the SAME shell command. Once verification passes cleanly, immediately return type="message", finish="done".\n\n` +
         `${compilePrompt({ ...context, tools })}\n\n` +
         `Return ONLY raw JSON matching:\n` +
         `{"type":"tool"|"message","calls":[{"id":"unique","name":"tool.name","arguments":"JSON string"}],"text":"","finish":"continue"|"done"|"refusal"}\n` +
