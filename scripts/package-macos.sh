@@ -35,7 +35,7 @@ mkdir -p "$out_dir" "$app/Contents/MacOS" "$app/Contents/Resources/Fonts" "$app/
 echo "Building G0DM0D3.app v${version} (${arch})..."
 xcrun swiftc -swift-version 5 -O -target "${swift_arch}-apple-macosx12.0" \
   -module-cache-path "$cache" \
-  -framework Cocoa -framework WebKit -framework Quartz -framework Speech -framework AVFoundation -framework Security \
+  -framework Cocoa -framework WebKit -framework Quartz -framework Speech -framework AVFoundation -framework Security -framework UserNotifications \
   native/main.swift native/Dictation.swift native/ProviderKeychain.swift \
   -o "$app/Contents/MacOS/G0DM0D3"
 

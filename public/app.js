@@ -96,33 +96,19 @@ function updateQolPrefs(patch = {}) {
     ...(patch.completionChime !== undefined ? { completionChime: Boolean(patch.completionChime) } : {}),
   };
   try { localStorage.setItem('g0dc0d3.qol.v1', JSON.stringify(qolPrefs)); } catch {}
+  if (patch.completionChime !== undefined && window.G0DAlerts) {
+    window.G0DAlerts.update({ soundsEnabled: Boolean(patch.completionChime), ...(patch.completionChime ? { muted: false } : {}) });
+  }
   syncComposerShortcutHints();
   window.G0DThemes?.setMotionPaused?.(qolPrefs.pauseBackdrop);
   return qolPrefs;
 }
 function playCompletionChime(kind = 'done', { force = false } = {}) {
-  if (!force && qolPrefs.completionChime === false) return;
-  try {
-    const AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC) return;
-    const ctx = new AC();
-    const now = ctx.currentTime;
-    const notes = kind === 'approval' ? [523.25, 659.25] : [587.33, 880];
-    notes.forEach((freq, i) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(freq, now + i * 0.11);
-      gain.gain.setValueAtTime(0.0001, now + i * 0.11);
-      gain.gain.exponentialRampToValueAtTime(0.06, now + i * 0.11 + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + i * 0.11 + 0.28);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(now + i * 0.11);
-      osc.stop(now + i * 0.11 + 0.3);
-    });
-    setTimeout(() => { try { ctx.close(); } catch {} }, 650);
-  } catch {}
+  if (window.G0DAlerts) {
+    return window.G0DAlerts.playSound(kind, { force });
+  }
+  if (!force && qolPrefs.completionChime === false) return false;
+  return false;
 }
 function syncComposerShortcutHints() {
   const input = $('#composer-input');
@@ -147,12 +133,18 @@ function clearRecentModels() {
   try { localStorage.removeItem('g0dc0d3.recentModels'); } catch {}
 }
 window.G0DQol = {
-  get: () => ({ ...qolPrefs }),
+  get: () => ({ ...qolPrefs, ...(window.G0DAlerts ? { completionChime: !window.G0DAlerts.get().muted && window.G0DAlerts.get().soundsEnabled } : {}) }),
   update: updateQolPrefs,
   resetLayout: resetPanelLayout,
   clearRecentModels,
   playChime: playCompletionChime,
 };
+window.addEventListener('godcode-alerts-changed', ev => {
+  const detail = ev?.detail;
+  if (detail && typeof detail === 'object') {
+    qolPrefs.completionChime = !detail.muted && Boolean(detail.soundsEnabled);
+  }
+});
 
 let appMode = (() => {
   try {
@@ -334,7 +326,7 @@ function toolPhaseLabel(name, args) {
   if (name === 'browser.close') return 'Closing browser…';
   return `Running ${name}…`;
 }
-function kindLabel(kind) { return kind === 'scripted' ? 'Scripted' : kind === 'codex' ? 'Live · Codex' : kind === 'claude' ? 'Live · Claude Code' : kind === 'gemini-cli' ? 'Live · Gemini CLI' : kind === 'copilot-cli' ? 'Live · GitHub Copilot' : kind === 'http' ? 'Live · HTTP' : humanize(kind); }
+function kindLabel(kind) { return kind === 'scripted' ? 'Scripted' : kind === 'codex' ? 'Live · Codex' : kind === 'claude' ? 'Live · Claude Code' : kind === 'antigravity-cli' ? 'Live · Google Antigravity' : kind === 'gemini-cli' ? 'Live · Gemini CLI' : kind === 'copilot-cli' ? 'Live · GitHub Copilot' : kind === 'http' ? 'Live · HTTP' : humanize(kind); }
 function taskStatusLabel(task) { return task.outcome?.label || (task.completionKind === 'answered' ? 'Replied' : task.status === 'recovering' ? 'Recovering' : humanize(task.status)); }
 function statusBadge(status) { return `<span class="status-badge ${escapeHTML(status)}"><span class="status-dot ${escapeHTML(status)}"></span>${escapeHTML(status === 'recovering' ? 'Recovering' : humanize(status))}</span>`; }
 function timeLabel(value) {
@@ -1694,6 +1686,20 @@ async function executeSlashCommand(raw) {
     openSettings('schedules');
     return { handled: true };
   }
+  if (cmd === '/alerts' || cmd === '/notifications' || cmd === '/sounds') {
+    clearInput();
+    openSettings('notifications');
+    return { handled: true };
+  }
+  if (cmd === '/mute') {
+    clearInput();
+    if (window.G0DAlerts) {
+      const next = !window.G0DAlerts.get().muted;
+      window.G0DAlerts.update({ muted: next });
+      toast(next ? 'Sounds & notifications muted (Do Not Disturb).' : 'Sounds & notifications unmuted.');
+    }
+    return { handled: true };
+  }
   if (cmd === '/help') {
     clearInput();
     toast('Commands: /plan, /build, /compact, /diff, /undo, /fork, /export, /remember, /memory, /skill, /model, /review, /test, /help');
@@ -2247,7 +2253,7 @@ function renderApiToggles() {
   const section = $('#api-toggles-section');
   if (!section) return;
   const profiles = Array.isArray(state.connectedApiProviders) ? state.connectedApiProviders : [];
-  const liveCliAll = liveProviders().filter(p => ['codex', 'claude', 'gemini-cli', 'copilot-cli'].includes(p.kind));
+  const liveCliAll = liveProviders().filter(p => ['codex', 'claude', 'antigravity-cli', 'gemini-cli', 'copilot-cli'].includes(p.kind));
   const cliGrouped = new Map();
   for (const p of liveCliAll) {
     const baseId = String(p.id || '').split(':')[0];
@@ -2259,7 +2265,7 @@ function renderApiToggles() {
   const liveCli = [...cliGrouped.values()].map(entry => ({
     ...entry,
     count: Math.max(1, entry.count),
-    name: entry.kind === 'codex' ? 'OpenAI Codex' : entry.kind === 'claude' ? 'Claude Code' : entry.kind === 'gemini-cli' ? 'Gemini CLI' : entry.kind === 'copilot-cli' ? 'GitHub Copilot' : (entry.primaryLabel || entry.id),
+    name: entry.kind === 'codex' ? 'OpenAI Codex' : entry.kind === 'claude' ? 'Claude Code' : entry.kind === 'antigravity-cli' ? 'Google Antigravity (agy)' : entry.kind === 'gemini-cli' ? 'Gemini CLI (Legacy)' : entry.kind === 'copilot-cli' ? 'GitHub Copilot' : (entry.primaryLabel || entry.id),
   }));
   const liveLocal = liveProviders().filter(p => p.tier === 'local' || String(p.id || '').startsWith('local:'));
   section.hidden = profiles.length === 0 && liveCli.length === 0 && liveLocal.length === 0;
@@ -2506,7 +2512,7 @@ async function loadServices(force = false) {
 function renderServiceTile(svc) {
   const cls = serviceStatusClass(svc.status);
   const zdrBadge = svc.zdr?.label
-    ? `<span class="zdr-badge ${svc.zdr.zdrClass === 'local-only' ? 'zdr-local' : svc.zdr.zdrClass === 'native-zdr' ? 'zdr-native' : svc.zdr.zdrClass === 'zdr-enforced' ? 'zdr-routed' : svc.zdr.zdrClass === 'no-store' ? 'zdr-nostore' : 'zdr-terms'}">${escapeHTML(svc.zdr.label)}</span>`
+    ? `<span class="zdr-badge ${(svc.zdr.zdrClass === 'local-only' || svc.zdr.zdrClass === 'local-lan') ? 'zdr-local' : svc.zdr.zdrClass === 'native-zdr' ? 'zdr-native' : svc.zdr.zdrClass === 'zdr-enforced' ? 'zdr-routed' : svc.zdr.zdrClass === 'no-store' ? 'zdr-nostore' : 'zdr-terms'}">${escapeHTML(svc.zdr.label)}</span>`
     : '';
   let action = '';
   if (svc.category === 'subscription' && svc.status === 'ready') {
@@ -3099,7 +3105,7 @@ function renderModelGroups() {
               <span class="price-badge ${priceBadgeClass(m.billing)}" title="${escapeHTML(priceTitle)}">${escapeHTML(m.priceLabel || 'API')}</span>
               ${m.contextLabel ? `<span class="meta-chip" title="Catalog context estimate; live OpenRouter values apply to OpenRouter routes">${escapeHTML(m.contextLabel)}</span>` : ''}
               <span class="meta-chip" title="Size & speed">${escapeHTML(m.size)}</span>
-              ${m.zdr?.label ? `<span class="zdr-badge ${m.zdr.zdrClass === 'local-only' ? 'zdr-local' : m.zdr.zdrClass === 'native-zdr' ? 'zdr-native' : m.zdr.zdrClass === 'zdr-enforced' ? 'zdr-routed' : m.zdr.zdrClass === 'no-store' ? 'zdr-nostore' : 'zdr-terms'}">${escapeHTML(m.zdr.label)}</span>` : ''}
+              ${m.zdr?.label ? `<span class="zdr-badge ${(m.zdr.zdrClass === 'local-only' || m.zdr.zdrClass === 'local-lan') ? 'zdr-local' : m.zdr.zdrClass === 'native-zdr' ? 'zdr-native' : m.zdr.zdrClass === 'zdr-enforced' ? 'zdr-routed' : m.zdr.zdrClass === 'no-store' ? 'zdr-nostore' : 'zdr-terms'}">${escapeHTML(m.zdr.label)}</span>` : ''}
             </span>
           </button>
           <span class="waterfall-reorder">
@@ -3194,6 +3200,7 @@ function renderModelSettings() {
   renderOpenRouterCatalog();
   renderDirectProviderCatalogs();
   renderCustomModelForm();
+  renderLocalModelsList();
   renderServicesHub();
   renderUltraRouterSection();
   renderModelGroups();
@@ -5565,6 +5572,8 @@ function renderCommands() {
     { kind: 'action', title: 'Open project', detail: 'Work in a local source copy', keywords: 'import folder workspace', run: () => openCreate(undefined, { source: 'project' }) },
     { kind: 'action', title: 'Prompt commands', detail: 'Create and edit ! shortcuts', keywords: 'prompts bang shortcuts', run: () => openSettings('prompts') },
     { kind: 'action', title: 'Scheduled Jobs & Crons', detail: 'Create, run, or pause recurring & timed automations (/schedules)', keywords: 'cron schedule recurring timer automation jobs launchd /cron /schedules', run: () => openSettings('schedules') },
+    { kind: 'action', title: 'Sounds & Notifications Settings', detail: 'Configure optional chimes, sound packs, volume & OS notifications (/alerts)', keywords: 'sound chime audio notification alert banner bell volume dock /alerts /sounds /notifications', run: () => openSettings('notifications') },
+    { kind: 'action', title: window.G0DAlerts?.get?.().muted ? 'Unmute Sounds & Notifications' : 'Mute Sounds & Notifications', detail: window.G0DAlerts?.get?.().muted ? 'Resume optional chimes and desktop alerts (/mute)' : 'Silence all chimes and desktop notifications — Do Not Disturb (/mute)', keywords: 'mute unmute silence quiet dnd do not disturb sound alert notification /mute', run: () => { if (!window.G0DAlerts) return; const next = !window.G0DAlerts.get().muted; window.G0DAlerts.update({ muted: next }); toast(next ? 'Sounds & notifications muted.' : 'Sounds & notifications unmuted.'); } },
     ...(task ? [
       { kind: 'action', title: 'Rename conversation', detail: 'Edit the current conversation title', keywords: 'rename title name /rename', run: () => startInlineRename(task, $('#selected-title')) },
       { kind: 'action', title: 'Fork current task', detail: 'Branch into a new conversation', keywords: 'branch clone duplicate /fork', run: () => forkTaskAction(task) },
@@ -5739,8 +5748,30 @@ function renderSelected(data, force = false, opts = {}) {
   const previous = selectedData?.task;
   if (previous?.id === task.id && (Number(task.version) < Number(previous.version) || (Number(task.version) === Number(previous.version) && Number(task.eventSeq) < Number(previous.eventSeq)))) return;
   if (previous?.id === task.id) {
-    if (ACTIVE.has(previous.status) && task.status === 'completed') playCompletionChime('done');
-    else if (!previous.pendingApproval && task.pendingApproval) playCompletionChime('approval');
+    if (!previous.pendingApproval && task.pendingApproval && task.status !== 'cancelled') {
+      const tool = task.pendingApproval?.tool ? ` (${task.pendingApproval.tool})` : '';
+      window.G0DAlerts?.notifyEvent('approval', {
+        title: `Approval required${tool}`,
+        body: task.title || 'Conversation',
+        taskId: task.id,
+        dedupeKey: `approval:${task.id}:${task.pendingApproval?.id || task.eventSeq || ''}`,
+      });
+    } else if (ACTIVE.has(previous.status) && task.status === 'completed') {
+      window.G0DAlerts?.notifyEvent('completed', {
+        title: 'Task finished',
+        body: task.title || 'Conversation',
+        taskId: task.id,
+        dedupeKey: `completed:${task.id}:${task.version ?? ''}`,
+      });
+    } else if (ACTIVE.has(previous.status) && ['failed', 'blocked', 'paused', 'paused_budget', 'waiting_input'].includes(task.status)) {
+      const label = task.status === 'paused_budget' ? 'Task paused (budget limit)' : task.status === 'waiting_input' ? 'Task waiting for input' : task.status === 'paused' ? 'Task paused' : task.status === 'blocked' ? 'Task blocked' : 'Task failed';
+      window.G0DAlerts?.notifyEvent('error', {
+        title: label,
+        body: task.title || 'Conversation',
+        taskId: task.id,
+        dedupeKey: `error:${task.id}:${task.status}:${task.version ?? ''}`,
+      });
+    }
   }
   selectedData = data;
   if (isCodingWorkspaceTask(task) && appMode !== 'godcode') {
@@ -5974,6 +6005,26 @@ function manageStream(task) {
             window.G0DBrowserLive?.ingestStreamEvent(delta);
           } else if (delta.type === 'subagent.started' || delta.type === 'subagent.progress' || delta.type === 'subagent.completed' || delta.type === 'conclave.update' || delta.type === 'conclave.steered' || delta.type === 'race.dispatched' || delta.type === 'race.result' || delta.type === 'race.completed') {
             window.G0DConclave?.ingestStreamEvent(delta);
+            if (delta.type === 'race.completed') {
+              const winnerId = delta.scorecard?.winnerId || delta.winner || '';
+              const winnerLabel = winnerId ? (providerById(winnerId)?.label || winnerId) : '';
+              window.G0DAlerts?.notifyEvent('conclave', {
+                title: 'Conclave race finished',
+                body: winnerLabel ? `Winner: ${winnerLabel}` : (selectedData?.task?.title || 'Multi-agent comparison finished'),
+                taskId: task.id,
+                dedupeKey: `conclave:race:${task.id}:${delta.raceId || delta.id || winnerId}`,
+              });
+            } else if (delta.type === 'subagent.completed') {
+              const w = delta.worker || delta;
+              const label = w.role || w.modelLabel || w.name || selectedData?.task?.title || 'Subagent reported results';
+              const wKey = w.workerId || w.callId || w.agentId || w.id || label;
+              window.G0DAlerts?.notifyEvent('conclave', {
+                title: 'Conclave agent finished',
+                body: label,
+                taskId: task.id,
+                dedupeKey: `conclave:sub:${task.id}:${wKey}`,
+              });
+            }
             if (delta.type === 'subagent.completed' || delta.type === 'race.completed') setTimeout(refresh, 250);
           }
         } catch {}
@@ -6086,6 +6137,8 @@ async function refresh() {
     state.tasks = Array.isArray(data.tasks) ? data.tasks : [];
     state.providers = Array.isArray(data.providers) ? data.providers : [];
     state.fixtures = Array.isArray(data.fixtures) ? data.fixtures : [];
+    window.G0DAlerts?.observeTasks(state.tasks);
+    window.G0DAlerts?.observeSchedulesSummary(state.schedulesSummary);
     if (state.veniceConnectionId && veniceCatalogConnection !== state.veniceConnectionId) {
       veniceCatalogConnection = state.veniceConnectionId;
       await loadVeniceCatalog();
@@ -7796,36 +7849,280 @@ function openFinishedChange(event) {
 }
 $('#welcome-example')?.addEventListener('click', openFinishedChange);
 $('#welcome-key-form').addEventListener('submit', event => { event.preventDefault(); submitApiKey($('#welcome-key-input'), '#welcome-key-feedback'); });
-async function submitLocalModel() {
+let selectedLocalStack = 'ollama';
+let lastDiscoveredLocalModels = [];
+let lastScanCustomUrl = '';
+let localImportBusy = false;
+
+function clampLocalLabel(text, max = 120) {
+  const s = String(text || '').trim();
+  return s.length <= max ? s : `${s.slice(0, max - 1)}…`;
+}
+
+function renderLocalScanResults() {
+  const box = $('#local-scan-results');
+  if (!box) return;
+  const models = lastDiscoveredLocalModels;
+  if (!models.length) {
+    box.classList.add('hidden');
+    box.innerHTML = '';
+    return;
+  }
+  const savedIds = new Set((state.localProviders?.registered || []).map(r => r.id));
+  for (const m of models) m.alreadyRegistered = savedIds.has(m.candidateId);
+  const unadded = models.filter(m => !m.alreadyRegistered);
+  box.classList.remove('hidden');
+  box.innerHTML = `<div class="local-scan-head"><strong>Discovered local models (${models.length})</strong>${unadded.length > 1 ? `<button type="button" class="button button-secondary local-import-all" id="local-import-all-btn" ${localImportBusy ? 'disabled' : ''}>Import all (${unadded.length})</button>` : ''}</div>`
+    + models.map((m, idx) => {
+      const detail = [m.stackName, m.parameterSize, m.quantization].filter(Boolean).join(' · ');
+      return `<div class="local-scan-row">
+        <div class="local-saved-meta">
+          <strong>${escapeHTML(m.model)}</strong>
+          <small>${escapeHTML(detail || m.baseUrl)}</small>
+        </div>
+        ${m.alreadyRegistered
+          ? '<span class="meta-chip">Saved</span>'
+          : `<button type="button" class="button button-secondary local-add-discovered" data-add-discovered-idx="${idx}" ${localImportBusy ? 'disabled' : ''}>+ Add</button>`}
+      </div>`;
+    }).join('');
+}
+
+function renderLocalModelsList() {
+  const listEl = $('#local-models-list');
+  if (!listEl) return;
+  const saved = Array.isArray(state.localProviders?.registered) ? state.localProviders.registered : [];
+  if (!saved.length) {
+    listEl.innerHTML = '';
+    return;
+  }
+  listEl.innerHTML = `<div class="local-saved-head"><span>Saved local models (${saved.length})</span><small>Auto-restored on app launch</small></div>` + saved.map(item => {
+    const netLabel = item.networkClass === 'loopback' ? 'LOCAL ONLY' : item.networkClass === 'lan' ? 'LOCAL LAN' : 'CUSTOM';
+    return `<div class="local-saved-row">
+      <div class="local-saved-meta">
+        <strong>${escapeHTML(item.label || item.model)}</strong>
+        <small><code>${escapeHTML(item.model)}</code> · ${escapeHTML(item.baseUrl)} · <span class="meta-chip">${escapeHTML(netLabel)}</span>${item.hasApiKey ? ' · <span class="meta-chip">Bearer key</span>' : ''}</small>
+      </div>
+      <button type="button" class="button button-quiet local-remove-btn" data-remove-local-model="${escapeHTML(item.id)}">Remove</button>
+    </div>`;
+  }).join('');
+}
+
+async function submitLocalModel(override = null) {
   const feedbackEl = '#local-model-feedback';
-  const baseUrl = ($('#local-model-url')?.value || '').trim() || 'http://127.0.0.1:11434/v1';
-  const model = ($('#local-model-name')?.value || '').trim();
-  const label = ($('#local-model-label')?.value || '').trim();
+  const baseUrl = override ? override.baseUrl : (($('#local-model-url')?.value || '').trim() || 'http://127.0.0.1:11434/v1');
+  const model = override ? override.model : ($('#local-model-name')?.value || '').trim();
+  const label = override ? (override.label ? clampLocalLabel(override.label, 120) : '') : ($('#local-model-label')?.value || '').trim();
+  const apiKey = override ? (override.apiKey || '') : ($('#local-model-apikey')?.value || '').trim();
+  const stack = override?.stack || selectedLocalStack;
   const submitBtn = $('#local-model-submit');
-  if (!model) { setText(feedbackEl, 'Enter a local model name (e.g. qwen2.5-coder:14b).'); $('#local-model-feedback')?.classList.add('error'); return; }
+  if (!model) { setText(feedbackEl, 'Enter a local model name (e.g. qwen2.5-coder:32b or hf.co/org/repo).'); $('#local-model-feedback')?.classList.add('error'); return false; }
   $('#local-model-feedback')?.classList.remove('error');
-  setText(feedbackEl, 'Registering local model…');
+  setText(feedbackEl, `Registering ${model}…`);
   if (submitBtn) submitBtn.disabled = true;
   try {
-    const payload = { baseUrl, model, tier: 'local', ...(label ? { label } : {}) };
+    const payload = { baseUrl, model, tier: 'local', stack, ...(label ? { label } : {}), ...(apiKey ? { apiKey } : {}) };
     const result = await api('/api/providers/local', { method: 'POST', body: JSON.stringify(payload) });
+    if (result.localProviders) state.localProviders = result.localProviders;
     if (result.id && !preferredProvider) { preferredProvider = result.id; try { localStorage.setItem('g0dc0d3.preferredProvider', preferredProvider); } catch {} }
-    setText(feedbackEl, `Registered ${result.provider?.label || result.id} (LOCAL).`);
-    if ($('#local-model-name')) $('#local-model-name').value = '';
-    if ($('#local-model-label')) $('#local-model-label').value = '';
+    setText(feedbackEl, `Saved ${result.provider?.label || result.id} (persisted across restarts).`);
+    if (!override) {
+      if ($('#local-model-name')) $('#local-model-name').value = '';
+      if ($('#local-model-label')) $('#local-model-label').value = '';
+      if ($('#local-model-apikey')) $('#local-model-apikey').value = '';
+    }
     await refresh();
     renderComposer();
+    renderLocalModelsList();
+    renderLocalScanResults();
     if ($('#settings-dialog').open) { await Promise.all([loadServices(), loadModelGroups(selectedModelSort)]); renderModelSettings(); }
     setVisible('#welcome-setup', false);
-    toast(`Local model connected: ${result.provider?.label || result.id}`);
+    toast(`Local model saved: ${result.provider?.label || result.id}`);
+    return true;
   } catch (error) {
     $('#local-model-feedback')?.classList.add('error');
     setText(feedbackEl, error.message);
+    return false;
   } finally {
     if (submitBtn) submitBtn.disabled = false;
   }
 }
+
+async function removeLocalModel(id) {
+  if (!id) return;
+  try {
+    const res = await api('/api/providers/local', { method: 'DELETE', body: JSON.stringify({ id }) });
+    if (res.localProviders) state.localProviders = res.localProviders;
+    await refresh();
+    renderComposer();
+    renderLocalModelsList();
+    renderLocalScanResults();
+    if ($('#settings-dialog').open) { await Promise.all([loadServices(), loadModelGroups(selectedModelSort)]); renderModelSettings(); }
+    toast(`Removed local model ${id.replace(/^local:/, '')}.`);
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function scanLocalServers() {
+  if (localImportBusy) return;
+  const btn = $('#local-scan-btn');
+  const feedbackEl = '#local-model-feedback';
+  if (btn) { btn.disabled = true; btn.textContent = 'Scanning…'; }
+  $('#local-model-feedback')?.classList.remove('error');
+  setText(feedbackEl, 'Probing local Ollama, LM Studio, llama.cpp, vLLM, MLX, TGI, SGLang, and Jan…');
+  try {
+    const customBaseUrl = ($('#local-model-url')?.value || '').trim().replace(/\/$/, '');
+    const customApiKey = ($('#local-model-apikey')?.value || '').trim();
+    lastScanCustomUrl = customBaseUrl ? (customBaseUrl.endsWith('/v1') ? customBaseUrl : `${customBaseUrl}/v1`) : '';
+    const res = await api('/api/providers/local/discover', {
+      method: 'POST',
+      body: JSON.stringify({ baseUrl: customBaseUrl, apiKey: customApiKey })
+    });
+    if (res.localProviders) state.localProviders = res.localProviders;
+    const reachable = (res.stacks || []).filter(s => s.reachable);
+    const models = Array.isArray(res.models) ? res.models : [];
+    lastDiscoveredLocalModels = models;
+    setText(feedbackEl, reachable.length
+      ? `Found ${models.length} model${models.length === 1 ? '' : 's'} across ${reachable.map(s => s.name).join(', ')}.`
+      : 'No local inference servers responded on default ports. Start Ollama, LM Studio, llama-server, vLLM, or MLX and retry.');
+    renderLocalScanResults();
+    renderLocalModelsList();
+  } catch (error) {
+    $('#local-model-feedback')?.classList.add('error');
+    setText(feedbackEl, error.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Scan local servers'; }
+  }
+}
+
+function scopedApiKeyForDiscovered(item) {
+  const key = ($('#local-model-apikey')?.value || '').trim();
+  if (!key || !lastScanCustomUrl) return '';
+  const itemUrl = String(item?.baseUrl || '').trim().replace(/\/$/, '');
+  return itemUrl === lastScanCustomUrl ? key : '';
+}
+
+async function loadHuggingFaceRecipes() {
+  const ref = ($('#local-hf-repo')?.value || '').trim();
+  const fb = '#local-hf-feedback';
+  const box = $('#local-hf-recipes');
+  if (!ref) { setText(fb, 'Paste a HuggingFace repo (e.g. unsloth/Qwen3-Coder-30B-A3B-GGUF:Q4_K_M).'); $(fb)?.classList.add('error'); return; }
+  $(fb)?.classList.remove('error');
+  try {
+    const res = await api('/api/providers/local/hf-recipes', { method: 'POST', body: JSON.stringify({ ref }) });
+    setText(fb, `Launch commands ready for ${res.repo}${res.quant ? `:${res.quant}` : ''}.`);
+    if (box) {
+      box.classList.remove('hidden');
+      const items = [
+        ['Ollama', res.recipes.ollama],
+        ['llama.cpp', res.recipes.llamacpp],
+        ['vLLM', res.recipes.vllm],
+        ['MLX (Apple Silicon)', res.recipes.mlx],
+        ['HuggingFace TGI', res.recipes.tgi],
+      ];
+      box.innerHTML = items.map(([name, cmd]) => `<div class="local-hf-recipe-row"><span>${escapeHTML(name)}</span><code>${escapeHTML(cmd)}</code><button type="button" class="button button-quiet" data-copy-hf-cmd="${escapeHTML(cmd)}">Copy</button></div>`).join('');
+    }
+  } catch (error) {
+    $(fb)?.classList.add('error');
+    setText(fb, error.message);
+  }
+}
+
+async function pullHuggingFaceIntoOllama() {
+  const ref = ($('#local-hf-repo')?.value || '').trim();
+  const fb = '#local-hf-feedback';
+  const btn = $('#local-hf-pull-btn');
+  if (!ref) { setText(fb, 'Paste a HuggingFace GGUF repo (e.g. unsloth/Qwen3-Coder-30B-A3B-GGUF:Q4_K_M).'); $(fb)?.classList.add('error'); return; }
+  $(fb)?.classList.remove('error');
+  setText(fb, `Pulling ${ref} into local Ollama (this may take a few minutes for large GGUFs)…`);
+  if (btn) { btn.disabled = true; btn.textContent = 'Pulling…'; }
+  try {
+    const res = await api('/api/providers/local/ollama-pull', { method: 'POST', body: JSON.stringify({ model: ref }) });
+    if (res.localProviders) state.localProviders = res.localProviders;
+    setText(fb, `Pulled & registered ${res.pulled} in Ollama!`);
+    await refresh();
+    renderComposer();
+    renderLocalModelsList();
+    if ($('#settings-dialog').open) { await Promise.all([loadServices(), loadModelGroups(selectedModelSort)]); renderModelSettings(); }
+    toast(`Pulled ${res.pulled} into Ollama.`);
+  } catch (error) {
+    $(fb)?.classList.add('error');
+    setText(fb, error.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Pull into Ollama'; }
+  }
+}
+
 $('#local-model-form')?.addEventListener('submit', event => { event.preventDefault(); submitLocalModel(); });
+$('#local-scan-btn')?.addEventListener('click', () => { void scanLocalServers(); });
+$('#local-hf-recipes-btn')?.addEventListener('click', () => { void loadHuggingFaceRecipes(); });
+$('#local-hf-pull-btn')?.addEventListener('click', () => { void pullHuggingFaceIntoOllama(); });
+$('#local-stack-presets')?.addEventListener('click', event => {
+  const chip = event.target.closest('[data-local-preset]');
+  if (!chip) return;
+  selectedLocalStack = chip.dataset.localPreset || 'custom';
+  $$('#local-stack-presets .local-preset-chip').forEach(b => b.classList.toggle('is-active', b === chip));
+  const urlInput = $('#local-model-url');
+  const nameInput = $('#local-model-name');
+  if (urlInput && chip.dataset.url) urlInput.value = chip.dataset.url;
+  if (nameInput && chip.dataset.placeholder) nameInput.placeholder = chip.dataset.placeholder;
+  nameInput?.focus();
+});
+$('#local-models-list')?.addEventListener('click', event => {
+  const rm = event.target.closest('[data-remove-local-model]');
+  if (rm) void removeLocalModel(rm.dataset.removeLocalModel);
+});
+$('#local-scan-results')?.addEventListener('click', async event => {
+  if (localImportBusy) return;
+  const one = event.target.closest('[data-add-discovered-idx]');
+  if (one) {
+    const item = lastDiscoveredLocalModels[Number(one.dataset.addDiscoveredIdx)];
+    if (!item) return;
+    one.disabled = true;
+    const ok = await submitLocalModel({
+      baseUrl: item.baseUrl,
+      model: item.model,
+      stack: item.stack,
+      label: clampLocalLabel(`${item.model} · ${item.stackName}`, 120),
+      apiKey: scopedApiKeyForDiscovered(item),
+    });
+    if (ok) { item.alreadyRegistered = true; renderLocalScanResults(); }
+    else one.disabled = false;
+    return;
+  }
+  const allBtn = event.target.closest('#local-import-all-btn');
+  if (allBtn) {
+    localImportBusy = true;
+    const scanBtn = $('#local-scan-btn');
+    if (scanBtn) scanBtn.disabled = true;
+    renderLocalScanResults();
+    try {
+      const pending = lastDiscoveredLocalModels.filter(m => !m.alreadyRegistered).map(m => ({ ...m }));
+      let added = 0;
+      for (const item of pending) {
+        const ok = await submitLocalModel({
+          baseUrl: item.baseUrl,
+          model: item.model,
+          stack: item.stack,
+          label: clampLocalLabel(`${item.model} · ${item.stackName}`, 120),
+          apiKey: scopedApiKeyForDiscovered(item),
+        });
+        if (ok) added++;
+      }
+      toast(`Imported ${added} local model${added === 1 ? '' : 's'}.`);
+    } finally {
+      localImportBusy = false;
+      if (scanBtn) scanBtn.disabled = false;
+      renderLocalScanResults();
+    }
+  }
+});
+$('#local-hf-recipes')?.addEventListener('click', event => {
+  const copyBtn = event.target.closest('[data-copy-hf-cmd]');
+  if (!copyBtn) return;
+  const cmd = copyBtn.dataset.copyHfCmd || '';
+  navigator.clipboard?.writeText(cmd).then(() => toast('Copied command to clipboard.')).catch(() => {});
+});
 
 $('#sidebar-toggle').addEventListener('click', () => setSidebar($('#sidebar-toggle').getAttribute('aria-expanded') !== 'true'));
 $('#inspector-toggle').addEventListener('click', () => setInspector(!document.body.classList.contains('inspector-open'), true));
@@ -8153,6 +8450,8 @@ window.toast = toast;
     { cmd: '/privacy', hint: 'Open Privacy & ZDR Shield (zero telemetry & egress controls)' },
     { cmd: '/schedules', hint: 'Open Scheduled Jobs & Cron Automations (/cron)' },
     { cmd: '/cron', hint: 'Manage recurring cron jobs & timers' },
+    { cmd: '/alerts', hint: 'Configure optional sounds & desktop notifications' },
+    { cmd: '/mute', hint: 'Toggle Do Not Disturb (mute / unmute sounds & alerts)' },
     { cmd: '/schemas', hint: 'Inspect & edit all 27 JSON tool schemas' },
     { cmd: '/inject', hint: 'Open Prefills & Message Shaping lab' },
     { cmd: '/model', hint: 'Choose or switch model route' },
@@ -8364,7 +8663,7 @@ function selectableModels(task) {
   // unless it is the active model for this task.
   const cliSubIdsWithChildren = new Set(
     configured
-      .filter(p => ['codex', 'claude', 'gemini-cli', 'copilot-cli'].includes(p.kind) && p.id.includes(':'))
+      .filter(p => ['codex', 'claude', 'antigravity-cli', 'gemini-cli', 'copilot-cli'].includes(p.kind) && p.id.includes(':'))
       .map(p => p.id.split(':')[0])
   );
   const base = [
@@ -8436,6 +8735,7 @@ function pickerBucketOf(p) {
   const id = String(p?.id || '');
   if (p?.kind === 'codex' || id === 'codex-cli' || id.startsWith('codex-cli:')) return 'codex-cli';
   if (p?.kind === 'claude' || id === 'claude-code' || id.startsWith('claude-code:')) return 'claude-code';
+  if (p?.kind === 'antigravity-cli' || id === 'antigravity-cli' || id.startsWith('antigravity-cli:')) return 'antigravity-cli';
   if (p?.kind === 'gemini-cli' || id === 'gemini-cli' || id.startsWith('gemini-cli:')) return 'gemini-cli';
   if (p?.kind === 'copilot-cli' || id === 'copilot-cli' || id.startsWith('copilot-cli:')) return 'copilot-cli';
   if (p?.catalogProvider === 'openrouter' || id.startsWith('openrouter:')) return 'openrouter';
@@ -8455,6 +8755,7 @@ const PICKER_BUCKET_LABELS = {
   all: 'All',
   'codex-cli': 'Codex',
   'claude-code': 'Claude Code',
+  'antigravity-cli': 'Antigravity',
   'gemini-cli': 'Gemini CLI',
   'copilot-cli': 'Copilot',
   openrouter: 'OpenRouter',
@@ -8494,7 +8795,7 @@ function renderModelPicker() {
   if (filterBar) {
     if (bucketCounts.size >= 2) {
       filterBar.classList.remove('hidden');
-      const order = ['codex-cli', 'claude-code', 'gemini-cli', 'copilot-cli', 'openai', 'anthropic', 'xai', 'gemini', 'meta', 'openrouter', 'venice', 'nous', 'local', 'cli', 'other'].filter(b => bucketCounts.has(b));
+      const order = ['codex-cli', 'claude-code', 'antigravity-cli', 'gemini-cli', 'copilot-cli', 'openai', 'anthropic', 'xai', 'gemini', 'meta', 'openrouter', 'venice', 'nous', 'local', 'cli', 'other'].filter(b => bucketCounts.has(b));
       const chips = [
         `<button type="button" class="model-filter-chip${pickerProviderFilter === 'all' ? ' active' : ''}" data-picker-filter="all" aria-pressed="${pickerProviderFilter === 'all'}">All · ${models.length}</button>`,
         ...order.map(b => `<button type="button" class="model-filter-chip${pickerProviderFilter === b ? ' active' : ''}" data-picker-filter="${b}" aria-pressed="${pickerProviderFilter === b}">${escapeHTML(PICKER_BUCKET_LABELS[b] || b)} · ${bucketCounts.get(b)}</button>`)

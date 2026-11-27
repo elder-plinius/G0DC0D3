@@ -543,7 +543,7 @@ export function resolveCatalogEntry(provider, liveMap = null) {
   const tags = new Set(matched?.tags || []);
 
   // CLI subscription bridges default to frontier coding capability if no explicit model matched
-  const isSubscription = ['claude', 'codex', 'gemini-cli', 'copilot-cli'].includes(provider?.kind);
+  const isSubscription = ['claude', 'codex', 'antigravity-cli', 'gemini-cli', 'copilot-cli'].includes(provider?.kind);
   if (isSubscription) {
     tags.add('coding');
     if (!matched) {

@@ -2,10 +2,11 @@ import Cocoa
 import WebKit
 import Quartz
 import Darwin
+import UserNotifications
 
 // A small native window around the portable localhost runtime.
 // This developer build is ad-hoc signed (not notarized) and requires Node 22.13+.
-final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate, WKScriptMessageHandler {
+final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate, WKScriptMessageHandler, UNUserNotificationCenterDelegate {
     private let dictation = Dictation()
     private var previewWindow: NSPanel?
     private var window: NSWindow!
@@ -23,6 +24,8 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
     private var smokeFinished = false
     private var sessionRequired = false
     private var webContentRestarts = 0
+    private var webViewReady = false
+    private var pendingFocusDetail: [String: String]? = nil
     private let environment = ProcessInfo.processInfo.environment
     private lazy var port: Int = {
         if let raw = environment["G0D_PORT"], let parsed = Int(raw), (1...65535).contains(parsed) { return parsed }
@@ -37,6 +40,15 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
         NSApp.setActivationPolicy(.regular)
         installMenu()
         buildWindow()
+        if Bundle.main.bundleIdentifier != nil {
+            UNUserNotificationCenter.current().delegate = self
+        }
+        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.emit("godcode-app-focus", ["focused": true])
+        }
+        NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.emit("godcode-app-focus", ["focused": false])
+        }
         connect()
         NSApp.activate(ignoringOtherApps: true)
         if environment["G0D_NATIVE_SMOKE_REPORT"] != nil {
@@ -121,6 +133,7 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
         configuration.userContentController.add(self, name: "chooseRepository")
         configuration.userContentController.add(self, name: "quickLook")
         configuration.userContentController.add(self, name: "setAppearance")
+        configuration.userContentController.add(self, name: "alerts")
         webView = WKWebView(frame: .zero, configuration: configuration)
         if #available(macOS 13.3, *) {
             webView.isInspectable = (environment["G0D_DEVTOOLS"] == "1")
@@ -240,6 +253,8 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
             if previewWindow == nil { panel.center() }
             previewWindow = panel
             panel.makeKeyAndOrderFront(nil)
+        } else if message.name == "alerts", let body = message.body as? [String: Any], let action = body["action"] as? String {
+            handleAlertMessage(action: action, body: body)
         } else if message.name == "dictation", let body = message.body as? [String:String], let id = body["id"] {
             switch body["action"] {
             case "start":
@@ -254,13 +269,113 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
         }
     }
     private func emit(_ event: String, _ detail: Any) {
-        guard event.range(of: "^[a-z0-9-]+$", options: .regularExpression) != nil,
+        guard let webView = webView, webViewReady,
+              event.range(of: "^[a-z0-9-]+$", options: .regularExpression) != nil,
               let json = try? JSONSerialization.data(withJSONObject: detail, options: [.fragmentsAllowed]),
               let raw = String(data: json, encoding: .utf8) else { return }
         let value = raw
             .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
             .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
         webView.evaluateJavaScript("window.dispatchEvent(new CustomEvent('\(event)',{detail:\(value)}))")
+    }
+
+    private func notificationStatusString(_ status: UNAuthorizationStatus) -> String {
+        switch status {
+        case .authorized, .provisional: return "granted"
+        case .denied: return "denied"
+        default: return "default"
+        }
+    }
+
+    private func handleAlertMessage(action: String, body: [String: Any]) {
+        switch action {
+        case "sound":
+            let allowed: Set<String> = ["Glass", "Ping", "Basso", "Purr", "Hero", "Pop", "Tink", "Submarine", "Blow", "Bottle", "Frog", "Funk", "Morse", "Sosumi"]
+            let requested = (body["sound"] as? String) ?? "Glass"
+            let safeName = allowed.contains(requested) ? requested : "Glass"
+            let rawVol = (body["volume"] as? Double) ?? 0.65
+            let safeVol = rawVol.isFinite ? rawVol : 0.65
+            let vol = Float(max(0.0, min(1.0, safeVol)))
+            if let sound = NSSound(named: NSSound.Name(safeName)) {
+                sound.stop()
+                sound.volume = vol
+                sound.play()
+            }
+        case "bounce":
+            let critical = (body["critical"] as? Bool) ?? false
+            if !NSApp.isActive {
+                NSApp.requestUserAttention(critical ? .criticalRequest : .informationalRequest)
+            }
+        case "permissionStatus":
+            guard Bundle.main.bundleIdentifier != nil else {
+                emit("godcode-alerts-permission", ["status": "unsupported", "source": "status"])
+                return
+            }
+            UNUserNotificationCenter.current().getNotificationSettings { [weak self] settings in
+                DispatchQueue.main.async {
+                    guard let self = self else { return }
+                    self.emit("godcode-alerts-permission", ["status": self.notificationStatusString(settings.authorizationStatus), "source": "status"])
+                }
+            }
+        case "requestPermission":
+            guard Bundle.main.bundleIdentifier != nil else {
+                emit("godcode-alerts-permission", ["status": "unsupported", "source": "request"])
+                return
+            }
+            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge]) { [weak self] _, _ in
+                UNUserNotificationCenter.current().getNotificationSettings { settings in
+                    DispatchQueue.main.async {
+                        guard let self = self else { return }
+                        self.emit("godcode-alerts-permission", ["status": self.notificationStatusString(settings.authorizationStatus), "source": "request"])
+                    }
+                }
+            }
+        case "notify":
+            guard Bundle.main.bundleIdentifier != nil else { return }
+            let rawTitle = (body["title"] as? String) ?? "G0DM0D3"
+            let rawBody = (body["body"] as? String) ?? ""
+            let taskId = (body["taskId"] as? String) ?? ""
+            let openPane = (body["openPane"] as? String) ?? ""
+            let alwaysShow = (body["alwaysShow"] as? Bool) ?? false
+            let content = UNMutableNotificationContent()
+            content.title = String(rawTitle.prefix(120))
+            content.body = String(rawBody.prefix(260))
+            content.userInfo = ["taskId": taskId, "openPane": openPane, "alwaysShow": alwaysShow]
+            let request = UNNotificationRequest(identifier: "g0d-\(UUID().uuidString)", content: content, trigger: nil)
+            UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
+        default:
+            break
+        }
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        let alwaysShow = (notification.request.content.userInfo["alwaysShow"] as? Bool) ?? false
+        DispatchQueue.main.async {
+            if alwaysShow || !NSApp.isActive {
+                completionHandler([.banner, .list])
+            } else {
+                completionHandler([])
+            }
+        }
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
+        let info = response.notification.request.content.userInfo
+        let taskId = (info["taskId"] as? String) ?? ""
+        let openPane = (info["openPane"] as? String) ?? ""
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.showWindow()
+            let payload: [String: String]? = !taskId.isEmpty ? ["taskId": taskId] : (!openPane.isEmpty ? ["openPane": openPane] : nil)
+            if let payload = payload {
+                if self.webViewReady {
+                    self.emit("godcode-focus-task", payload)
+                } else {
+                    self.pendingFocusDetail = payload
+                }
+            }
+        }
+        completionHandler()
     }
     private enum Probe { case healthy, absent, legacy, incompatible }
     private func probe(_ completion: @escaping (Probe) -> Void) {
@@ -506,6 +621,14 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
             guard error == nil, value as? Bool == true else { self.recoverWebContent(); return }
             self.loadingView.isHidden = true
             webView.isHidden = false
+            self.webViewReady = true
+            self.emit("godcode-app-focus", ["focused": NSApp.isActive])
+            if let pending = self.pendingFocusDetail {
+                self.pendingFocusDetail = nil
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+                    self?.emit("godcode-focus-task", pending)
+                }
+            }
             if self.environment["G0D_NATIVE_SMOKE_REPORT"] != nil { self.checkSmokePage(remaining: 32) }
         }
     }
@@ -712,7 +835,7 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
     }
 
     @objc private func retry() { webContentRestarts = 0; connect() }
-    @objc private func showWindow() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
+    @objc private func showWindow() { window?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
     @objc private func openSettingsMenu() { showWindow(); webView.evaluateJavaScript("typeof openSettings==='function'&&openSettings('general')", completionHandler: nil) }
     @objc private func newChatMenu() { showWindow(); webView.evaluateJavaScript("typeof newConversation==='function'&&newConversation()", completionHandler: nil) }
     @objc private func zoomIn() { webView.pageZoom = min(2.0, webView.pageZoom + 0.1) }

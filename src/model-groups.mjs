@@ -93,7 +93,7 @@ export function classifyModel(provider, { catalog = null, learning = null } = {}
   const entry = catalog?.lookup ? catalog.lookup(provider) : resolveCatalogEntry(provider, catalog?.liveMap || null);
   const tags = new Set(entry.tags || []);
 
-  const isSubscription = ['claude', 'codex', 'gemini-cli', 'copilot-cli'].includes(provider?.kind);
+  const isSubscription = ['claude', 'codex', 'antigravity-cli', 'gemini-cli', 'copilot-cli'].includes(provider?.kind);
   const billing = zdr.localOnly ? 'local' : isSubscription ? 'subscription' : 'api';
 
   if (zdr.zdrClass === 'native-zdr') tags.add('zdr-native');

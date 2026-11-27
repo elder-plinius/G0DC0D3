@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/runtime-Node_22.13%2B-339933?style=flat-square" alt="Node.js 22.13+">
   <img src="https://img.shields.io/badge/npm_deps-0-d97706?style=flat-square" alt="Zero npm dependencies">
   <img src="https://img.shields.io/badge/telemetry-ZERO-dc2626?style=flat-square" alt="Zero Telemetry">
-  <img src="https://img.shields.io/badge/tests-306%2F306-16a34a?style=flat-square" alt="306 tests passing">
+  <img src="https://img.shields.io/badge/tests-312%2F312-16a34a?style=flat-square" alt="312 tests passing">
 </p>
 
 <p align="center">
@@ -51,8 +51,11 @@ CLI: `node src/cli.mjs --help` · Tests: `npm test` · Eval: `npm run bench:self
 - **The Conclave (Multi-Agent Council & Live Stage)**: Dispatch parallel specialist agents across *different* engines at once (Claude, Codex, OpenRouter, Venice, Grok, Gemini, Meta, or local models), watch live Constellation/Timeline/Card telemetry, steer workers mid-flight, and forge custom specialists with benchmark radar stats & 1-click formations.
 - **Live Browser Mirror & Window Pop-Out**: Watch agents browse and test your apps live via CDP screencast + animated click reticles right inside the dock — or pop out an isolated non-headless Chromium window for 60fps WebGL, audio, and manual SSO/login takeover.
 - **Full Wire Transparency (`Settings → System`)**: Inspect, edit, and reset every system prompt block, all **27 tool schemas**, **Prefills & Message Shaping** (off by default), and **Live Wire Preview** before a single byte leaves localhost.
-- **First-Class Multi-Model CLI & Direct API Hub**: Expose full model lineups from local **Codex** (live `~/.codex/models_cache.json` sync + native effort/tier/verbosity), **Claude Code**, **Gemini CLI**, and **GitHub Copilot** logins alongside direct **OpenAI**, **Anthropic**, **xAI (Grok)**, **Google Gemini**, **Meta AI (Muse / Llama)**, **OpenRouter**, **Venice**, **Nous**, and **local Ollama/vLLM/MLX** — with live account catalogs and **Ultra-Plinian** routing & 2–4 model blind-judged arenas.
-- **Two Surfaces (`⌘⇧G`) & Local Cron Schedules**: **`GODMODƎ`** (sovereign chat, live browser, offline HTML5/SVG/Mermaid canvas with click-to-inspect), **`GODCODƎ`** (isolated Git worktrees, multi-model patch races, Plan/Build mode, `Safe` default permission gate, Git checkpoints/rewind, long-horizon effort scaling & adaptive recovery), and **Scheduled Jobs & Crons** (zero-dep POSIX cron + one-shot timers, `launchd` plist export, CLI `cron` commands, and unattended Safe/Read-only gating).
+- **5 CLI Subscriptions + 8 Cloud APIs + Local/HuggingFace Stack Hub**:
+  - **CLI subscriptions**: **Google Antigravity (`agy`)** with live `gemini-4-neon` / `carbon` / `argon` / `hydrogen` catalog sync, **Codex** (live `~/.codex/models_cache.json` + native effort/tier/verbosity), **Claude Code**, **Gemini CLI (Legacy)**, and **GitHub Copilot**.
+  - **Direct cloud APIs**: **OpenAI**, **Anthropic**, **xAI (Grok)**, **Google Gemini**, **Meta AI (Muse / Llama)**, **OpenRouter**, **Venice**, and **Nous** — with live account catalogs and **Ultra-Plinian** routing & 2–4 model blind-judged arenas.
+  - **Local & HuggingFace stacks**: Persistent across restarts with **1-click server auto-discovery** across **Ollama**, **LM Studio**, **llama.cpp**, **vLLM**, **MLX**, **HuggingFace TGI**, **SGLang**, and **Jan**, optional bearer tokens for LAN GPU servers, and **HuggingFace Hub / GGUF** quick-pull (`hf.co/<org>/<repo>`) & copyable serve recipes.
+- **Two Surfaces (`⌘⇧G`), Crons & Optional Alerts**: Clean symmetrical **`GODMODƎ`** (sovereign chat, live browser, offline HTML5/SVG/Mermaid canvas with click-to-inspect) and **`GODCODƎ`** (isolated Git worktrees, multi-model patch races, Plan/Build mode, `Safe` default permission gate, Git checkpoints/rewind, long-horizon effort scaling & adaptive recovery), **Scheduled Jobs & Crons** (zero-dep POSIX cron + one-shot timers, `launchd` plist export, CLI `cron`), and **Optional Sounds & Notifications** (5 sound packs, volume slider, opt-in native macOS Notification Center banners & Dock bounce, per-event triggers across background chats/crons/Conclave, `/alerts` & `/mute` Do Not Disturb).
 - **Zero-Dep Defense-in-Depth & Hardened/Lockdown Mode**: **0 npm dependencies**, **0 telemetry**, macOS Seatbelt / Linux `bwrap` sandboxing, device-only Keychain / `secret-tool`, 1-click **Hardened (Red Team / Bounty)** & **Airgap Lockdown** presets (Strict ZDR, ephemeral burn-bag, mechanically enforced Rules-of-Engagement target allow/denylists, 1-click session wipe), outbound secret redaction, strict zero-inline-`style=` CSP, and pre-request CDP SSRF gating. See [SECURITY.md](SECURITY.md).
 
 <details>
@@ -62,7 +65,10 @@ CLI: `node src/cli.mjs --help` · Tests: `npm test` · Eval: `npm run bench:self
 </p>
 <p align="center">
   <img src="docs/screenshots/godmode-system-lab.png" alt="Settings → System: Prompt Transparency & Prefill Lab" width="49%">
-  <img src="docs/screenshots/godcode-light.png" alt="GODCODƎ Light Workspace" width="49%">
+  <img src="docs/screenshots/godmode-local-hf.png" alt="Settings → Models: Local & HuggingFace Stack Hub" width="49%">
+</p>
+<p align="center">
+  <img src="docs/screenshots/godcode-light.png" alt="GODCODƎ Light Workspace" width="88%">
 </p>
 </details>
 

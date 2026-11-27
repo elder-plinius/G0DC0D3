@@ -3,6 +3,7 @@
 const choice = (name, value, label) => `<label><input type="radio" name="${name}" value="${value}"><span>${label}</span></label>`;
 const SETTINGS_ICONS = {
   general: '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3"/><path d="M10 2.5v2M10 15.5v2M3.5 10h2M14.5 10h2M4.7 4.7l1.4 1.4M13.9 13.9l1.4 1.4M15.3 4.7l-1.4 1.4M6.1 13.9l-1.4 1.4"/></svg>',
+  notifications: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3a4.5 4.5 0 0 0-4.5 4.5v2.7L4 12.6v1.2h12v-1.2l-1.5-2.4V7.5A4.5 4.5 0 0 0 10 3z"/><path d="M8.3 15.8a1.9 1.9 0 0 0 3.4 0"/></svg>',
   shortcuts: '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="5" width="15" height="10" rx="2"/><path d="M5.5 8.5h1M8.5 8.5h1M11.5 8.5h1M14.5 8.5h.5M6.5 11.5h7"/></svg>',
   models: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.5 12 8l5.5 2-5.5 2-2 5.5L8 12l-5.5-2L8 8z"/></svg>',
   recovery: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 7.5A6 6 0 1 0 16 11"/><path d="M15.5 3.5v4h-4"/></svg>',
@@ -18,7 +19,8 @@ const SETTINGS_GROUPS = [
   {
     label: 'Workspace',
     tabs: [
-      { id: 'general', label: 'General', hint: 'Themes, QoL & chime' },
+      { id: 'general', label: 'General', hint: 'Themes, text & workflow' },
+      { id: 'notifications', label: 'Sounds & Alerts', hint: 'Chimes, banners & mute', badgeId: 'settings-badge-notifications' },
       { id: 'shortcuts', label: 'Shortcuts', hint: 'Hotkeys & /commands' },
     ],
   },
@@ -103,7 +105,7 @@ document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" clas
         <fieldset class="setting-row plain-fieldset"><legend class="visually-hidden">Send message shortcut</legend><div><h3>Send message shortcut</h3><p>Choose whether <strong>Enter</strong> sends immediately or inserts a newline (so <strong>⌘/Ctrl+Enter</strong> sends).</p></div><div class="segmented">${choice('qol-send-key','enter','Enter')}${choice('qol-send-key','mod_enter','⌘ / Ctrl + Enter')}</div></fieldset>
         <div class="setting-row"><label for="qol-auto-preview">Auto-open Live Preview Canvas<small>Automatically slide open the split-screen preview dock when a model finishes an HTML5, SVG, or Mermaid artifact.</small></label><input type="checkbox" role="switch" class="toggle" id="qol-auto-preview" data-qol="autoOpenPreview"></div>
         <div class="setting-row"><label for="qol-expand-thinking">Auto-expand reasoning blocks<small>Show completed model <code>Reasoning</code> sections expanded by default instead of collapsed.</small></label><input type="checkbox" role="switch" class="toggle" id="qol-expand-thinking" data-qol="expandThinking"></div>
-        <div class="setting-row"><label for="qol-completion-chime">Completion &amp; approval chime<small>Play a soft two-tone chime when a long build finishes or pauses for your approval.</small></label><div class="setting-row-controls"><button type="button" class="button button-quiet settings-test-chime" id="qol-test-chime">Test</button><input type="checkbox" role="switch" class="toggle" id="qol-completion-chime" data-qol="completionChime"></div></div>
+        <div class="setting-row"><label for="qol-completion-chime">Completion &amp; approval chime<small>Play optional sounds when builds finish or pause for approval. Customize packs, volume, and OS banners in <strong>Sounds &amp; Alerts</strong>.</small></label><div class="setting-row-controls"><button type="button" class="button button-quiet settings-test-chime" id="qol-open-alerts">Configure…</button><button type="button" class="button button-quiet settings-test-chime" id="qol-test-chime">Test</button><input type="checkbox" role="switch" class="toggle" id="qol-completion-chime" data-qol="completionChime"></div></div>
         <div class="setting-row"><label for="qol-pause-backdrop">Pause animated theme backdrops<small>Freeze live animated themes on a static art frame to save battery and GPU while keeping full theme colors.</small></label><input type="checkbox" role="switch" class="toggle" id="qol-pause-backdrop" data-qol="pauseBackdrop"></div>
         <fieldset class="setting-row plain-fieldset"><legend class="visually-hidden">Default diff layout</legend><div><h3>Default diff viewer layout</h3><p>Preferred layout inside GODCODƎ’s <strong>Changes</strong> tab.</p></div><div class="segmented">${choice('qol-diff-mode','unified','Unified')}${choice('qol-diff-mode','split','Side-by-side')}</div></fieldset>
       </div>
@@ -115,6 +117,104 @@ document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" clas
         </div>
         <div class="setting-row"><div><h3>Inference connections &amp; permissions</h3><p>Review local CLI logins, API keys, and what each connection allows.</p></div><button type="button" class="button button-secondary" data-open-setup>Review setup</button></div>
         <div class="setting-row"><div><h3>Get to know GODMODƎ</h3><p>A 1-minute tour of GODMODƎ recovery, Ultra-Plinian, and model controls.</p></div><button type="button" class="button button-secondary" data-open-tour>Take a quick tour</button></div>
+      </div>
+    </section>
+
+    <section id="settings-pane-notifications" role="tabpanel" aria-labelledby="settings-tab-notifications" hidden>
+      <header class="settings-pane-head">
+        <h3>Sounds &amp; Notifications</h3>
+        <p>Optional local audio cues, desktop banners, and macOS Dock attention when long runs finish or pause for approval — 100% local on this device.</p>
+      </header>
+
+      <div class="settings-card">
+        <div class="settings-card-head">
+          <h4>Master Controls</h4>
+          <p>Quickly silence everything (Do Not Disturb) or test your current sound and notification setup.</p>
+        </div>
+        <div class="setting-row">
+          <label for="alerts-muted">Mute all sounds &amp; notifications (Do Not Disturb)<small>Silence every chime, banner, and Dock bounce without losing your settings. Shortcut: <code>/mute</code>.</small></label>
+          <div class="setting-row-controls">
+            <button type="button" class="button button-secondary settings-test-chime" id="alerts-test-all">Test alert</button>
+            <input type="checkbox" role="switch" class="toggle" id="alerts-muted" data-alert-bool="muted">
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-card-head">
+          <h4>Sound Effects</h4>
+          <p>Choose an optional synthesized sound pack or native macOS system chimes, plus volume level.</p>
+        </div>
+        <div class="setting-row">
+          <label for="alerts-sounds-enabled">Enable sound effects<small>Play distinct audio cues for completions, approvals, errors, crons, and Conclave runs.</small></label>
+          <input type="checkbox" role="switch" class="toggle" id="alerts-sounds-enabled" data-alert-bool="soundsEnabled">
+        </div>
+        <div class="setting-row alerts-pack-row">
+          <div>
+            <h3>Sound pack</h3>
+            <p>Click any pack to select and preview its chime.</p>
+          </div>
+          <div class="alerts-pack-grid" id="alerts-pack-grid" role="radiogroup" aria-label="Sound pack">
+            <button type="button" class="alerts-pack-btn" role="radio" aria-checked="false" data-alert-pack="glass"><strong>Crystal Glass</strong><small>Harmonic chime</small></button>
+            <button type="button" class="alerts-pack-btn" role="radio" aria-checked="false" data-alert-pack="synth"><strong>Plinian Synth</strong><small>Warm chord</small></button>
+            <button type="button" class="alerts-pack-btn" role="radio" aria-checked="false" data-alert-pack="minimal"><strong>Studio Tap</strong><small>Subtle pulse</small></button>
+            <button type="button" class="alerts-pack-btn" role="radio" aria-checked="false" data-alert-pack="retro"><strong>Retro 8-bit</strong><small>Chiptune blip</small></button>
+            <button type="button" class="alerts-pack-btn" role="radio" aria-checked="false" data-alert-pack="system"><strong>macOS System</strong><small>Native NSSound</small></button>
+          </div>
+        </div>
+        <div class="setting-row">
+          <label for="alerts-volume">Sound volume<small>Adjust playback loudness for chimes on this device.</small></label>
+          <div class="alerts-volume-control">
+            <input type="range" id="alerts-volume" min="0" max="100" step="5" value="65" aria-label="Sound volume">
+            <span class="alerts-volume-val" id="alerts-volume-val">65%</span>
+          </div>
+        </div>
+        <div class="setting-row">
+          <label for="alerts-sound-unfocused">Only play sounds when app is unfocused<small>Stay silent while you are actively looking at G0DM0D3, and chime only when you switch away.</small></label>
+          <input type="checkbox" role="switch" class="toggle" id="alerts-sound-unfocused" data-alert-bool="onlySoundWhenUnfocused">
+        </div>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-card-head">
+          <h4>Desktop Notifications</h4>
+          <p>Opt-in OS banners (native macOS Notification Center in the desktop app, or Browser Notifications). Clicking a banner jumps straight to that chat.</p>
+        </div>
+        <div class="setting-row">
+          <label for="alerts-notifs-enabled">Enable desktop notifications<small>Off by default. Turning this on asks macOS or your browser for local notification permission.</small></label>
+          <input type="checkbox" role="switch" class="toggle" id="alerts-notifs-enabled" data-alert-bool="notificationsEnabled">
+        </div>
+        <div class="setting-row">
+          <div>
+            <h3>System permission</h3>
+            <p id="alerts-perm-detail">Checking notification permission on this device…</p>
+          </div>
+          <div class="setting-row-controls">
+            <span class="alerts-perm-pill" id="alerts-perm-pill">Not requested</span>
+            <button type="button" class="button button-secondary settings-test-chime" id="alerts-request-perm">Allow</button>
+            <button type="button" class="button button-quiet settings-test-chime" id="alerts-test-notif">Test banner</button>
+          </div>
+        </div>
+        <div class="setting-row">
+          <label for="alerts-only-unfocused">Only show banners when app is unfocused<small>Avoid redundant OS popups while G0DM0D3 is already in front of you.</small></label>
+          <input type="checkbox" role="switch" class="toggle" id="alerts-only-unfocused" data-alert-bool="onlyWhenUnfocused">
+        </div>
+        <div class="setting-row" id="alerts-dock-row">
+          <label for="alerts-dock-bounce">Bounce macOS Dock icon when backgrounded<small>Gently bounce the G0DM0D3 Dock icon in the desktop app when a background run completes or needs approval.</small></label>
+          <input type="checkbox" role="switch" class="toggle" id="alerts-dock-bounce" data-alert-bool="dockBounce">
+        </div>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-card-head">
+          <h4>Notify Me On…</h4>
+          <p>Choose which events trigger sounds and desktop banners, and preview each event’s signature tone.</p>
+        </div>
+        <div class="setting-row"><label for="alerts-ev-completed">Task or reply finished<small>When an active build, edit, or long chat answer finishes.</small></label><div class="setting-row-controls"><button type="button" class="button button-quiet alerts-event-play" data-alert-preview="completed">Play</button><input type="checkbox" role="switch" class="toggle" id="alerts-ev-completed" data-alert-event="completed"></div></div>
+        <div class="setting-row"><label for="alerts-ev-approval">Approval required<small>When a tool call or shell command pauses waiting for your permission.</small></label><div class="setting-row-controls"><button type="button" class="button button-quiet alerts-event-play" data-alert-preview="approval">Play</button><input type="checkbox" role="switch" class="toggle" id="alerts-ev-approval" data-alert-event="approval"></div></div>
+        <div class="setting-row"><label for="alerts-ev-error">Error, blocked, or paused<small>When a run fails, hits a budget limit, or gets blocked and needs attention.</small></label><div class="setting-row-controls"><button type="button" class="button button-quiet alerts-event-play" data-alert-preview="error">Play</button><input type="checkbox" role="switch" class="toggle" id="alerts-ev-error" data-alert-event="error"></div></div>
+        <div class="setting-row"><label for="alerts-ev-schedule">Scheduled cron job finished<small>When a recurring or one-shot automation completes in the background.</small></label><div class="setting-row-controls"><button type="button" class="button button-quiet alerts-event-play" data-alert-preview="schedule">Play</button><input type="checkbox" role="switch" class="toggle" id="alerts-ev-schedule" data-alert-event="schedule"></div></div>
+        <div class="setting-row"><label for="alerts-ev-conclave">Conclave squad or Arena finished<small>When a multi-agent squad or Diff Race reports its results.</small></label><div class="setting-row-controls"><button type="button" class="button button-quiet alerts-event-play" data-alert-preview="conclave">Play</button><input type="checkbox" role="switch" class="toggle" id="alerts-ev-conclave" data-alert-event="conclave"></div></div>
       </div>
     </section>
 
@@ -130,13 +230,17 @@ document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" clas
         </div>
         <div class="shortcuts-table">
           <div class="shortcut-row"><span>Open Command Palette</span><kbd>⌘ K</kbd></div>
+          <div class="shortcut-row"><span>Open Settings</span><kbd>⌘ ,</kbd></div>
+          <div class="shortcut-row"><span>New chat / thread</span><kbd>⌘ N</kbd></div>
           <div class="shortcut-row"><span>Focus message composer</span><kbd>/</kbd></div>
+          <div class="shortcut-row"><span>Stop active generation or close dialog</span><kbd>Esc</kbd></div>
           <div class="shortcut-row"><span>Switch GODMODƎ / GODCODƎ mode</span><kbd>⌘ ⇧ G</kbd></div>
           <div class="shortcut-row"><span>Toggle Plan / Build mode</span><kbd>⌘ ⇧ P</kbd></div>
           <div class="shortcut-row"><span>Cycle Permission Gate preset</span><kbd>Shift + Tab</kbd></div>
           <div class="shortcut-row"><span>Switch workspace tabs (Conversation → Activity)</span><kbd>1 – 5</kbd></div>
           <div class="shortcut-row"><span>Previous / next tab or changed file</span><span class="shortcut-keys"><kbd>[ ]</kbd><kbd>j / k</kbd></span></div>
           <div class="shortcut-row"><span>Paste screenshot into composer</span><kbd>⌘ V</kbd></div>
+          <div class="shortcut-row"><span>Zoom in / out / reset (desktop app)</span><span class="shortcut-keys"><kbd>⌘ +</kbd><kbd>⌘ -</kbd><kbd>⌘ 0</kbd></span></div>
           <div class="shortcut-row"><span>Search inside Settings</span><kbd>⌘ F</kbd></div>
           <div class="shortcut-row"><span>Show quick shortcuts overlay</span><kbd>?</kbd></div>
         </div>
@@ -148,6 +252,8 @@ document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" clas
         </div>
         <div class="shortcuts-table">
           <div class="shortcut-row"><span>Switch modes &amp; reasoning effort</span><code>/godmode · /godcode · /effort · /fast</code></div>
+          <div class="shortcut-row"><span>Multi-agent, live browser &amp; megaprompts</span><code>/conclave · /browser · /forge · /ultra</code></div>
+          <div class="shortcut-row"><span>Schedules, crons &amp; sound alerts</span><code>/schedules · /cron · /alerts · /mute</code></div>
           <div class="shortcut-row"><span>Planning, git undo &amp; thread branching</span><code>/plan · /build · /diff · /undo · /fork</code></div>
           <div class="shortcut-row"><span>Context compaction &amp; export</span><code>/compact · /export · /model</code></div>
           <div class="shortcut-row"><span>Memory, skills &amp; engineering workflows</span><code>/remember · /memory · /skill · /review · /test</code></div>
@@ -159,7 +265,7 @@ document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" clas
     <section id="settings-pane-models" role="tabpanel" aria-labelledby="settings-tab-models" hidden>
       <header class="settings-pane-head">
         <h3>Models &amp; APIs</h3>
-        <p>Connect cloud API keys, CLI subscriptions, or local Ollama/LM Studio servers, browse catalogs, and configure intelligent routing.</p>
+        <p>Connect 5 CLI subscriptions (Claude Code, Codex, Google Antigravity, Gemini, Copilot), 8 cloud APIs, or local &amp; HuggingFace stacks (Ollama, LM Studio, llama.cpp, vLLM, MLX, TGI).</p>
       </header>
       <div class="transparency-subtabs models-subtabs" role="tablist" aria-label="Models sections">
         <button type="button" class="transparency-subtab active" data-models-subtab="connections" role="tab" aria-selected="true">Connections &amp; Keys</button>
@@ -671,7 +777,7 @@ document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" clas
         </div>
         <div class="setting-row"><label for="privacy-zdr-routing">ZDR request routing<small>Ask providers not to log or train on prompts (OpenRouter <code>provider.zdr=true</code> + <code>data_collection="deny"</code>, OpenAI <code>store=false</code>).</small></label><input type="checkbox" role="switch" class="toggle" id="privacy-zdr-routing" data-privacy-toggle="zdrRouting"></div>
         <div class="setting-row"><label for="privacy-strict-zdr">Strict ZDR Gate<small>Block sending or falling back to providers without verified ZDR (sets <code>allow_fallbacks=false</code> on OpenRouter).</small></label><input type="checkbox" role="switch" class="toggle" id="privacy-strict-zdr" data-privacy-toggle="strictZdr"></div>
-        <div class="setting-row"><label for="privacy-local-only">Local-only airgap mode<small>Only allow loopback local models (Ollama, LM Studio, MLX) and pause cloud catalog refreshes.</small></label><input type="checkbox" role="switch" class="toggle" id="privacy-local-only" data-privacy-toggle="localOnly"></div>
+        <div class="setting-row"><label for="privacy-local-only">Local-only airgap mode<small>Only allow loopback/LAN local models (Ollama, LM Studio, llama.cpp, vLLM, MLX, TGI) and pause cloud catalog refreshes.</small></label><input type="checkbox" role="switch" class="toggle" id="privacy-local-only" data-privacy-toggle="localOnly"></div>
         <div class="setting-row"><label for="privacy-redact-secrets">Outbound secret redaction<small>Automatically scrub recognized API keys and tokens before cloud requests (best effort — always review sensitive files).</small></label><input type="checkbox" role="switch" class="toggle" id="privacy-redact-secrets" data-privacy-toggle="redactOutboundSecrets"></div>
       </section>
       <section class="settings-card">
@@ -1026,7 +1132,7 @@ async function loadSkillsSettings() {
 }
 
 function zdrBadgeClass(zdrClass) {
-  if (zdrClass === 'local-only') return 'zdr-local';
+  if (zdrClass === 'local-only' || zdrClass === 'local-lan') return 'zdr-local';
   if (zdrClass === 'native-zdr') return 'zdr-native';
   if (zdrClass === 'zdr-enforced') return 'zdr-routed';
   if (zdrClass === 'no-store') return 'zdr-nostore';
@@ -1066,7 +1172,7 @@ function renderPrivacySettings(data) {
   if (provList) {
     const provs = (privacy.providers || []).filter(p => p.kind !== 'scripted');
     provList.innerHTML = provs.length
-      ? provs.map(p => `<div class="privacy-provider-row"><div class="privacy-provider-main"><strong>${escapeHTML(p.label || p.id)}</strong><span class="field-help">${escapeHTML(p.detail || '')}</span></div><div class="privacy-provider-badges"><span class="zdr-badge ${zdrBadgeClass(p.zdrClass)}">${escapeHTML(p.label ? (p.zdrClass === 'local-only' ? 'LOCAL ONLY' : p.zdrClass === 'native-zdr' ? 'NATIVE ZDR' : p.zdrClass === 'zdr-enforced' ? 'ZDR ROUTED' : p.zdrClass === 'no-store' ? 'NO STORE' : 'PROVIDER TERMS') : 'UNKNOWN')}</span>${p.allowedByPolicy === false ? '<span class="zdr-badge zdr-blocked">BLOCKED</span>' : ''}</div></div>`).join('')
+      ? provs.map(p => `<div class="privacy-provider-row"><div class="privacy-provider-main"><strong>${escapeHTML(p.label || p.id)}</strong><span class="field-help">${escapeHTML(p.detail || '')}</span></div><div class="privacy-provider-badges"><span class="zdr-badge ${zdrBadgeClass(p.zdrClass)}">${escapeHTML(p.label ? (p.zdrClass === 'local-only' ? 'LOCAL ONLY' : p.zdrClass === 'local-lan' ? 'LOCAL LAN' : p.zdrClass === 'native-zdr' ? 'NATIVE ZDR' : p.zdrClass === 'zdr-enforced' ? 'ZDR ROUTED' : p.zdrClass === 'no-store' ? 'NO STORE' : 'PROVIDER TERMS') : 'UNKNOWN')}</span>${p.allowedByPolicy === false ? '<span class="zdr-badge zdr-blocked">BLOCKED</span>' : ''}</div></div>`).join('')
       : '<p class="field-help">No live providers connected yet. Connect a local model, Venice, OpenRouter, or subscription in Settings → Models.</p>';
   }
 
@@ -1178,8 +1284,57 @@ function renderSettingsValues() {
   setVisible('#settings-tools-empty', !task);
   setVisible('#effective-prompt-section', Boolean(task));
   renderPermissionsSection();
+  renderAlertsSettings();
   window.G0DThemes?.syncUI();
   syncSettingsLocks();
+}
+
+function renderAlertsSettings() {
+  const api = window.G0DAlerts;
+  if (!api) return;
+  const p = api.get();
+  const setChk = (id, val) => { const el = $(`#${id}`); if (el) el.checked = Boolean(val); };
+  setChk('alerts-muted', p.muted);
+  setChk('alerts-sounds-enabled', p.soundsEnabled);
+  setChk('alerts-sound-unfocused', p.onlySoundWhenUnfocused);
+  setChk('alerts-notifs-enabled', p.notificationsEnabled);
+  setChk('alerts-only-unfocused', p.onlyWhenUnfocused);
+  setChk('alerts-dock-bounce', p.dockBounce);
+  if ($('#qol-completion-chime')) $('#qol-completion-chime').checked = !p.muted && p.soundsEnabled;
+  const volEl = $('#alerts-volume');
+  if (volEl) volEl.value = String(p.volume);
+  setText('#alerts-volume-val', `${p.volume}%`);
+  $$('[data-alert-pack]').forEach(btn => {
+    const active = btn.dataset.alertPack === p.soundPack;
+    btn.classList.toggle('is-active', active);
+    btn.setAttribute('aria-checked', String(active));
+  });
+  for (const key of api.EVENT_KEYS) {
+    setChk(`alerts-ev-${key}`, p.events[key] !== false);
+  }
+  const perm = api.getPermissionStatus();
+  const pill = $('#alerts-perm-pill');
+  const detail = $('#alerts-perm-detail');
+  const allowBtn = $('#alerts-request-perm');
+  const isNative = api.hasNativeBridge();
+  if (pill) {
+    pill.textContent = perm === 'granted' ? 'Granted' : perm === 'denied' ? 'Blocked' : perm === 'unsupported' ? 'Unavailable' : 'Not requested';
+    pill.className = `alerts-perm-pill is-${perm === 'granted' ? 'granted' : perm === 'denied' ? 'denied' : 'default'}`;
+  }
+  if (detail) {
+    detail.textContent = perm === 'granted'
+      ? (isNative ? 'macOS Notification Center permission is granted for G0DM0D3.' : 'Browser notification permission is granted for this origin.')
+      : perm === 'denied'
+        ? (isNative ? 'Blocked in macOS Settings → Notifications → G0DM0D3.' : 'Blocked in your browser site settings for localhost.')
+        : perm === 'unsupported'
+          ? 'This environment does not expose OS notifications (audio chimes still work).'
+          : 'Click Allow (or toggle Desktop Notifications on) to grant local banner permission.';
+  }
+  if (allowBtn) {
+    allowBtn.hidden = perm !== 'default';
+  }
+  const dockRow = $('#alerts-dock-row');
+  if (dockRow) dockRow.hidden = !isNative;
 }
 async function loadLearning() {
   const value = await api('/api/learning'), rows = value.stats || [];
@@ -1269,6 +1424,11 @@ function updateSettingsNavBadges() {
   setBadge('settings-badge-system', ovTotal > 0 ? 'Custom' : '', ovTotal > 0 ? 'is-accent' : '');
   const schedEnabled = Number(state.schedulesSummary?.enabled || 0);
   setBadge('settings-badge-schedules', schedEnabled > 0 ? String(schedEnabled) : '', schedEnabled > 0 ? 'is-ok' : '');
+  if (window.G0DAlerts) {
+    const alertTxt = window.G0DAlerts.statusBadgeText();
+    const alertCls = alertTxt === 'Muted' ? 'is-warn' : (alertTxt === 'On' || alertTxt === 'Notify') ? 'is-ok' : '';
+    setBadge('settings-badge-notifications', alertTxt, alertCls);
+  }
 }
 
 function renderPersonalInstructionsFromTransparency() {
@@ -1359,7 +1519,7 @@ function renderSettingsSearchResults(rawQuery) {
   box.classList.remove('hidden');
   box.innerHTML = `<header class="settings-pane-head"><h3>Search results</h3><p>${matches.length} matching setting${matches.length === 1 ? '' : 's'} for “${escapeHTML(rawQuery.trim())}”</p></header>` + (matches.length
     ? `<div class="settings-search-list">${matches.slice(0, 24).map((m, idx) => `<button type="button" class="settings-search-hit" data-search-hit="${idx}"><div class="settings-search-hit-top"><strong>${escapeHTML(m.title)}</strong><span class="meta-chip">${escapeHTML(m.tabLabel)}${m.subtab ? ` · ${escapeHTML(m.subtab)}` : ''}</span></div>${m.desc ? `<p>${escapeHTML(m.desc)}</p>` : ''}</button>`).join('')}</div>`
-    : '<p class="field-help">No settings match that query. Try keywords like “theme”, “timeout”, “ZDR”, “Enter”, “Ollama”, “key”, or “chime”.</p>');
+    : '<p class="field-help">No settings match that query. Try keywords like “theme”, “Antigravity”, “HuggingFace”, “alerts”, “cron”, “ZDR”, “timeout”, or “Ollama”.</p>');
 }
 
 async function selectSettingsPane(pane, options = {}) {
@@ -1372,8 +1532,9 @@ async function selectSettingsPane(pane, options = {}) {
   $('.settings-body').scrollTop = 0;
   const scopedPanes = new Set(['general', 'models', 'recovery', 'tools', 'advanced']);
   $('.settings-context')?.classList.toggle('is-muted', !scopedPanes.has(pane));
-  const feedback = { shortcuts: 'Press ? anytime outside Settings to view keyboard shortcuts.', recovery: 'GODMODƎ recovery, retry limits, and continuation controls save automatically.', prompts: 'Saved on this device for every chat.', schedules: 'Scheduled jobs run locally in your timezone and respect Privacy & Permission Gates.', system: 'Local prompt transparency — overrides apply on this device to live non-fixture chats.', memory: 'Personal instructions, memories, and /skills save locally on this device.', privacy: 'Zero telemetry. ZDR & privacy controls apply immediately.', models: 'Switch between Connections, Catalog, Routing, and Overseer above.', tools: settingsTask() ? 'Permissions save automatically. Save checks after editing.' : 'Permissions and checks apply to individual tasks.' };
+  const feedback = { notifications: 'Optional sounds & notifications save locally on this device — zero telemetry.', shortcuts: 'Press ? anytime outside Settings to view keyboard shortcuts.', recovery: 'GODMODƎ recovery, retry limits, and continuation controls save automatically.', prompts: 'Saved on this device for every chat.', schedules: 'Scheduled jobs run locally in your timezone and respect Privacy & Permission Gates.', system: 'Local prompt transparency — overrides apply on this device to live non-fixture chats.', memory: 'Personal instructions, memories, and /skills save locally on this device.', privacy: 'Zero telemetry. ZDR & privacy controls apply immediately.', models: 'Switch between Connections, Catalog, Routing, and Overseer above.', tools: settingsTask() ? 'Permissions save automatically. Save checks after editing.' : 'Permissions and checks apply to individual tasks.' };
   settingsFeedback(feedback[pane] || 'Changes save automatically.');
+  if (pane === 'notifications') { window.G0DAlerts?.refreshNativePermission?.(); renderAlertsSettings(); }
   if (pane === 'prompts') { try { await loadPromptLibrary(); } catch (error) { settingsFeedback(error.message, true); } }
   if (pane === 'schedules') { try { await loadSchedulesSettings(); } catch (error) { settingsFeedback(error.message, true); } }
   if (pane === 'system') {
@@ -1566,6 +1727,50 @@ $('#settings-dialog').addEventListener('change', event => {
     updateBrowserSetting(input.dataset.browserSetting, input.checked);
     return;
   }
+  if (input.matches('[data-alert-bool]')) {
+    const key = input.dataset.alertBool;
+    if (key === 'notificationsEnabled' && input.checked && window.G0DAlerts) {
+      const currentPerm = window.G0DAlerts.getPermissionStatus();
+      if (currentPerm === 'default') {
+        window.G0DAlerts.requestNotificationPermission({ enableOnGrant: true }).then(status => {
+          const granted = status === 'granted';
+          if (!granted) window.G0DAlerts.update({ notificationsEnabled: false });
+          renderAlertsSettings();
+          updateSettingsNavBadges();
+          settingsFeedback(granted ? 'Desktop notifications enabled.' : 'Notification permission was not granted.', !granted);
+        });
+        return;
+      }
+      if (currentPerm === 'denied' || currentPerm === 'unsupported') {
+        input.checked = false;
+        window.G0DAlerts.update({ notificationsEnabled: false });
+        renderAlertsSettings();
+        settingsFeedback(currentPerm === 'denied' ? 'Notifications are blocked in macOS / browser settings.' : 'Desktop notifications are unavailable in this environment.', true);
+        return;
+      }
+    }
+    window.G0DAlerts?.update?.({ [key]: input.checked });
+    renderAlertsSettings();
+    updateSettingsNavBadges();
+    settingsFeedback(key === 'muted' ? (input.checked ? 'Muted all sounds & notifications.' : 'Unmuted sounds & notifications.') : 'Alert preference saved on this device.');
+    return;
+  }
+  if (input.matches('[data-alert-event]')) {
+    const evKey = input.dataset.alertEvent;
+    window.G0DAlerts?.update?.({ events: { [evKey]: input.checked } });
+    renderAlertsSettings();
+    updateSettingsNavBadges();
+    settingsFeedback('Event alert preference saved.');
+    return;
+  }
+  if (input.id === 'alerts-volume') {
+    const vol = Number(input.value);
+    window.G0DAlerts?.update?.({ volume: vol });
+    setText('#alerts-volume-val', `${vol}%`);
+    window.G0DAlerts?.playSound?.('completed', { force: true });
+    settingsFeedback(`Sound volume set to ${vol}%.`);
+    return;
+  }
   if (input.matches('[data-qol]')) {
     const key = input.dataset.qol;
     window.G0DQol?.update?.({ [key]: input.checked });
@@ -1754,9 +1959,79 @@ window.addEventListener('keydown', event => {
     if (s) { s.focus(); s.select(); }
   }
 });
+$('#qol-open-alerts')?.addEventListener('click', () => {
+  selectSettingsPane('notifications');
+});
 $('#qol-test-chime')?.addEventListener('click', () => {
   window.G0DQol?.playChime?.('done', { force: true });
   settingsFeedback('Played completion chime.');
+});
+$('#alerts-volume')?.addEventListener('input', event => {
+  setText('#alerts-volume-val', `${event.target.value}%`);
+});
+$('#alerts-pack-grid')?.addEventListener('click', event => {
+  const btn = event.target.closest('[data-alert-pack]');
+  if (!btn || !window.G0DAlerts) return;
+  const pack = btn.dataset.alertPack;
+  window.G0DAlerts.update({ soundPack: pack, soundsEnabled: true, muted: false });
+  renderAlertsSettings();
+  updateSettingsNavBadges();
+  window.G0DAlerts.playSound('completed', { force: true, packOverride: pack });
+  settingsFeedback(`Sound pack set to ${btn.querySelector('strong')?.textContent || pack}.`);
+});
+$('#settings-pane-notifications')?.addEventListener('click', async event => {
+  const preview = event.target.closest('[data-alert-preview]');
+  if (preview && window.G0DAlerts) {
+    const kind = preview.dataset.alertPreview;
+    window.G0DAlerts.playSound(kind, { force: true });
+    settingsFeedback(`Played ${kind} alert sound.`);
+    return;
+  }
+  if (event.target.closest('#alerts-request-perm') && window.G0DAlerts) {
+    const status = await window.G0DAlerts.requestNotificationPermission();
+    if (status === 'granted') {
+      window.G0DAlerts.update({ notificationsEnabled: true });
+    }
+    renderAlertsSettings();
+    updateSettingsNavBadges();
+    settingsFeedback(status === 'granted' ? 'Desktop notification permission granted.' : 'Permission was not granted.', status !== 'granted');
+    return;
+  }
+  if (event.target.closest('#alerts-test-notif') && window.G0DAlerts) {
+    const perm = window.G0DAlerts.getPermissionStatus();
+    if (perm === 'default') {
+      const next = await window.G0DAlerts.requestNotificationPermission();
+      renderAlertsSettings();
+      if (next !== 'granted') { settingsFeedback('Allow notification permission first to test banners.', true); return; }
+    } else if (perm !== 'granted') {
+      settingsFeedback('Notification permission is blocked or unavailable.', true);
+      return;
+    }
+    window.G0DAlerts.sendNotification('completed', {
+      title: 'G0DM0D3 · Test Notification',
+      body: 'Optional desktop notifications are active on this device.',
+      force: true,
+    });
+    settingsFeedback('Sent test desktop notification.');
+    return;
+  }
+  if (event.target.closest('#alerts-test-all') && window.G0DAlerts) {
+    window.G0DAlerts.playSound('completed', { force: true });
+    if (window.G0DAlerts.getPermissionStatus() === 'granted') {
+      window.G0DAlerts.sendNotification('completed', {
+        title: 'G0DM0D3 · Alert Check',
+        body: 'Sounds and desktop notifications are working.',
+        force: true,
+      });
+    }
+    settingsFeedback('Triggered test sound & alert.');
+  }
+});
+window.addEventListener('godcode-alerts-changed', () => {
+  if ($('#settings-dialog')?.open) {
+    renderAlertsSettings();
+    updateSettingsNavBadges();
+  }
 });
 $('#personal-instructions-form')?.addEventListener('submit', async event => {
   event.preventDefault();
