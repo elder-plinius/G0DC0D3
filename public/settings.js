@@ -892,17 +892,17 @@ $('#model-controls').hidden = false;
   atCard.dataset.modelSubtab = 'routing';
   atCard.innerHTML = `<div class="settings-card-head autotune-card-head">
     <div>
-      <h4>AutoTune Hyperparameter Layer <span class="acp-proto-badge">Empirical Bayes</span></h4>
+      <h4>HyperTuner Hyperparameter Layer <span class="acp-proto-badge">Empirical Bayes</span></h4>
       <p>Passively learns optimal sampling archetypes (temperature, top_p, min_p, penalties) per model × task domain × reasoning effort from real verification, Arena, Overseer, and user outcomes. Never overrides manual Model Controls sliders.</p>
     </div>
     <button type="button" class="button button-secondary" id="autotune-reset-btn">Reset learned</button>
   </div>
-  <div class="autotune-mode-bar" role="group" aria-label="AutoTune mode">
-    <button type="button" class="button button-secondary autotune-mode-btn" data-autotune-mode="off">Off</button>
-    <button type="button" class="button button-secondary autotune-mode-btn" data-autotune-mode="passive">Passive (Conservative)</button>
-    <button type="button" class="button button-secondary autotune-mode-btn" data-autotune-mode="active">Active (Explore)</button>
+  <div class="autotune-mode-bar" role="group" aria-label="HyperTuner mode">
+    <button type="button" class="button button-secondary autotune-mode-btn" data-autotune-mode="off" aria-pressed="false">Off</button>
+    <button type="button" class="button button-secondary autotune-mode-btn" data-autotune-mode="passive" aria-pressed="false">Passive (Conservative)</button>
+    <button type="button" class="button button-secondary autotune-mode-btn" data-autotune-mode="active" aria-pressed="false">Active (Explore)</button>
   </div>
-  <p id="autotune-summary" class="field-help">Loading AutoTune telemetry…</p>
+  <p id="autotune-summary" class="field-help">Loading HyperTuner telemetry…</p>
   <div id="autotune-learned-list" class="autotune-learned-list"></div>`;
   $('#model-controls')?.append(atCard);
 }
@@ -913,11 +913,11 @@ async function loadAutoTuneSettings() {
   const listEl = $('#autotune-learned-list');
   if (!sumEl || !listEl) return;
   try {
-    const data = await api('/api/autotune');
+    const data = await api('/api/hypertuner');
     autoTuneState = data;
     renderAutoTuneCard(data);
   } catch (err) {
-    sumEl.textContent = `Could not load AutoTune: ${err?.message || 'error'}`;
+    sumEl.textContent = `Could not load HyperTuner: ${err?.message || 'error'}`;
   }
 }
 function renderAutoTuneCard(data) {
@@ -931,15 +931,17 @@ function renderAutoTuneCard(data) {
     btn.setAttribute('aria-pressed', String(active));
   });
   const obs = Number(data.totalObservations || 0);
+  const rows = Array.isArray(data.learned) ? data.learned : [];
+  const resetBtn = $('#autotune-reset-btn');
+  if (resetBtn) resetBtn.disabled = obs === 0 && rows.length === 0 && !Object.keys(data.pins || {}).length;
   const modeDesc = data.mode === 'off'
     ? 'Disabled — models use their provider defaults or manual sliders.'
     : data.mode === 'active'
       ? `Active Thompson Sampling · ${obs} recorded outcome${obs === 1 ? '' : 's'}.`
       : `Passive Conservative mode (≤10% safe adjacent exploration) · ${obs} recorded outcome${obs === 1 ? '' : 's'}.`;
   sumEl.textContent = modeDesc;
-  const rows = Array.isArray(data.learned) ? data.learned : [];
   if (!rows.length) {
-    listEl.innerHTML = '<p class="field-help autotune-empty">No learned model × domain cells yet — AutoTune starts with informed domain priors and adapts automatically as tasks verify and complete.</p>';
+    listEl.innerHTML = '<p class="field-help autotune-empty">No learned model × domain cells yet — HyperTuner observes passively on cold start and adapts automatically as tasks verify and complete.</p>';
     return;
   }
   const profileOpts = (Array.isArray(data.profiles) ? data.profiles : []).map(p => `<option value="${escapeHTML(p.id)}">${escapeHTML(p.label)}</option>`).join('');
@@ -953,8 +955,8 @@ function renderAutoTuneCard(data) {
       <div class="autotune-row-meta">
         <span class="autotune-profile-pill">${escapeHTML(r.bestLabel)} (${escapeHTML(tVal)})</span>
         <span class="autotune-stat">${escapeHTML(String(r.winRatePct))}% · ${escapeHTML(String(r.observations))}n</span>
-        <select class="autotune-pin-select" data-at-model="${escapeHTML(r.modelKey)}" data-at-domain="${escapeHTML(r.domain)}" aria-label="Pin profile for ${escapeHTML(r.modelKey)} ${escapeHTML(r.domain)}">
-          <option value="">Auto</option>${profileOpts}
+        <select class="autotune-pin-select" data-at-model="${escapeHTML(r.modelKey)}" data-at-domain="${escapeHTML(r.domain)}" title="Pin a fixed sampling archetype for this model &amp; domain" aria-label="Pin sampling profile for ${escapeHTML(r.modelKey)} ${escapeHTML(r.domain)}">
+          <option value="">Pin: Auto</option>${profileOpts}
         </select>
       </div>
     </div>`;
@@ -967,12 +969,15 @@ function renderAutoTuneCard(data) {
       const body = val
         ? { pin: { modelKey: sel.dataset.atModel, domain: sel.dataset.atDomain, profileId: val } }
         : { unpin: { modelKey: sel.dataset.atModel, domain: sel.dataset.atDomain } };
+      sel.disabled = true;
       try {
-        renderAutoTuneCard(await api('/api/autotune', { method: 'PATCH', body: JSON.stringify(body) }));
-        settingsFeedback(val ? `Pinned ${val} profile for ${sel.dataset.atModel} (${sel.dataset.atDomain}).` : `Restored Auto selection for ${sel.dataset.atModel} (${sel.dataset.atDomain}).`);
+        renderAutoTuneCard(await api('/api/hypertuner', { method: 'PATCH', body: JSON.stringify(body) }));
+        settingsFeedback(val ? `Pinned ${val} profile for ${sel.dataset.atModel} (${sel.dataset.atDomain}).` : `Restored HyperTuner Auto selection for ${sel.dataset.atModel} (${sel.dataset.atDomain}).`);
       } catch (err) {
-        settingsFeedback(err?.message || 'Could not update AutoTune pin.', true);
+        settingsFeedback(err?.message || 'Could not update HyperTuner pin.', true);
         if (autoTuneState) renderAutoTuneCard(autoTuneState);
+      } finally {
+        sel.disabled = false;
       }
     });
   });
@@ -980,28 +985,35 @@ function renderAutoTuneCard(data) {
 $$('.autotune-mode-btn').forEach(btn => {
   btn.addEventListener('click', async () => {
     const mode = btn.dataset.autotuneMode;
+    const allModeBtns = $$('.autotune-mode-btn');
+    allModeBtns.forEach(b => { b.disabled = true; });
     try {
-      renderAutoTuneCard(await api('/api/autotune', { method: 'PATCH', body: JSON.stringify({ mode }) }));
-      settingsFeedback(`AutoTune set to ${mode}.`);
+      renderAutoTuneCard(await api('/api/hypertuner', { method: 'PATCH', body: JSON.stringify({ mode }) }));
+      settingsFeedback(`HyperTuner set to ${mode}.`);
     } catch (err) {
-      settingsFeedback(err?.message || 'Could not update AutoTune mode.', true);
+      settingsFeedback(err?.message || 'Could not update HyperTuner mode.', true);
       if (autoTuneState) renderAutoTuneCard(autoTuneState);
+    } finally {
+      allModeBtns.forEach(b => { b.disabled = false; });
     }
   });
 });
 $('#autotune-reset-btn')?.addEventListener('click', async () => {
   const ok = await confirmModal({
-    title: 'Reset AutoTune learned profiles?',
-    message: 'This clears all learned sampling posteriors and model × domain pins. AutoTune mode stays unchanged.',
-    confirmLabel: 'Reset AutoTune',
+    title: 'Reset HyperTuner learned profiles?',
+    message: 'This clears all learned sampling posteriors and model × domain pins. HyperTuner mode stays unchanged.',
+    confirmLabel: 'Reset HyperTuner',
     danger: true,
   });
   if (!ok) return;
+  const resetBtn = $('#autotune-reset-btn');
+  if (resetBtn) resetBtn.disabled = true;
   try {
-    renderAutoTuneCard(await api('/api/autotune', { method: 'DELETE', body: '{}' }));
-    settingsFeedback('AutoTune learned profiles reset.');
+    renderAutoTuneCard(await api('/api/hypertuner', { method: 'DELETE', body: '{}' }));
+    settingsFeedback('HyperTuner learned profiles reset.');
   } catch (err) {
-    settingsFeedback(err?.message || 'Could not reset AutoTune.', true);
+    settingsFeedback(err?.message || 'Could not reset HyperTuner.', true);
+    if (resetBtn) resetBtn.disabled = false;
   }
 });
 

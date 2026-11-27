@@ -22,6 +22,7 @@ import {
   deleteTaskVisualizer,
 } from '../src/visualizer.mjs';
 import { BrowserPool } from '../src/browser-env.mjs';
+import { normalizeRosterAgent } from '../src/conclave-roster.mjs';
 import { createApp } from '../src/server.mjs';
 import { implementationManifest } from '../bench/run.mjs';
 
@@ -148,6 +149,18 @@ test('AutoTune: Empirical Bayes priors, provider capability clamping, manual-ove
   assert.ok(clampedAnthropic.applied.temperature !== undefined, 'Anthropic should receive temperature');
   assert.equal(clampedAnthropic.applied.top_p, undefined, 'Anthropic must never receive both temperature and top_p');
 
+  const clampedAnthropicManualTopP = clampProfileToProvider(
+    AUTOTUNE_PROFILES.find(p => p.id === 'focused'),
+    { id: 'anthropic-sonnet', model: 'claude-sonnet-4-6', kind: 'http', protocol: 'anthropic' },
+    { top_p: 0.9 }
+  );
+  assert.equal(clampedAnthropicManualTopP.applied.temperature, undefined, 'Anthropic must skip temperature when manual top_p is set');
+
+  // Conclave roster normalization allows allowlisted harnessCommand and blocks shells without ReferenceError
+  const agentOk = normalizeRosterAgent({ name: 'Auditor', harnessCommand: 'CLAUDE' });
+  assert.equal(agentOk.harnessCommand, 'claude');
+  assert.throws(() => normalizeRosterAgent({ name: 'Bad', harnessCommand: 'bash' }), { code: 'INVALID_AGENT' });
+
   // 4. Learning shifts posterior toward rewarded profile
   const modelKey = codingPick.receipt.modelKey;
   for (let i = 0; i < 8; i++) {
@@ -209,6 +222,7 @@ test('Visualizer sidecar: fallback generation, CSP strictness, custom metrics, a
   assert.equal(res.generatedBy, 'deterministic_fallback');
   const html = await readTaskVisualizerHtml(dir, task.id);
   assert.ok(html && html.includes('<!doctype html>'));
+  assert.ok(html.includes('Content-Security-Policy'));
   assert.ok(html.includes('g0d:viz'));
   assert.ok(html.includes('"accuracy":0.94'));
   assert.ok(!html.includes('</SCRIPT>'), 'uppercase </SCRIPT> must be escaped as \\u003c/SCRIPT\\u003e');
@@ -332,8 +346,8 @@ test('Instant Steer preemption & Parallel sidecar interjection + HTTP v0.3.0 end
     assert.equal(health.version, '0.3.0');
     assert.equal(health.acp, true);
 
-    // 2. /api/autotune GET / PATCH / DELETE
-    const at0 = (await dispatch(app, { url: '/api/autotune' })).json;
+    // 2. /api/autotune + /api/hypertuner alias GET / PATCH / DELETE
+    const at0 = (await dispatch(app, { url: '/api/hypertuner' })).json;
     assert.equal(at0.mode, 'passive');
     const at1 = (await dispatch(app, { method: 'PATCH', url: '/api/autotune', headers: hdrs, body: { mode: 'active' } })).json;
     assert.equal(at1.mode, 'active');

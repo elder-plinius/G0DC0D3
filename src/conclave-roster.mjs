@@ -311,9 +311,9 @@ export function normalizeRosterAgent(input = {}, existing = null) {
   const engineType = ['api', 'harness', 'custom_cli'].includes(input.engineType) ? input.engineType : (input.harnessId ? 'harness' : 'api');
   const providerId = input.providerId ? String(input.providerId).trim().slice(0, 200) : null;
   const harnessId = input.harnessId && EXTERNAL_HARNESSES.some(h => h.id === input.harnessId) ? input.harnessId : null;
-  const rawCmd = input.harnessCommand ? String(input.harnessCommand).trim().slice(0, 120) : null;
-  if (rawCmd && (!/^[a-z0-9._-]+$/i.test(rawCmd) || DISALLOWED_CLI_BINARIES.has(rawCmd.toLowerCase()))) {
-    throw Object.assign(new Error('Harness command must be a safe CLI binary name (shells and scripting interpreters are disallowed).'), { code: 'INVALID_AGENT', status: 400 });
+  const rawCmd = input.harnessCommand ? String(input.harnessCommand).trim().toLowerCase().slice(0, 120) : null;
+  if (rawCmd && (!/^[a-z0-9._-]+$/i.test(rawCmd) || !ALLOWED_CLI_BINARIES.has(rawCmd))) {
+    throw Object.assign(new Error('Harness command must be an approved CLI binary name (e.g. claude, codex, gemini, agy, copilot, opencode, ollama).'), { code: 'INVALID_AGENT', status: 400 });
   }
   const harnessCommand = rawCmd;
   const primarySpecialty = VALID_DOMAINS.has(input.primarySpecialty) ? input.primarySpecialty : (existing?.primarySpecialty || 'swe_coding');

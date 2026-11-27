@@ -247,8 +247,11 @@ export function clampProfileToProvider(profile, provider, manualGeneration = {},
       continue;
     }
     // Anthropic Messages API (Claude 4+) rejects requests specifying BOTH temperature and top_p.
-    if (isAnthropic && key === 'top_p' && (applied.temperature !== undefined || manual.temperature !== undefined)) {
-      skipped.push('top_p:anthropic_exclusive');
+    if (isAnthropic && (
+      (key === 'top_p' && (applied.temperature !== undefined || manual.temperature !== undefined))
+      || (key === 'temperature' && (applied.top_p !== undefined || manual.top_p !== undefined))
+    )) {
+      skipped.push(`${key}:anthropic_exclusive`);
       continue;
     }
     const spec = fields[key];

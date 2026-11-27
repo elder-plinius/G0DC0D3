@@ -49,7 +49,7 @@ export async function readOptionalVizMetrics(workspace) {
     const dirReal = await fs.realpath(dirPath);
     if (dirReal !== dirPath && !dirReal.startsWith(wsReal + path.sep)) return null;
     const metricsPath = path.join(dirReal, 'viz-metrics.json');
-    const flags = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0);
+    const flags = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0) | (fsConstants.O_NONBLOCK || 0);
     fh = await fs.open(metricsPath, flags);
     const st = await fh.stat();
     if (!st.isFile() || st.size > MAX_METRICS_BYTES) return null;
@@ -213,7 +213,7 @@ function render(data){
   else { mc.hidden=true; }
   const evs=(data.events||[]).filter(e=>e.tool||e.type==='evaluation.completed'||e.type==='model.request').slice(-18).reverse();
   document.getElementById('v-events').innerHTML=evs.length
-    ? evs.map(e=>'<li><span class="mono">'+(e.ok===false?'<span class="err">!</span> ':'<span class="ok">✓</span> ')+esc(e.tool||e.type)+(e.path?' · '+esc(e.path):e.url?' · '+esc(e.url):e.command?' · '+esc(e.command):'')+'</span><span class="muted">'+(Number.isFinite(Number(e.durationMs))?esc(String(e.durationMs))+'ms':'')+'</span></li>').join('')
+    ? evs.map(e=>'<li><span class="mono">'+(e.ok===false?'<span class="err">!</span> ':'<span class="ok">✓</span> ')+esc(e.tool||e.type)+(e.path?' · '+esc(e.path):e.url?' · '+esc(e.url):e.command?' · '+esc(e.command):'')+'</span><span class="muted">'+(typeof e.durationMs==='number'&&Number.isFinite(e.durationMs)?esc(String(e.durationMs))+'ms':'')+'</span></li>').join('')
     : '<li class="muted">Live telemetry connected…</li>';
 }
 render(INITIAL);
@@ -251,6 +251,15 @@ function extractHtmlDocument(rawText) {
  * Generates (or refines) a bespoke live HTML/SVG/JS visualizer for `task` via a lightweight
  * sidecar `.draft()` call, falling back cleanly to the rich deterministic telemetry dashboard.
  */
+const VISUALIZER_META_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none';";
+
+function injectMetaCsp(doc) {
+  if (!doc || /http-equiv\s*=\s*["']?content-security-policy/i.test(doc)) return doc;
+  const tag = `<meta http-equiv="Content-Security-Policy" content="${VISUALIZER_META_CSP}">`;
+  if (/<head[\s>]/i.test(doc)) return doc.replace(/<head([^>]*)>/i, `<head$1>\n${tag}`);
+  return `${tag}\n${doc}`;
+}
+
 export async function generateTaskVisualizer({
   dataDir,
   task,
@@ -301,6 +310,7 @@ export async function generateTaskVisualizer({
   }
 
   if (!html) html = buildFallbackVisualizerHtml(payload);
+  html = injectMetaCsp(html);
 
   const filePath = visualizerFilePath(dataDir, task?.id);
   await fs.mkdir(path.dirname(filePath), { recursive: true });

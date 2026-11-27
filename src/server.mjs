@@ -155,14 +155,30 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
       if(!hosts.has(req.headers.host))return send(res,403,{error:'Unexpected Host header'});
       const url=new URL(req.url,`http://${expectedHost}`);
       const isPreviewGet = req.method === 'GET' && url.pathname.startsWith('/preview/');
+      const vizGetMatch = req.method === 'GET' ? url.pathname.match(/^\/api\/tasks\/([^/]+)\/visualizer$/) : null;
+      const hasValidVizToken = Boolean(vizGetMatch && runtime.verifyVisualizerToken(decodeURIComponent(vizGetMatch[1]), url.searchParams.get('token')));
       const origin=req.headers.origin;
-      if(origin && !(isPreviewGet && origin === 'null') && ![...hosts].some(host=>origin===`http://${host}`))return send(res,403,{error:'Cross-origin access denied'});
+      if(origin && !((isPreviewGet || hasValidVizToken) && origin === 'null') && ![...hosts].some(host=>origin===`http://${host}`))return send(res,403,{error:'Cross-origin access denied'});
       const mutation=['POST','PATCH','PUT','DELETE'].includes(req.method);
       if(mutation && req.headers['x-g0d-request']!=='1')return send(res,403,{error:'Missing local application request header'});
       if (isPreviewGet) {
         const pm = url.pathname.match(/^\/preview\/([a-f0-9]{32})(?:\/(.*))?$/);
         if (!pm) return send(res, 404, { error: 'Unknown preview route.' });
         return await previews.serve(pm[1], pm[2] || '', res, req.headers.host);
+      }
+      if (hasValidVizToken) {
+        const vizId = decodeURIComponent(vizGetMatch[1]);
+        const html = await runtime.getVisualizerHtml(vizId);
+        if (!html) return send(res, 404, { error: { code: 'VISUALIZER_NOT_READY', message: 'No visualizer generated for this task yet.' } });
+        res.writeHead(200, {
+          'content-type': 'text/html; charset=utf-8',
+          'cache-control': 'no-store',
+          'content-security-policy': VISUALIZER_CSP,
+          'x-frame-options': 'SAMEORIGIN',
+          'x-content-type-options': 'nosniff',
+        });
+        res.end(html);
+        return;
       }
       if(req.method==='GET' && url.pathname==='/api/health') {
         if (!sessionReady) return send(res, 503, { error: 'Local session initializing' });
@@ -578,13 +594,13 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
         const result = await providerSettings.removeModels(await readBody(req));
         return send(res,200,{...result,connectedApiProviders:providerSettings.connectedProfiles(),providers:[...providers.values()].map(({id,label,kind,available=true,tier='standard'})=>({id,label,kind,available,tier}))});
       }
-      if(req.method==='GET' && url.pathname==='/api/autotune') {
+      if(req.method==='GET' && (url.pathname==='/api/autotune' || url.pathname==='/api/hypertuner')) {
         return send(res, 200, runtime.getAutoTune());
       }
-      if(req.method==='PATCH' && url.pathname==='/api/autotune') {
+      if(req.method==='PATCH' && (url.pathname==='/api/autotune' || url.pathname==='/api/hypertuner')) {
         return send(res, 200, runtime.updateAutoTune(await readBody(req)));
       }
-      if(req.method==='DELETE' && url.pathname==='/api/autotune') {
+      if(req.method==='DELETE' && (url.pathname==='/api/autotune' || url.pathname==='/api/hypertuner')) {
         await readBody(req).catch(() => ({}));
         return send(res, 200, runtime.resetAutoTune());
       }

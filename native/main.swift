@@ -795,7 +795,8 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
         if scheme == "file" { decisionHandler(.cancel); return }
         if navigationAction.targetFrame?.isMainFrame == false {
             if ["about", "blob"].contains(scheme) { decisionHandler(.allow); return }
-            if scheme == "http" && url.host == "127.0.0.1" && url.port == port && url.path.hasPrefix("/preview/") {
+            let isVisualizer = url.pathComponents.count == 5 && url.pathComponents[1] == "api" && url.pathComponents[2] == "tasks" && url.pathComponents[4] == "visualizer"
+            if scheme == "http" && url.host == "127.0.0.1" && url.port == port && (url.path.hasPrefix("/preview/") || isVisualizer) {
                 decisionHandler(.allow); return
             }
             if navigationAction.navigationType == .linkActivated && ["http", "https", "mailto"].contains(scheme) {

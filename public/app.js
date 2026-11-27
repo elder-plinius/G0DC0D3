@@ -608,8 +608,9 @@ function renderComposer() {
     sendBtn.dataset.composerStop = canStop ? '1' : '';
     sendBtn.classList.toggle('is-stop-mode', canStop);
     sendBtn.disabled = canStop ? Boolean(actionBusy) : (!online || loading || task?.draining || task?.sourceBusy || sourceActionBusy || isCrewBusy(task) || cancelled || busy || (Boolean(selectedId) && actionBusy) || !hasPayload);
-    sendBtn.setAttribute('aria-label', canStop ? 'Stop generation' : busy ? 'Sending message' : queueing ? ($('#composer-delivery')?.value === 'steer' ? 'Steer current turn' : $('#composer-delivery')?.value === 'parallel' ? 'Run parallel sidecar' : 'Queue next message') : 'Send message');
-    sendBtn.title = canStop ? 'Stop current turn (Esc)' : 'Send message';
+    const sendLabel = canStop ? 'Stop generation' : busy ? 'Sending message' : queueing ? ($('#composer-delivery')?.value === 'steer' ? 'Steer current turn' : $('#composer-delivery')?.value === 'parallel' ? 'Run parallel sidecar' : 'Queue next message') : 'Send message';
+    sendBtn.setAttribute('aria-label', sendLabel);
+    sendBtn.title = canStop ? 'Stop current turn (Esc)' : sendLabel;
     sendBtn.setAttribute('aria-busy', String(busy));
     const iconMode = canStop ? 'stop' : 'send';
     if (sendBtn.dataset.iconMode !== iconMode) {
@@ -4022,7 +4023,7 @@ function humanizeToolStep(event) {
   }
   if (event?.type === 'subagent.completed') {
     const role = data.role || 'subagent';
-    return { verb: 'Delegated', target: `${role} finished`, badge: data.calls ? `${data.calls} calls` : '', badgeKind: 'accent', isErr: !data.ok };
+    return { verb: 'Delegated', target: `${role} finished`, badge: data.calls ? `${data.calls} ${data.calls === 1 ? 'call' : 'calls'}` : '', badgeKind: 'accent', isErr: !data.ok };
   }
 
   const pickPath = () => String(res.path || args.path || args.file || args.target || '').replace(/^\.\//, '');
@@ -4191,7 +4192,7 @@ function conversationWork(events, openDetails) {
     const stepKey = `step-${event.id ?? event.seq}`;
     const dotCls = s.isErr ? 'is-err' : 'is-ok';
     const dotSym = s.isErr ? '!' : '✓';
-    return `<details class="live-rail-step ${dotCls}" data-disclosure="${escapeHTML(stepKey)}" ${openDetails.has(stepKey) ? 'open' : ''}><summary class="live-rail-row"><span class="live-rail-dot ${dotCls}" aria-hidden="true">${dotSym}</span><span class="live-rail-verb">${escapeHTML(s.verb)}</span><span class="live-rail-target">${escapeHTML(s.target)}</span>${s.badge ? `<span class="live-rail-badge kind-${escapeHTML(s.badgeKind)}">${escapeHTML(s.badge)}</span>` : ''}</summary><pre class="live-rail-peek" tabindex="0" role="region" aria-label="Work step details">${escapeHTML(pretty(event.data ?? {}))}</pre></details>`;
+    return `<details class="live-rail-step ${dotCls}" data-disclosure="${escapeHTML(stepKey)}" ${openDetails.has(stepKey) ? 'open' : ''}><summary class="live-rail-row"><span class="live-rail-dot ${dotCls}" aria-hidden="true">${dotSym}</span><span class="live-rail-verb">${escapeHTML(s.verb)}</span><span class="live-rail-target" title="${escapeHTML(s.target)}">${escapeHTML(s.target)}</span>${s.badge ? `<span class="live-rail-badge kind-${escapeHTML(s.badgeKind)}">${escapeHTML(s.badge)}</span>` : ''}</summary><pre class="live-rail-peek" tabindex="0" role="region" aria-label="Work step details">${escapeHTML(pretty(event.data ?? {}))}</pre></details>`;
   }).join('');
 
   return `<details class="work-group work-group-rail" data-disclosure="${escapeHTML(key)}" ${openDetails.has(key) ? 'open' : ''}><summary class="work-group-summary"><span class="work-group-title">${escapeHTML(title)}</span><span class="work-group-outcome">${escapeHTML(summary)}</span></summary>${fileChips}<div class="live-rail-list work-group-body">${rowsHtml}</div></details>`;
@@ -4331,7 +4332,7 @@ function renderTimeline(events, total, task) {
     } else if (event.type === 'autotune.selected' && event.data) {
       const at = event.data;
       const tTxt = at.applied?.temperature !== undefined ? `T=${at.applied.temperature}` : 'tuned';
-      messages.push(`<div class="autotune-receipt"><span aria-hidden="true">◈</span><span><strong>AutoTune</strong> · ${escapeHTML(at.profileLabel || at.profileId || 'Focused')} (${escapeHTML(tTxt)}) · ${escapeHTML(at.domain || 'general')} · ${escapeHTML(String(at.winRatePct ?? 0))}% win</span></div>`);
+      messages.push(`<div class="autotune-receipt"><span aria-hidden="true">◈</span><span><strong>HyperTuner</strong> · ${escapeHTML(at.profileLabel || at.profileId || 'Focused')} (${escapeHTML(tTxt)}) · ${escapeHTML(at.domain || 'general')} · ${escapeHTML(String(at.winRatePct ?? 0))}% win</span></div>`);
     } else if (['model.switched', 'providers.updated', 'routing.retry_scheduled', 'routing.strategy_changed', 'routing.profile_changed', 'routing.reframe_retry', 'overseer.judged', 'owner.refusal_reported', 'permission.auto_approved', 'hook.blocked', 'memory.auto_learned', 'skill.created'].includes(event.type)) {
       flush();
       const description = eventDescription(event);
@@ -4367,14 +4368,8 @@ function renderTimeline(events, total, task) {
                 ? `Recovering · ${activeProvLabel}`
                 : `Thinking${activeProvLabel ? ` · ${activeProvLabel}` : ''}`;
 
-    const todos = Array.isArray(task.todos) ? task.todos : [];
-    const doneTodos = todos.filter(t => t.status === 'done').length;
-    const planHtml = todos.length
-      ? `<div class="live-work-plan"><div class="live-work-plan-head"><span>Plan</span><span>${doneTodos}/${todos.length}</span></div><ul class="live-work-plan-list">${todos.slice(0, 6).map(item => {
-          const icon = item.status === 'done' ? '✓' : item.status === 'in_progress' ? '◐' : '○';
-          return `<li class="live-plan-item status-${escapeHTML(item.status || 'pending')}"><span class="live-plan-icon" aria-hidden="true">${icon}</span><span>${escapeHTML(item.text || '')}</span></li>`;
-        }).join('')}</ul></div>`
-      : '';
+    // Note: pinned #todo-strip right above the composer already displays Plan progress; keep Live Rail focused on steps.
+    const planHtml = '';
 
     const lastUserIdx = events.findLastIndex(e => ['user.message', 'user.messages.applied', 'conversation.rewound'].includes(e.type));
     const lastUserSeq = lastUserIdx >= 0 ? Number(events[lastUserIdx]?.seq || 0) : 0;
@@ -4395,7 +4390,7 @@ function renderTimeline(events, total, task) {
       const stepKey = `live-step-${ev.id ?? ev.seq}`;
       const dotCls = isRun ? 'is-running' : (s.isErr ? 'is-err' : 'is-ok');
       const dotSym = isRun ? '◐' : (s.isErr ? '!' : '✓');
-      return `<details class="live-rail-step ${dotCls}" data-disclosure="${escapeHTML(stepKey)}" ${openDetails.has(stepKey) ? 'open' : ''}><summary class="live-rail-row"><span class="live-rail-dot ${dotCls}" aria-hidden="true">${dotSym}</span><span class="live-rail-verb">${escapeHTML(s.verb)}</span><span class="live-rail-target">${escapeHTML(s.target)}</span>${s.badge ? `<span class="live-rail-badge kind-${escapeHTML(s.badgeKind)}">${escapeHTML(s.badge)}</span>` : ''}</summary><pre class="live-rail-peek" tabindex="0" role="region" aria-label="Step details">${escapeHTML(pretty(ev.data ?? {}))}</pre></details>`;
+      return `<details class="live-rail-step ${dotCls}" data-disclosure="${escapeHTML(stepKey)}" ${openDetails.has(stepKey) ? 'open' : ''}><summary class="live-rail-row"><span class="live-rail-dot ${dotCls}" aria-hidden="true">${dotSym}</span><span class="live-rail-verb">${escapeHTML(s.verb)}</span><span class="live-rail-target" title="${escapeHTML(s.target)}">${escapeHTML(s.target)}</span>${s.badge ? `<span class="live-rail-badge kind-${escapeHTML(s.badgeKind)}">${escapeHTML(s.badge)}</span>` : ''}</summary><pre class="live-rail-peek" tabindex="0" role="region" aria-label="Step details">${escapeHTML(pretty(ev.data ?? {}))}</pre></details>`;
     };
     const olderKey = `live-older-${task.id}`;
     const olderHtml = olderSteps.length
@@ -5246,7 +5241,8 @@ function initPanelSplitters() {
   const sidebarSplitter = $('#sidebar-splitter');
   if (sidebarSplitter && !sidebarSplitter.dataset.splitterWired) {
     sidebarSplitter.dataset.splitterWired = '1';
-    const applySidebar = (px, splitMode = document.body.classList.contains('artifact-open')) => {
+    const isSplitDockOpen = () => ['artifact-open', 'conclave-open', 'browser-open', 'visualizer-open'].some(c => document.body.classList.contains(c));
+    const applySidebar = (px, splitMode = isSplitDockOpen()) => {
       const minW = splitMode ? 140 : 170;
       const inspOpen = !splitMode && document.body.classList.contains('inspector-open');
       const inspW = inspOpen ? (parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--inspector-width')) || 340) : 0;
@@ -5287,9 +5283,9 @@ function initPanelSplitters() {
     };
     sidebarSplitter.addEventListener('pointerup', end);
     sidebarSplitter.addEventListener('pointercancel', end);
-    sidebarSplitter.addEventListener('dblclick', () => applySidebar(document.body.classList.contains('artifact-open') ? 184 : 250));
+    sidebarSplitter.addEventListener('dblclick', () => applySidebar(isSplitDockOpen() ? 184 : 250));
     sidebarSplitter.addEventListener('keydown', event => {
-      const splitMode = document.body.classList.contains('artifact-open');
+      const splitMode = isSplitDockOpen();
       const cssVar = splitMode ? '--sidebar-split-width' : '--sidebar-width';
       const cur = parseFloat(getComputedStyle(document.documentElement).getPropertyValue(cssVar)) || (splitMode ? 184 : 250);
       if (event.key === 'ArrowRight') { event.preventDefault(); applySidebar(cur + 16, splitMode); }
@@ -8897,7 +8893,7 @@ document.addEventListener('keydown', (event) => {
     }
     return;
   }
-  const editing = event.target.closest('input, textarea, select, [contenteditable="true"]');
+  const editing = event.target?.closest?.('input, textarea, select, [contenteditable="true"]');
   if (event.key === '?' && !editing && !event.metaKey && !event.ctrlKey && !event.altKey) {
     event.preventDefault(); dismissDrawers(); if (!$('#shortcuts-dialog').open) $('#shortcuts-dialog').showModal(); return;
   }
@@ -9894,7 +9890,12 @@ window.G0DVisualizer = (function initG0DVisualizer() {
       isExpanded = !isExpanded;
       dock.classList.toggle('is-expanded', isExpanded);
       const eb = $('#viz-expand-btn');
-      if (eb) eb.setAttribute('aria-pressed', String(isExpanded));
+      if (eb) {
+        eb.setAttribute('aria-pressed', String(isExpanded));
+        eb.textContent = isExpanded ? '⤡' : '⤢';
+        eb.title = isExpanded ? 'Restore visualizer panel' : 'Expand visualizer';
+        eb.setAttribute('aria-label', isExpanded ? 'Restore visualizer panel' : 'Expand visualizer');
+      }
     });
     $('#viz-regen-btn')?.addEventListener('click', () => {
       const tid = activeTaskId || selectedId;
@@ -9920,16 +9921,24 @@ window.G0DVisualizer = (function initG0DVisualizer() {
     return dock;
   }
 
-  function setStatus(label, busy = false) {
+  function setStatus(label, busy = false, isError = false) {
     const chip = $('#viz-status-chip');
     if (chip) {
       chip.textContent = label;
       chip.classList.toggle('is-busy', busy);
+      chip.classList.toggle('is-error', isError);
     }
     const regen = $('#viz-regen-btn');
     if (regen) regen.disabled = busy;
     const refBtn = $('#viz-refine-submit');
     if (refBtn) refBtn.disabled = busy;
+    const refInput = $('#viz-refine-input');
+    if (refInput) refInput.disabled = busy;
+    const emptyBtn = $('#viz-empty-start');
+    if (emptyBtn) {
+      emptyBtn.disabled = busy;
+      emptyBtn.textContent = busy ? 'Forging Visualizer…' : '◈ Generate Visualizer';
+    }
   }
 
   function syncButton() {
@@ -9939,12 +9948,15 @@ window.G0DVisualizer = (function initG0DVisualizer() {
     btn.setAttribute('aria-pressed', String(isOpen));
   }
 
-  function mountIframe(taskId) {
+  function mountIframe(taskId, vizUrl = null) {
     const iframe = $('#viz-iframe');
     const empty = $('#viz-empty');
     if (!iframe) return;
     versionNonce += 1;
-    iframe.src = `/api/tasks/${encodeURIComponent(taskId)}/visualizer?v=${versionNonce}`;
+    const base = vizUrl || `/api/tasks/${encodeURIComponent(taskId)}/visualizer`;
+    const sep = base.includes('?') ? '&' : '?';
+    iframe.removeAttribute('srcdoc');
+    iframe.src = `${base}${sep}v=${versionNonce}`;
     iframe.classList.remove('hidden');
     empty?.classList.add('hidden');
   }
@@ -9984,18 +9996,18 @@ window.G0DVisualizer = (function initG0DVisualizer() {
     if (!isOpen) await open(taskId, { autoGenerate: false });
     if (generating) return;
     generating = true;
-    setStatus(instruction ? 'Refining…' : 'Forging…', true);
+    setStatus(instruction ? 'Refining…' : 'Forging…', true, false);
     try {
       const res = await api(`/api/tasks/${encodeURIComponent(taskId)}/visualize`, {
         method: 'POST',
         body: JSON.stringify({ instruction }),
       });
       if (!isOpen || activeTaskId !== taskId) return;
-      mountIframe(taskId);
-      setStatus(res?.generatedBy && res.generatedBy !== 'deterministic_fallback' ? 'Live · AI' : 'Live', false);
+      mountIframe(taskId, res?.url || null);
+      setStatus(res?.generatedBy && res.generatedBy !== 'deterministic_fallback' ? 'Live · AI' : 'Live', false, false);
     } catch (err) {
       if (isOpen && activeTaskId === taskId) {
-        setStatus('Error', false);
+        setStatus('Error', false, true);
         toast(err.message || 'Could not generate visualizer.');
       }
     } finally {
@@ -10004,6 +10016,10 @@ window.G0DVisualizer = (function initG0DVisualizer() {
       if (regen) regen.disabled = false;
       const refBtn = $('#viz-refine-submit');
       if (refBtn) refBtn.disabled = false;
+      const refInput = $('#viz-refine-input');
+      if (refInput) refInput.disabled = false;
+      const emptyBtn = $('#viz-empty-start');
+      if (emptyBtn) { emptyBtn.disabled = false; emptyBtn.textContent = '◈ Generate Visualizer'; }
     }
   }
 
@@ -10034,13 +10050,13 @@ window.G0DVisualizer = (function initG0DVisualizer() {
       return;
     }
 
-    // Check if a visualizer already exists for this task; if not and autoGenerate, forge one immediately
+    // Check if a visualizer already exists for this task; if so mount via capability-tokenized URL
     try {
-      const head = await fetch(`/api/tasks/${encodeURIComponent(tid)}/visualizer`, { method: 'GET', headers: { 'x-g0d-request': '1' } });
+      const tel = await api(`/api/tasks/${encodeURIComponent(tid)}/visualizer-telemetry`);
       if (!isOpen || activeTaskId !== tid) return;
-      if (head.ok) {
-        mountIframe(tid);
-        setStatus('Live', false);
+      if (tel?.visualizerUrl) {
+        mountIframe(tid, tel.visualizerUrl);
+        setStatus('Live', false, false);
         return;
       }
     } catch {}
@@ -10049,9 +10065,12 @@ window.G0DVisualizer = (function initG0DVisualizer() {
     if (autoGenerate) {
       await generate(tid, '');
     } else {
-      $('#viz-iframe')?.classList.add('hidden');
+      const iframe = $('#viz-iframe');
+      if (iframe) { iframe.classList.add('hidden'); iframe.removeAttribute('srcdoc'); iframe.src = 'about:blank'; }
       $('#viz-empty')?.classList.remove('hidden');
-      setStatus('Ready', false);
+      const sub = $('#viz-subtitle');
+      if (sub) sub.textContent = 'Isolated sidecar telemetry dashboard';
+      setStatus('Ready', false, false);
     }
   }
 
@@ -10064,7 +10083,15 @@ window.G0DVisualizer = (function initG0DVisualizer() {
       dock.classList.add('hidden');
       dock.classList.remove('is-expanded');
     }
-    $('#viz-expand-btn')?.setAttribute('aria-pressed', 'false');
+    const eb = $('#viz-expand-btn');
+    if (eb) {
+      eb.setAttribute('aria-pressed', 'false');
+      eb.textContent = '⤢';
+      eb.title = 'Expand visualizer';
+      eb.setAttribute('aria-label', 'Expand visualizer');
+    }
+    const sub = $('#viz-subtitle');
+    if (sub) sub.textContent = 'Isolated sidecar telemetry dashboard';
     document.body.classList.remove('visualizer-open');
     if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
     if (telemetryTimer) { clearTimeout(telemetryTimer); telemetryTimer = null; }
@@ -10076,10 +10103,10 @@ window.G0DVisualizer = (function initG0DVisualizer() {
     else open(taskId || selectedId, { autoGenerate: true });
   }
 
-  function onReadyEvent(taskId) {
+  function onReadyEvent(taskId, delta) {
     if (isOpen && activeTaskId === taskId && !generating) {
-      mountIframe(taskId);
-      setStatus('Live', false);
+      mountIframe(taskId, delta?.url || null);
+      setStatus('Live', false, false);
     }
   }
 

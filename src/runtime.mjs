@@ -2,7 +2,7 @@ import { runAnswerRace, validateAnswerRace } from './answer-race.mjs';
 import { stitchContinuation } from './providers.mjs';
 import { activeHistory, modelParameters, parametersFor } from './conversation-controls.mjs';
 import { isCatalogModel } from './venice-catalog.mjs';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { dirname, join, resolve, sep } from 'node:path';
 import { promises as fs, constants as fsConstants } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -731,6 +731,7 @@ export class Runtime {
     this._turnPreempted = new Set();
     this._sidecars = new Map(); // taskId -> Set<{ controller, promise, workerId }>
     this._vizAborts = new Map(); // taskId -> Set<AbortController>
+    this._vizTokens = new Map(); // taskId -> 32-hex capability token for sandboxed iframe GET
     this.cron = new CronScheduler({
       store: this.store,
       tickMs: schedulerTickMs,
@@ -1493,6 +1494,20 @@ export class Runtime {
       for (const ac of vizSet) { try { ac.abort(); } catch {} }
     }
   }
+  _getVisualizerToken(id) {
+    let tok = this._vizTokens.get(id);
+    if (!tok) {
+      tok = randomBytes(16).toString('hex');
+      this._vizTokens.set(id, tok);
+    }
+    return tok;
+  }
+  verifyVisualizerToken(id, candidate) {
+    const expected = this._vizTokens.get(id);
+    if (!expected || typeof candidate !== 'string' || candidate.length !== expected.length) return false;
+    try { return timingSafeEqual(Buffer.from(expected, 'utf8'), Buffer.from(candidate, 'utf8')); }
+    catch { return false; }
+  }
   async generateVisualizer(id, { instruction = '' } = {}) {
     if (this.closed) throw fault('RUNTIME_CLOSED', 'Runtime is closed.');
     const task = this.getTask(id);
@@ -1535,8 +1550,11 @@ export class Runtime {
         await deleteTaskVisualizer(this.store.dataDir, id).catch(() => {});
         throw fault('TASK_NOT_FOUND', 'Task was deleted while generating visualizer.');
       }
-      this._emitStream(id, { type: 'visualizer.ready', url: result.url, generatedBy: result.generatedBy, bytes: result.bytes, payload: result.payload });
-      return result;
+      const token = this._getVisualizerToken(id);
+      const tokenizedUrl = `/api/tasks/${encodeURIComponent(id)}/visualizer?token=${token}`;
+      const enriched = { ...result, url: tokenizedUrl };
+      this._emitStream(id, { type: 'visualizer.ready', url: tokenizedUrl, generatedBy: result.generatedBy, bytes: result.bytes, payload: result.payload });
+      return enriched;
     } finally {
       vizSet.delete(ac);
       if (!vizSet.size) this._vizAborts.delete(id);
@@ -1554,7 +1572,12 @@ export class Runtime {
       const snap = await taskSnapshot(task.workspace);
       files = snap.files || [];
     } catch {}
-    return buildVisualizerPayload(task, events, files);
+    const payload = await buildVisualizerPayload(task, events, files);
+    const existingHtml = await readTaskVisualizerHtml(this.store.dataDir, id);
+    if (existingHtml) {
+      payload.visualizerUrl = `/api/tasks/${encodeURIComponent(id)}/visualizer?token=${this._getVisualizerToken(id)}`;
+    }
+    return payload;
   }
   async runParallelSidecar(id, prompt, attachments = null) {
     if (this.closed) throw fault('RUNTIME_CLOSED', 'Runtime is closed.');
@@ -4204,6 +4227,7 @@ export class Runtime {
     this.outboundAudit.clear();
     this.resetLearning();
     this.resetAutoTune();
+    this._vizTokens.clear();
     this.deleteRefusalPattern(null);
     await this.broker.browser.closeAllSessions().catch(() => {});
     await Promise.all([...new Set(this.providers.values())].map(p => p?.closeAllSessions?.().catch(() => {})));
@@ -4290,6 +4314,7 @@ export class Runtime {
     await this.broker.browser.closeSession(id, { resetPreferences: true }).catch(() => {});
     await Promise.all([...new Set(this.providers.values())].map(p => p?.dropTaskSession?.(id).catch(() => {})));
     this._lastAutoTune.delete(id);
+    this._vizTokens.delete(id);
     await deleteTaskVisualizer(this.store.dataDir, id).catch(() => {});
     // Only delete workspaces created inside this runtime's managed workspaces directory.
     let managedRoot = resolve(this.store.dataDir, 'workspaces') + sep;
@@ -4818,8 +4843,8 @@ export class Runtime {
       if (mode === 'steer') {
         const crewRec = this.crew.record?.(id);
         const targets = Object.entries(crewRec?.members || {})
-          .filter(([, m]) => m && m.role !== 'verifier' && m.taskId)
-          .map(([workerId]) => workerId);
+          .filter(([role, workerTaskId]) => role !== 'verifier' && typeof workerTaskId === 'string' && workerTaskId)
+          .map(([, workerTaskId]) => workerTaskId);
         const steered = [];
         for (const wid of targets) {
           try { steered.push(await this.queueWorkerSteer(id, wid, message)); } catch {}
