@@ -2024,13 +2024,14 @@ export class AntigravityCliProvider extends CodexProvider {
     const working = await fs.mkdtemp(path.join(tmpdir(), 'g0d-agy-planner-'));
     try {
       if (this.closed) throw Object.assign(new Error('Antigravity CLI provider is closed'), { code: 'PROVIDER_CLOSED', retryable: false });
-      const directive = 'Read the complete planner prompt from stdin. Return ONLY one valid raw JSON object matching the next-action decision envelope (no markdown fences, no commentary). Do not invoke any Antigravity CLI tools.';
-      const args = ['--print', directive, '--output-format', 'json', '--disable-slash-commands', '--sandbox'];
+      // Omit --print so agy reads the complete planner prompt directly from stdin (avoids argv prompt leaks & E2BIG).
+      const args = ['--output-format', 'json', '--disable-slash-commands', '--sandbox'];
       if (this.model) args.push('--model', this.model);
       const effort = this.cliSettings?.reasoningEffort;
       if (effort && ['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) args.push('--effort', effort);
-      const stdinPayload = `${compilePrompt({ ...context, tools })}\n\n` +
-        `This is a planner-only bridge. DO NOT invoke any Antigravity CLI tools. Return ONLY raw JSON matching:\n` +
+      const stdinPayload = `CRITICAL: You are running inside a planner-only JSON bridge. DO NOT invoke any Antigravity CLI built-in tools (no read_file, write_file, run_command, etc.). Return ONLY one raw JSON object matching the decision envelope below (no markdown fences, no prose).\n\n` +
+        `${compilePrompt({ ...context, tools })}\n\n` +
+        `Return ONLY raw JSON matching:\n` +
         `{"type":"tool"|"message","calls":[{"id":"unique","name":"tool.name","arguments":"JSON string"}],"text":"","finish":"continue"|"done"|"refusal"}\n` +
         `Available tools: ${JSON.stringify(tools)}\n` +
         `For tool actions set type="tool", calls=[...], text="", finish="continue". For final replies set type="message", calls=[], text="summary", finish="done".`;
@@ -2047,10 +2048,11 @@ export class AntigravityCliProvider extends CodexProvider {
           const safeStatus = String(parsed.status).replace(/[^A-Za-z0-9_ -]/g, '').slice(0, 40) || 'ERROR';
           throw Object.assign(new Error(`Antigravity CLI returned status ${safeStatus}`), { code: 'provider_configuration', retryable: false });
         }
-        if (Number(parsed.num_turns) > 1) {
+        if (Number(parsed.num_turns) > 1 && !parsed.structured_output) {
           throw Object.assign(new Error('Planner-only Antigravity CLI bridge attempted an internal tool turn; response rejected'), { code: 'tool_protocol' });
         }
-        if (typeof parsed.response === 'string') envelopeText = parsed.response;
+        if (parsed.structured_output && typeof parsed.structured_output === 'object') envelopeText = JSON.stringify(parsed.structured_output);
+        else if (typeof parsed.response === 'string') envelopeText = parsed.response;
         else if (typeof parsed.text === 'string' && !parsed.type) envelopeText = parsed.text;
         if (parsed.usage && typeof parsed.usage === 'object') usage = parsed.usage;
       }

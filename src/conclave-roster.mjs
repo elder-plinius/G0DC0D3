@@ -526,7 +526,7 @@ export function buildHarnessInvocation(harnessId, harnessCommand, fullPrompt) {
   if (harnessId === 'antigravity' || harnessId === 'antigravity-cli' || cmdName === 'agy') {
     return {
       binName: cmdName,
-      args: ['--print', 'Read the advisory brief from stdin and respond concisely without editing files.', '--disable-slash-commands', '--sandbox'],
+      args: ['--disable-slash-commands', '--sandbox'],
       stdinText: fullPrompt,
       envKind: 'gemini'
     };
