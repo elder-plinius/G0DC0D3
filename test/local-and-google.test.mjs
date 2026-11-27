@@ -516,3 +516,47 @@ test('Runtime isolates per-file INVALID_TOOL errors in multi-file repo.write bat
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
+
+test('Round 2 regressions: all CLI bridges expose .draft(), forkTask preserves initialSnapshot diff, and GET /api/tasks/:id degrades gracefully on SNAPSHOT_LIMIT', async () => {
+  const { CodexProvider, ClaudeCodeProvider, GeminiCliProvider, CopilotCliProvider } = await import('../src/providers.mjs');
+  const { fileDiff } = await import('../src/workspaces.mjs');
+  for (const Cls of [CodexProvider, ClaudeCodeProvider, GeminiCliProvider, CopilotCliProvider]) {
+    const inst = new Cls({});
+    assert.equal(typeof inst.draft, 'function', `${Cls.name} must implement .draft()`);
+    await inst.close();
+  }
+
+  const dir = await fs.mkdtemp(path.join(tmpdir(), 'g0d-fork-snap-'));
+  const workDir = path.join(dir, 'work');
+  await fs.mkdir(workDir, { recursive: true });
+  await fs.writeFile(path.join(workDir, 'app.js'), 'export const v = 1;\n');
+  const app = await createApp({ dataDir: path.join(dir, 'data'), auth: false, cliDiscovery: { probes: [] }, startScheduler: false });
+  try {
+    const task = await app.runtime.createTask({
+      title: 'Fork Diff Test',
+      objective: 'Edit app.js',
+      workspace: workDir,
+      providers: ['scripted-primary'],
+      acceptance: { mode: 'owner' },
+    });
+    // Edit workspace file before forking
+    await fs.writeFile(path.join(workDir, 'app.js'), 'export const v = 2;\n');
+    const forked = await app.runtime.forkTask(task.id);
+    const forkedSnap = await app.runtime.snapshotTask(forked.id);
+    const diff = fileDiff(forked.initialSnapshot.files, forkedSnap.files);
+    assert.equal(diff.length, 1);
+    assert.equal(diff[0].path, 'app.js');
+    assert.equal(diff[0].before, 'export const v = 1;\n');
+    assert.equal(diff[0].after, 'export const v = 2;\n');
+
+    // Oversized file (>256 KiB) must NOT brick GET /api/tasks/:id with 400
+    await fs.writeFile(path.join(forked.workspace, 'bundle.js'), 'x'.repeat(300 * 1024));
+    const res = await dispatch(app, { method: 'GET', url: `/api/tasks/${forked.id}` });
+    assert.equal(res.status, 200);
+    assert.equal(res.json.task.id, forked.id);
+    assert.ok(res.json.snapshotWarning, 'Should include snapshotWarning instead of failing with HTTP 400');
+  } finally {
+    await app.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});

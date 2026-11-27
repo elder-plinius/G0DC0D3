@@ -1181,8 +1181,16 @@ function renderPrivacySettings(data) {
   const deny = Array.isArray(s.scopeDeny) ? s.scopeDeny : [];
   const allowEl = $('#privacy-scope-allow');
   const denyEl = $('#privacy-scope-deny');
-  if (allowEl && document.activeElement !== allowEl) allowEl.value = allow.join(', ');
-  if (denyEl && document.activeElement !== denyEl) denyEl.value = deny.join(', ');
+  if (allowEl && !allowEl.dataset.dirtyWired) {
+    allowEl.dataset.dirtyWired = '1';
+    allowEl.addEventListener('input', () => { allowEl.dataset.dirty = '1'; });
+  }
+  if (denyEl && !denyEl.dataset.dirtyWired) {
+    denyEl.dataset.dirtyWired = '1';
+    denyEl.addEventListener('input', () => { denyEl.dataset.dirty = '1'; });
+  }
+  if (allowEl && document.activeElement !== allowEl && allowEl.dataset.dirty !== '1') allowEl.value = allow.join(', ');
+  if (denyEl && document.activeElement !== denyEl && denyEl.dataset.dirty !== '1') denyEl.value = deny.join(', ');
   setText('#privacy-scope-badge', (allow.length || deny.length) ? `${allow.length} allow · ${deny.length} deny` : 'Unrestricted');
   if (typeof window.syncSecurityPostureChrome === 'function') window.syncSecurityPostureChrome(privacy);
 
@@ -1239,6 +1247,10 @@ async function updatePrivacySetting(key, value) {
       : typeof key === 'string'
         ? `${keyLabels[key] || key}: ${value ? 'ON' : 'OFF'}`
         : 'Security scope saved.';
+    if (typeof key !== 'string' && !payload.applyProfile) {
+      delete $('#privacy-scope-allow')?.dataset.dirty;
+      delete $('#privacy-scope-deny')?.dataset.dirty;
+    }
     settingsFeedback(label);
     toast(label);
   } catch (error) {
@@ -2536,6 +2548,14 @@ $('#settings-pane-system')?.addEventListener('change', async event => {
       injections: {
         enabled: Boolean($('#lab-injections-enabled')?.checked),
         stitchPrefill: Boolean($('#lab-stitch-prefill')?.checked),
+        systemPrefix: $('#lab-system-prefix')?.value || '',
+        systemSuffix: $('#lab-system-suffix')?.value || '',
+        fewShotUser: $('#lab-fewshot-user')?.value || '',
+        fewShotAssistant: $('#lab-fewshot-assistant')?.value || '',
+        userPrefix: $('#lab-user-prefix')?.value || '',
+        userSuffix: $('#lab-user-suffix')?.value || '',
+        reasoningPrefill: $('#lab-reasoning-prefill')?.value || '',
+        assistantPrefill: $('#lab-assistant-prefill')?.value || '',
       }
     }, event.target.id === 'lab-injections-enabled' ? ($('#lab-injections-enabled').checked ? 'Prefills & Message Shaping enabled.' : 'Prefills & Message Shaping disabled.') : 'Updated prefill stitch preference.');
   }

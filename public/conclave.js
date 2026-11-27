@@ -346,11 +346,13 @@
           builderDraft.engineType = 'api';
           builderDraft.providerId = val.slice(5);
           builderDraft.harnessId = null;
+          builderDraft.harnessCommand = '';
         } else if (val.startsWith('harness::')) {
           builderDraft.engineType = 'harness';
           builderDraft.harnessId = val.slice(9);
           const h = (rosterData?.harnesses || []).find(x => x.id === builderDraft.harnessId);
           builderDraft.providerId = h?.providerId || null;
+          builderDraft.harnessCommand = h?.command || '';
         } else if (val === 'custom_cli') {
           builderDraft.engineType = 'custom_cli';
           builderDraft.providerId = null;
@@ -359,6 +361,7 @@
           builderDraft.engineType = 'api';
           builderDraft.providerId = null;
           builderDraft.harnessId = null;
+          builderDraft.harnessCommand = '';
         }
         refreshBuilderStats();
         return;
@@ -464,11 +467,15 @@
           headers: { 'content-type': 'application/json', 'x-g0d-request': '1' },
           body: JSON.stringify({ workerId: selectedWorkerId, message: msg }),
         });
-        if (!res.ok) throw new Error('Failed to steer worker.');
-        const json = await res.json();
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(json.error || 'Failed to steer worker.');
         input.value = '';
         if (json.conclave) { data = json.conclave; renderAll(); }
-        if (typeof window.toast === 'function') window.toast(`Steer sent to ${selectedWorkerId}.`);
+        if (typeof window.toast === 'function') {
+          window.toast(json.target === 'note'
+            ? `Recorded note for ${selectedWorkerId} (worker is no longer active).`
+            : `Steer sent to ${selectedWorkerId}.`);
+        }
       } catch (err) {
         if (typeof window.toast === 'function') window.toast(err.message || 'Steer failed.');
       }
@@ -2234,10 +2241,8 @@
       forceShowLaunchpad = false;
       replayPlaying = false;
       replayProgress = 100;
-      if (demoMode && nextId) {
-        demoMode = false;
-      }
-      if (!demoMode) data = null;
+      if (demoMode) stopDemo();
+      data = null;
     }
     if (nextId && !demoMode) {
       loadSnapshot(nextId);
@@ -2250,7 +2255,7 @@
   function ingestStreamEvent(delta) {
     if (!delta || !currentTaskId) return;
     if (demoMode && (delta.type === 'subagent.started' || delta.type === 'race.dispatched' || delta.type === 'race.contender')) {
-      demoMode = false;
+      stopDemo();
       data = null;
     }
     if (demoMode) return;
@@ -2554,9 +2559,11 @@
       if (!res.ok) throw new Error(json.error || 'Could not delete agent.');
       rosterData = json.roster;
       selectedSquad.delete(slug);
+      launchTeam.delete(slug);
       builderOpen = false;
       builderDraft = null;
       renderRosterView();
+      renderStandbyFormations();
       if (typeof window.toast === 'function') window.toast(`Removed custom agent "${slug}".`);
     } catch (err) {
       if (typeof window.toast === 'function') window.toast(err.message || 'Delete failed.');
@@ -2663,6 +2670,7 @@
   function deployFormation(id) {
     const f = (rosterData?.formations || []).find(x => x.id === id);
     if (!f) return;
+    stopDemo();
     const mission = f.goal || launchMission || '';
     const prompt = buildMissionPrompt(mission, { slugs: f.agents, mode: 'parallel', formationName: f.name });
     if (f.goal && typeof window.submitConclaveMission === 'function') {
@@ -2813,12 +2821,15 @@
         </form>
       </section>` : '';
 
+    if (builderOpen && builderDraft) syncDraftTextFieldsFromDom();
+    const prevRfName = document.getElementById('rf-name')?.value ?? null;
+    const prevRfGoal = document.getElementById('rf-goal')?.value ?? null;
     const formations = rosterData.formations || [];
     const formationFormHtml = formationFormOpen ? `
       <form id="rf-form" class="rf-form" autocomplete="off">
         <div class="rf-row">
-          <input type="text" id="rf-name" placeholder="Formation name (e.g. Security Swarm)" maxlength="48" required>
-          <input type="text" id="rf-goal" placeholder="Optional starter mission prompt…" maxlength="400">
+          <input type="text" id="rf-name" placeholder="Formation name (e.g. Security Swarm)" maxlength="48" value="${esc(prevRfName || '')}" required>
+          <input type="text" id="rf-goal" placeholder="Optional starter mission prompt…" maxlength="400" value="${esc(prevRfGoal || '')}">
         </div>
         <div class="rf-actions">
           <span class="rf-hint">Saves ${selectedSquad.size ? `${selectedSquad.size} selected` : 'top 3'} roster agents as a 1-click preset</span>

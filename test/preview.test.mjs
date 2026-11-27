@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, rm, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createApp } from '../src/server.mjs';
-import { PREVIEW_CSP } from '../src/preview.mjs';
+import { buildPreviewCsp } from '../src/preview.mjs';
 
 test('Sandboxed live preview serves multi-file HTML/CSS/JS workspaces and chat snippets while blocking traversal & egress', async t => {
   const dataDir = await realpath(await mkdtemp(path.join(tmpdir(), 'g0d-preview-test-')));
@@ -36,7 +36,7 @@ test('Sandboxed live preview serves multi-file HTML/CSS/JS workspaces and chat s
   // 2. HTML serves with strict sandboxed preview CSP + injected console bridge
   const htmlRes = await fetch(root + sess.url);
   assert.equal(htmlRes.status, 200);
-  assert.equal(htmlRes.headers.get('content-security-policy'), PREVIEW_CSP);
+  assert.equal(htmlRes.headers.get('content-security-policy'), buildPreviewCsp(sess.token, new URL(root).host));
   assert.match(htmlRes.headers.get('content-security-policy'), /connect-src 'none'/);
   const htmlText = await htmlRes.text();
   assert.match(htmlText, /g0d-preview-console/);
@@ -89,7 +89,12 @@ test('Sandboxed live preview serves multi-file HTML/CSS/JS workspaces and chat s
   const bundleSess = await bundleRes.json();
   assert.equal(bundleSess.entry, 'index.html');
   assert.match(bundleSess.url, /^\/preview\/[a-f0-9]{32}\/index\.html$/);
-  const bundleHtml = await (await fetch(root + bundleSess.url)).text();
+  const bundleHtmlRes = await fetch(root + bundleSess.url);
+  const bundleCsp = bundleHtmlRes.headers.get('content-security-policy') || '';
+  assert.match(bundleCsp, new RegExp(`script-src http://127\\.0\\.0\\.1:\\d+/preview/${bundleSess.token}/`));
+  assert.match(bundleCsp, new RegExp(`style-src http://127\\.0\\.0\\.1:\\d+/preview/${bundleSess.token}/`));
+  assert.match(bundleCsp, /connect-src 'none'/);
+  const bundleHtml = await bundleHtmlRes.text();
   assert.match(bundleHtml, /<canvas id="g">/);
   assert.match(bundleHtml, /g0d-preview-console/);
   const bundleCss = await fetch(root + `/preview/${bundleSess.token}/style.css`);

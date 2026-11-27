@@ -277,21 +277,49 @@
     }
   }
 
+  let audioUnlockAttached = false;
+  let pendingForcedSound = null;
+
+  function attachUnlockListeners() {
+    if (audioUnlockAttached || typeof window === 'undefined') return;
+    audioUnlockAttached = true;
+    window.addEventListener('pointerdown', tryUnlockAudio, { passive: true });
+    window.addEventListener('keydown', tryUnlockAudio, { passive: true });
+  }
+
+  function detachUnlockListeners() {
+    if (!audioUnlockAttached || typeof window === 'undefined') return;
+    audioUnlockAttached = false;
+    window.removeEventListener('pointerdown', tryUnlockAudio);
+    window.removeEventListener('keydown', tryUnlockAudio);
+  }
+
   function tryUnlockAudio() {
     try {
       const ctx = getAudioContext();
       if (!ctx) return;
+      if (!ctx.__g0dStateHooked) {
+        ctx.__g0dStateHooked = true;
+        ctx.onstatechange = () => {
+          if (ctx.state === 'running') {
+            detachUnlockListeners();
+            if (pendingForcedSound) {
+              const p = pendingForcedSound;
+              pendingForcedSound = null;
+              try { scheduleOscillators(ctx, p.notes, p.vol); } catch {}
+            }
+          } else {
+            attachUnlockListeners();
+          }
+        };
+      }
       if (ctx.state === 'running') {
-        window.removeEventListener('pointerdown', tryUnlockAudio);
-        window.removeEventListener('keydown', tryUnlockAudio);
+        detachUnlockListeners();
         return;
       }
-      if (ctx.state === 'suspended' && typeof ctx.resume === 'function') {
+      if (typeof ctx.resume === 'function') {
         Promise.resolve(ctx.resume()).then(() => {
-          if (ctx.state === 'running') {
-            window.removeEventListener('pointerdown', tryUnlockAudio);
-            window.removeEventListener('keydown', tryUnlockAudio);
-          }
+          if (ctx.state === 'running') detachUnlockListeners();
         }).catch(() => {});
       }
     } catch {}
@@ -311,8 +339,7 @@
   }
 
   if (typeof window !== 'undefined') {
-    window.addEventListener('pointerdown', tryUnlockAudio, { passive: true });
-    window.addEventListener('keydown', tryUnlockAudio, { passive: true });
+    attachUnlockListeners();
     window.addEventListener('godcode-alerts-permission', ev => {
       const status = ev?.detail?.status;
       if (typeof status === 'string') {
@@ -414,12 +441,17 @@
     try {
       const effectivePack = RECIPES[pack] ? pack : 'glass';
       const notes = RECIPES[effectivePack][eventKind] || RECIPES.glass.completed;
-      if (ctx.state === 'suspended') {
-        // Avoid queuing oscillators on a suspended context (causes loud simultaneous bursts on next gesture)
+      if (ctx.state !== 'running') {
+        // Never stack pending resume().then() callbacks for background chimes (causes bursts on next gesture);
+        // only coalesce the latest user-initiated test click (force: true).
+        attachUnlockListeners();
+        if (force) pendingForcedSound = { notes, vol };
         if (typeof ctx.resume === 'function') {
           Promise.resolve(ctx.resume()).then(() => {
-            if (ctx.state === 'running') {
-              try { scheduleOscillators(ctx, notes, vol); } catch {}
+            if (ctx.state === 'running' && pendingForcedSound) {
+              const p = pendingForcedSound;
+              pendingForcedSound = null;
+              try { scheduleOscillators(ctx, p.notes, p.vol); } catch {}
             }
           }).catch(() => {});
         }
@@ -623,8 +655,8 @@
         const first = seenScheduleRunIds.values().next().value;
         seenScheduleRunIds.delete(first);
       }
-      const failed = r.status === 'failed' || r.status === 'error';
-      const title = failed ? 'Scheduled job failed' : 'Scheduled job finished';
+      const failed = ['failed', 'error', 'blocked', 'interrupted'].includes(r.status);
+      const title = r.status === 'blocked' ? 'Scheduled job blocked' : failed ? 'Scheduled job failed' : 'Scheduled job finished';
       const body = r.jobName ? `${r.jobName} (${r.status || 'completed'})` : 'A scheduled automation completed.';
       notifyEvent(failed ? 'error' : 'schedule', {
         title,

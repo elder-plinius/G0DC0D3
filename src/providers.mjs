@@ -737,18 +737,29 @@ export class HttpProvider {
         body: JSON.stringify(currentBody),
       });
     }
+    const isVenice = choice.kind === 'catalog' || choice.baseUrl === 'https://api.venice.ai/api/v1' || String(choice.id || '').startsWith('venice:');
+    const providerDisplay = isVenice ? 'Venice' : (choice.label || choice.id || 'Provider');
     if (!res.ok) {
       res.body?.cancel?.().catch(() => {});
       // An explicit wait applies to the connection. Only gateway outages qualify for the optional backup.
       const gateway = [502, 503, 504].includes(res.status);
       const wait = res.headers.get('retry-after');
       let code = 'PROVIDER_FAILURE';
-      if (res.status === 429) code = 'VENICE_RATE_LIMIT';
-      else if (res.status === 402) code = 'http_402';
-      else if (res.status >= 500 && wait !== null) code = 'VENICE_RETRY_AFTER';
-      else if (gateway) code = 'VENICE_SERVICE_OUTAGE';
-      const retryAfterMs = ['VENICE_RATE_LIMIT','VENICE_RETRY_AFTER'].includes(code) ? retryAfterMilliseconds(wait) : undefined;
-      return { type: 'error', code, httpStatus: res.status, message: 'Venice returned HTTP ' + res.status + '.',
+      let retryable;
+      if (isVenice) {
+        if (res.status === 429) code = 'VENICE_RATE_LIMIT';
+        else if (res.status === 402) code = 'http_402';
+        else if (res.status >= 500 && wait !== null) code = 'VENICE_RETRY_AFTER';
+        else if (gateway) code = 'VENICE_SERVICE_OUTAGE';
+      } else {
+        if (res.status === 401 || res.status === 403) { code = 'authentication'; retryable = false; }
+        else if (res.status === 429) { code = 'rate_limit'; retryable = true; }
+        else if (res.status === 402) { code = 'http_402'; retryable = false; }
+        else if (res.status >= 500) { code = 'provider_unavailable'; retryable = true; }
+      }
+      const retryAfterMs = (res.status === 429 || (res.status >= 500 && wait !== null)) ? retryAfterMilliseconds(wait) : undefined;
+      return { type: 'error', code, httpStatus: res.status, message: `${providerDisplay} returned HTTP ${res.status}.`,
+        ...(retryable !== undefined ? { retryable } : {}),
         ...(retryAfterMs !== undefined ? { retryAfterMs } : {}) };
     }
     const contentType = (res.headers?.get('content-type') || '').toLowerCase();
@@ -901,15 +912,15 @@ export class HttpProvider {
         }
       }
     }
-    const content = answer?.message?.refusal || answer?.message?.content || (declined && 'Venice declined this request.');
+    const content = answer?.message?.refusal || answer?.message?.content || (declined && `${providerDisplay} declined this request.`);
     const limited = !declined && answer?.finish_reason === 'length';
     if (typeof content !== 'string' || !content.trim()) return { type: 'error', httpStatus: res.status,
-      code: limited ? 'VENICE_OUTPUT_LIMIT' : 'PROVIDER_FAILURE',
+      code: limited ? (isVenice ? 'VENICE_OUTPUT_LIMIT' : 'output_limit') : 'PROVIDER_FAILURE',
       message: limited
         ? (rawThinking
-          ? 'Venice spent its output token limit on internal reasoning before returning visible text.'
-          : 'Venice reached its output limit before returning visible text.')
-        : 'Venice returned no reply text.',
+          ? `${providerDisplay} spent its output token limit on internal reasoning before returning visible text.`
+          : `${providerDisplay} reached its output limit before returning visible text.`)
+        : `${providerDisplay} returned no reply text.`,
       ...(limited && rawThinking ? { exhaustedReasoning: true } : {}) };
     const rawCleanText = key ? content.split(key).join('[redacted credential]') : content;
     const cleanText = !declined && prefillUsed ? stitchPrefillIntoText(rawCleanText, prefillUsed) : rawCleanText;
@@ -1452,6 +1463,10 @@ export class HttpProvider {
       };
     }
     Object.assign(body, generation);
+    if (this.protocol === 'openai-responses' && Object.hasOwn(generation, 'max_tokens')) {
+      body.max_output_tokens = generation.max_tokens;
+      delete body.max_tokens;
+    }
     const { zdrFlags } = applyZdrRequestPolicy(this, body, privacy);
     if (onDelta) {
       body.stream = true;
@@ -1759,6 +1774,45 @@ export class CodexProvider {
     return{type:'message',text:value.text||'',finish:value.finish||'done',...meta};
     } finally { await fs.rm(schemaDir,{recursive:true,force:true}); }
   }
+  async draft(messages = [], signal, _maxTokens = 1000, _params = {}, { privacy = DEFAULT_PRIVACY_SETTINGS, onOutbound, extraSecrets } = {}) {
+    if (this.closed) return { type: 'error', code: 'PROVIDER_CLOSED', message: 'Codex provider is closed.', retryable: false };
+    const environment = cliEnvironments.get(this);
+    if (!environment) return { type: 'error', code: 'PROVIDER_CLOSED', message: 'Codex provider is closed.', retryable: false };
+    if (signal?.aborted) return { type: 'error', code: 'cancelled', message: 'Codex request cancelled.', retryable: false };
+    const gate = checkProviderPrivacyAllowed(this, privacy);
+    if (!gate.allowed) {
+      onOutbound?.({ providerId: this.id, host: 'cli:codex', protocol: this.kind, zdrClass: gate.posture.zdrClass, zdrFlags: [], secretsRedacted: 0, blocked: true, reason: gate.message });
+      return { type: 'error', code: gate.code, message: gate.message, retryable: false };
+    }
+    const cleaned = privacy.redactOutboundSecrets === false ? { value: messages, count: 0 } : redactOutboundValue(messages, extraSecrets || environmentSecrets());
+    onOutbound?.({ providerId: this.id, host: 'cli:codex', protocol: this.kind, zdrClass: gate.posture.zdrClass, zdrFlags: ['cli:telemetry-disabled'], secretsRedacted: cleaned.count, blocked: false });
+    const promptText = [
+      'CRITICAL: Planner/advisory text-only call. DO NOT invoke any Codex built-in tools.',
+      ...(Array.isArray(cleaned.value) ? cleaned.value.map(m => `${String(m?.role || 'user').toUpperCase()}:\n${String(m?.content || '')}`) : [String(cleaned.value || '')])
+    ].join('\n\n');
+    const working = await fs.mkdtemp(path.join(tmpdir(), 'g0d-codex-draft-'));
+    try {
+      const args = [
+        'exec', '--ephemeral', '--ignore-user-config', '--sandbox', 'read-only',
+        '--skip-git-repo-check', '--json', '--color', 'never', '--cd', working,
+        '-c', 'approval_policy="never"', '-c', 'web_search="disabled"'
+      ];
+      for (const feature of ['shell_tool', 'unified_exec', 'apps', 'plugins', 'hooks', 'multi_agent', 'browser_use', 'computer_use', 'image_generation', 'in_app_browser', 'goals', 'memories', 'workspace_dependencies']) {
+        args.push('--disable', feature);
+      }
+      if (this.model) args.push('--model', this.model);
+      args.push('-');
+      const output = await runSubprocessPlanner(this, { args, cwd: working, signal, timeoutOverrideMs: 60000, input: promptText, env: environment, label: 'Codex' });
+      const events = output.split('\n').filter(Boolean).flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
+      const text = events.filter(e => e.type === 'item.completed' && e.item?.type === 'agent_message').map(e => e.item?.text || '').join('\n').trim() || output.trim();
+      const usage = events.findLast(e => e.type === 'turn.completed')?.usage || null;
+      return { type: 'message', text, finish: 'done', usage, model: this.model || 'codex-configured-default' };
+    } catch (err) {
+      return { type: 'error', code: err?.code || 'provider_error', message: err?.message || 'Codex CLI draft failed.', retryable: Boolean(err?.retryable) };
+    } finally {
+      await fs.rm(working, { recursive: true, force: true });
+    }
+  }
   close() {
     if(this.closePromise)return this.closePromise;
     this.closed=true;cliEnvironments.delete(this);
@@ -1809,7 +1863,7 @@ export class ClaudeCodeProvider extends CodexProvider {
       try {
         output = await runClaudePlanner(this,{args,cwd:working,signal,turnTimeoutMs,input});
       } catch (err) {
-        if (args.includes('--effort') && /unknown option|unrecognized|invalid option/i.test(String(err?.message || ''))) {
+        if (args.includes('--effort') && (err?.code === 'UNSUPPORTED_CLI_FLAG' || /unknown option|unrecognized|invalid option/i.test(String(err?.message || '')))) {
           const fallbackArgs = buildClaudeExecArgs({ schemaJson, systemPrompt, model: this.model || null, taskEffort: context.task?.effort || 'medium', cliSettings: this.cliSettings, includeEffort: false });
           output = await runClaudePlanner(this,{args:fallbackArgs,cwd:working,signal,turnTimeoutMs,input});
         } else {
@@ -1824,13 +1878,63 @@ export class ClaudeCodeProvider extends CodexProvider {
       if(internalCall)throw Object.assign(new Error('Planner-only Claude Code bridge attempted an internal tool; response rejected'),{code:'tool_protocol'});
       const result=events.findLast(event=>event.type==='result');
       if(!result)throw Object.assign(new Error('Claude Code returned no result'),{code:'tool_protocol'});
-      if(result.is_error||result.subtype&&result.subtype!=='success')throw Object.assign(new Error('Claude Code could not complete the planner request. Check CLI sign-in, model access and usage limits.'),{code:'provider_configuration',retryable:false});
+      if(result.is_error||result.subtype&&result.subtype!=='success') {
+        const resHint = String(result.result || result.error || '');
+        if (/rate\s*limit|too many requests|429|overloaded|529|capacity|try again later/i.test(resHint)) {
+          throw Object.assign(new Error('Claude Code hit a temporary rate limit or capacity spike; retrying.'), { code: 'rate_limit', retryable: true });
+        }
+        throw Object.assign(new Error('Claude Code could not complete the planner request. Check CLI sign-in, model access and usage limits.'),{code:'provider_configuration',retryable:false});
+      }
       const value=result.structured_output;
       if(!value||typeof value!=='object'||Array.isArray(value)||!['tool','message'].includes(value.type)||!Array.isArray(value.calls)||typeof value.text!=='string'||!['continue','done','refusal'].includes(value.finish)||Object.keys(value).some(key=>!['type','calls','text','finish'].includes(key)))throw Object.assign(new Error('Claude Code returned an invalid decision envelope'),{code:'tool_protocol'});
       if((value.type==='tool'&&(!value.calls.length||value.finish!=='continue'))||(value.type==='message'&&value.calls.length))throw Object.assign(new Error('Claude Code returned inconsistent decision fields'),{code:'tool_protocol'});
       const meta={usage:result.usage||null,model:this.model||'claude-cli-default',evidenceKind:'live_claude_cli',accounting:this.accounting};
       return value.type==='tool'?{type:'tool',calls:normalizeCalls(value.calls,toolAliases(tools),tools),...meta}:{type:'message',text:value.text,finish:value.finish,...meta};
     } finally {await fs.rm(working,{recursive:true,force:true});}
+  }
+  async draft(messages = [], signal, _maxTokens = 1000, _params = {}, { privacy = DEFAULT_PRIVACY_SETTINGS, onOutbound, extraSecrets } = {}) {
+    if (this.closed) return { type: 'error', code: 'PROVIDER_CLOSED', message: 'Claude Code provider is closed.', retryable: false };
+    if (signal?.aborted) return { type: 'error', code: 'cancelled', message: 'Claude Code request cancelled.', retryable: false };
+    const gate = checkProviderPrivacyAllowed(this, privacy);
+    if (!gate.allowed) {
+      onOutbound?.({ providerId: this.id, host: 'cli:claude', protocol: this.kind, zdrClass: gate.posture.zdrClass, zdrFlags: [], secretsRedacted: 0, blocked: true, reason: gate.message });
+      return { type: 'error', code: gate.code, message: gate.message, retryable: false };
+    }
+    const cleaned = privacy.redactOutboundSecrets === false ? { value: messages, count: 0 } : redactOutboundValue(messages, extraSecrets || environmentSecrets());
+    onOutbound?.({ providerId: this.id, host: 'cli:claude', protocol: this.kind, zdrClass: gate.posture.zdrClass, zdrFlags: ['cli:telemetry-disabled'], secretsRedacted: cleaned.count, blocked: false });
+    const list = Array.isArray(cleaned.value) ? cleaned.value : [{ role: 'user', content: String(cleaned.value || '') }];
+    const sys = [
+      'CRITICAL: Planner/advisory text-only call. Do not invoke any native tools.',
+      ...list.filter(m => m?.role === 'system').map(m => String(m.content || ''))
+    ].filter(Boolean).join('\n\n');
+    const userPrompt = list.filter(m => m?.role !== 'system').map(m => `${String(m?.role || 'user').toUpperCase()}:\n${String(m?.content || '')}`).join('\n\n') || 'Continue.';
+    const working = await fs.mkdtemp(path.join(tmpdir(), 'g0d-claude-draft-'));
+    try {
+      const args = [
+        '--print', '--output-format', 'stream-json', '--verbose',
+        '--no-session-persistence', '--tools', '', '--disable-slash-commands', '--no-chrome',
+        '--permission-mode', 'dontAsk', '--setting-sources', '',
+        '--settings', JSON.stringify({ disableAllHooks: true, enabledPlugins: {} }),
+        '--strict-mcp-config', '--mcp-config', JSON.stringify({ mcpServers: {} }),
+        '--max-turns', '2', '--system-prompt', sys
+      ];
+      if (this.model) args.push('--model', this.model);
+      const output = await runClaudePlanner(this, { args, cwd: working, signal, turnTimeoutMs: 60000, input: userPrompt });
+      const events = output.split('\n').filter(l => l.trim()).flatMap(l => { try { return [JSON.parse(l)]; } catch { return []; } });
+      const result = events.findLast(e => e.type === 'result');
+      if (result && (result.is_error || (result.subtype && result.subtype !== 'success'))) {
+        const resHint = String(result.result || result.error || '');
+        const isRate = /rate\s*limit|too many requests|429|overloaded|529|capacity/i.test(resHint);
+        return { type: 'error', code: isRate ? 'rate_limit' : 'provider_configuration', message: isRate ? 'Claude Code hit a temporary rate limit.' : 'Claude Code could not complete the advisory request.', retryable: isRate };
+      }
+      const assistantText = events.flatMap(e => e.message?.content || []).filter(b => b?.type === 'text' && typeof b.text === 'string').map(b => b.text).join('').trim();
+      const text = (typeof result?.result === 'string' && result.result.trim()) ? result.result.trim() : assistantText;
+      return { type: 'message', text, finish: 'done', usage: result?.usage || null, model: this.model || 'claude-cli-default' };
+    } catch (err) {
+      return { type: 'error', code: err?.code || 'provider_error', message: err?.message || 'Claude Code CLI draft failed.', retryable: Boolean(err?.retryable) };
+    } finally {
+      await fs.rm(working, { recursive: true, force: true });
+    }
   }
 }
 
@@ -2017,6 +2121,43 @@ export class GeminiCliProvider extends CodexProvider {
       const decision = parsePlannerDecisionEnvelope(envelopeText, tools, 'Gemini CLI');
       return { ...decision, usage, model: this.model || 'gemini-cli-default', evidenceKind: 'live_gemini_cli', accounting: this.accounting };
     } finally { await fs.rm(working, { recursive: true, force: true }); }
+  }
+  async draft(messages = [], signal, _maxTokens = 1000, _params = {}, { privacy = DEFAULT_PRIVACY_SETTINGS, onOutbound, extraSecrets } = {}) {
+    if (this.closed) return { type: 'error', code: 'PROVIDER_CLOSED', message: 'Gemini CLI provider is closed.', retryable: false };
+    if (signal?.aborted) return { type: 'error', code: 'cancelled', message: 'Gemini CLI request cancelled.', retryable: false };
+    const gate = checkProviderPrivacyAllowed(this, privacy);
+    if (!gate.allowed) {
+      onOutbound?.({ providerId: this.id, host: 'cli:gemini', protocol: this.kind, zdrClass: gate.posture.zdrClass, zdrFlags: [], secretsRedacted: 0, blocked: true, reason: gate.message });
+      return { type: 'error', code: gate.code, message: gate.message, retryable: false };
+    }
+    const cleaned = privacy.redactOutboundSecrets === false ? { value: messages, count: 0 } : redactOutboundValue(messages, extraSecrets || environmentSecrets());
+    onOutbound?.({ providerId: this.id, host: 'cli:gemini', protocol: this.kind, zdrClass: gate.posture.zdrClass, zdrFlags: ['cli:telemetry-disabled'], secretsRedacted: cleaned.count, blocked: false });
+    const promptText = [
+      'CRITICAL: Planner/advisory text-only call. DO NOT invoke any Gemini CLI built-in tools.',
+      ...(Array.isArray(cleaned.value) ? cleaned.value.map(m => `${String(m?.role || 'user').toUpperCase()}:\n${String(m?.content || '')}`) : [String(cleaned.value || '')])
+    ].join('\n\n');
+    const working = await fs.mkdtemp(path.join(tmpdir(), 'g0d-gemini-draft-'));
+    try {
+      const directive = 'Read the advisory prompt from stdin and respond directly. Do not invoke any native Gemini CLI tools.';
+      const args = ['--prompt', directive, '--output-format', 'json'];
+      if (this.model) args.push('--model', this.model);
+      const env = geminiSubscriptionEnvironment(cliEnvironments.get(this));
+      const output = await runSubprocessPlanner(this, { args, cwd: working, signal, timeoutOverrideMs: 60000, input: promptText, env, label: 'Gemini' });
+      let text = output.trim(), parsed = null;
+      try { parsed = JSON.parse(text); } catch {
+        const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
+        if (fb >= 0 && lb > fb) { try { parsed = JSON.parse(text.slice(fb, lb + 1)); } catch {} }
+      }
+      if (parsed && typeof parsed === 'object') {
+        if (typeof parsed.response === 'string') text = parsed.response;
+        else if (typeof parsed.text === 'string') text = parsed.text;
+      }
+      return { type: 'message', text, finish: 'done', usage: parsed?.stats || null, model: this.model || 'gemini-cli-default' };
+    } catch (err) {
+      return { type: 'error', code: err?.code || 'provider_error', message: err?.message || 'Gemini CLI draft failed.', retryable: Boolean(err?.retryable) };
+    } finally {
+      await fs.rm(working, { recursive: true, force: true });
+    }
   }
 }
 
@@ -2342,6 +2483,34 @@ export class CopilotCliProvider extends CodexProvider {
       return { ...decision, usage: null, model: this.model || 'copilot-cli-default', evidenceKind: 'live_copilot_cli', accounting: this.accounting };
     } finally { await fs.rm(working, { recursive: true, force: true }); }
   }
+  async draft(messages = [], signal, _maxTokens = 1000, _params = {}, { privacy = DEFAULT_PRIVACY_SETTINGS, onOutbound, extraSecrets } = {}) {
+    if (this.closed) return { type: 'error', code: 'PROVIDER_CLOSED', message: 'GitHub Copilot provider is closed.', retryable: false };
+    if (signal?.aborted) return { type: 'error', code: 'cancelled', message: 'GitHub Copilot request cancelled.', retryable: false };
+    const gate = checkProviderPrivacyAllowed(this, privacy);
+    if (!gate.allowed) {
+      onOutbound?.({ providerId: this.id, host: 'cli:copilot', protocol: this.kind, zdrClass: gate.posture.zdrClass, zdrFlags: [], secretsRedacted: 0, blocked: true, reason: gate.message });
+      return { type: 'error', code: gate.code, message: gate.message, retryable: false };
+    }
+    const cleaned = privacy.redactOutboundSecrets === false ? { value: messages, count: 0 } : redactOutboundValue(messages, extraSecrets || environmentSecrets());
+    onOutbound?.({ providerId: this.id, host: 'cli:copilot', protocol: this.kind, zdrClass: gate.posture.zdrClass, zdrFlags: ['cli:telemetry-disabled'], secretsRedacted: cleaned.count, blocked: false });
+    const promptText = [
+      'CRITICAL: Planner/advisory text-only call. DO NOT invoke any Copilot tools.',
+      ...(Array.isArray(cleaned.value) ? cleaned.value.map(m => `${String(m?.role || 'user').toUpperCase()}:\n${String(m?.content || '')}`) : [String(cleaned.value || '')])
+    ].join('\n\n');
+    const working = await fs.mkdtemp(path.join(tmpdir(), 'g0d-copilot-draft-'));
+    try {
+      const directive = 'Read the advisory prompt from stdin and respond directly. Do not invoke any Copilot tools.';
+      const args = ['-p', directive, '-s'];
+      if (this.model) args.push('--model', this.model);
+      const env = copilotSubscriptionEnvironment(cliEnvironments.get(this));
+      const output = await runSubprocessPlanner(this, { args, cwd: working, signal, timeoutOverrideMs: 60000, input: promptText, env, label: 'GitHub Copilot' });
+      return { type: 'message', text: output.trim(), finish: 'done', usage: null, model: this.model || 'copilot-cli-default' };
+    } catch (err) {
+      return { type: 'error', code: err?.code || 'provider_error', message: err?.message || 'GitHub Copilot CLI draft failed.', retryable: Boolean(err?.retryable) };
+    } finally {
+      await fs.rm(working, { recursive: true, force: true });
+    }
+  }
 }
 
 function runClaudePlanner(owner,{args,cwd,signal,turnTimeoutMs,input}) {
@@ -2349,7 +2518,7 @@ function runClaudePlanner(owner,{args,cwd,signal,turnTimeoutMs,input}) {
     if(signal?.aborted){reject(Object.assign(new Error('Claude Code bridge cancelled'),{code:'cancelled'}));return;}
     const child=spawn(owner.binary,args,{cwd,stdio:['pipe','pipe','pipe'],env:claudeSubscriptionEnvironment(cliEnvironments.get(owner)),detached:process.platform!=='win32'});
     const outChunks = [];
-    let outBytes = 0, settled = false, closed = false, terminating = false, killTimer, resolveExit;
+    let outBytes = 0, errSnippet = '', settled = false, closed = false, terminating = false, killTimer, resolveExit;
     const exited=new Promise(done=>{resolveExit=done;});
     const kill=()=>{
       if(terminating||closed||!Number.isInteger(child.pid))return;terminating=true;
@@ -2368,9 +2537,23 @@ function runClaudePlanner(owner,{args,cwd,signal,turnTimeoutMs,input}) {
       if (outBytes > 16 * 1024 * 1024) { kill(); done(Object.assign(new Error('Claude Code bridge output exceeded its limit'),{code:'tool_protocol'})); return; }
       outChunks.push(chunk);
     });
-    // Provider stderr can contain account data. Never forward it to a task, browser or log.
-    child.stderr.resume();
-    child.on('close',code=>{closed=true;clearTimeout(killTimer);owner.children.delete(record);resolveExit();code===0?done(null,Buffer.concat(outChunks).toString('utf8')):done(Object.assign(new Error('Claude Code CLI could not complete the request. Check CLI sign-in, model access and usage limits.'),{code:'provider_configuration',retryable:false}));});
+    // Classify stderr internally (bounded 4 KiB) without ever forwarding raw stderr to tasks, browsers, or logs.
+    child.stderr.on('data', chunk => {
+      if (errSnippet.length < 4096) errSnippet += chunk.toString('utf8').slice(0, 4096 - errSnippet.length);
+    });
+    child.on('close',code=>{
+      closed=true;clearTimeout(killTimer);owner.children.delete(record);resolveExit();
+      if (code === 0) { done(null, Buffer.concat(outChunks).toString('utf8')); return; }
+      if (/unknown option|unrecognized option|invalid option/i.test(errSnippet)) {
+        done(Object.assign(new Error('Claude Code CLI rejected an unsupported flag (unknown option).'), { code: 'UNSUPPORTED_CLI_FLAG', retryable: false }));
+      } else if (/rate\s*limit|too many requests|429|overloaded|529|capacity|try again later/i.test(errSnippet)) {
+        done(Object.assign(new Error('Claude Code CLI hit a temporary rate limit or capacity spike; retrying.'), { code: 'rate_limit', retryable: true }));
+      } else if (/not logged in|unauthenticated|unauthorized|401|login|auth.*expired/i.test(errSnippet)) {
+        done(Object.assign(new Error('Claude Code CLI authentication expired. Run `claude` to sign back in.'), { code: 'authentication', retryable: false }));
+      } else {
+        done(Object.assign(new Error('Claude Code CLI could not complete the request. Check CLI sign-in, model access and usage limits.'), { code: 'provider_configuration', retryable: false }));
+      }
+    });
     child.stdin.on('error',()=>{});
     if(signal?.aborted){abort();return;}
     child.stdin.end(input);

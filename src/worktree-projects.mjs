@@ -376,12 +376,12 @@ export class WorktreeProjects {
       return result;
     });
   }
-  remove(id) {
+  remove(id, { force = false } = {}) {
     return this.exclusive(id, async (project) => {
-      // Git refuses dirty worktrees. The named branch and all its commits survive removal.
+      // Git refuses dirty worktrees unless force is explicitly confirmed. The named branch and commits survive removal.
       const exists = await fs.access(project.root).then(() => true, () => false);
       if (exists) {
-        await git(project.repository, ['worktree', 'remove', '--', project.root]);
+        await git(project.repository, ['worktree', 'remove', ...(force ? ['--force'] : []), '--', project.root]);
       } else {
         await git(project.repository, ['worktree', 'prune']).catch(() => {});
       }

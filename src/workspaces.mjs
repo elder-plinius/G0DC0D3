@@ -68,11 +68,27 @@ export async function createFixtureTask(runtime, dataDir, input = {}) {
 }
 
 export function fileDiff(initialFiles, currentFiles) {
-  const before = new Map(initialFiles.map(file=>[file.path,file.content]));
-  const after = new Map(currentFiles.map(file=>[file.path,file.content]));
-  return [...new Set([...before.keys(),...after.keys()])].sort()
-    .filter(name=>before.get(name)!==after.get(name))
-    .map(name=>({path:name,before:before.get(name)??null,after:after.get(name)??null}));
+  const before = new Map(initialFiles.map(file => [file.path, file]));
+  const after = new Map(currentFiles.map(file => [file.path, file]));
+  return [...new Set([...before.keys(), ...after.keys()])].sort()
+    .filter(name => {
+      const b = before.get(name);
+      const a = after.get(name);
+      if (!b || !a) return true;
+      if (b.content !== a.content) return true;
+      return Boolean(b.sha256 && a.sha256 && b.sha256 !== a.sha256);
+    })
+    .map(name => {
+      const b = before.get(name);
+      const a = after.get(name);
+      const isBinary = (b && b.content === null) || (a && a.content === null);
+      return {
+        path: name,
+        before: b?.content ?? null,
+        after: a?.content ?? null,
+        ...(isBinary ? { binary: true, beforeBytes: b?.bytes ?? null, afterBytes: a?.bytes ?? null } : {})
+      };
+    });
 }
 
 const sourceExtensions=new Set(['.js','.mjs','.cjs','.ts','.tsx','.jsx','.json','.md','.txt','.py','.rs','.go','.java','.c','.h','.cpp','.hpp','.css','.scss','.html','.vue','.svelte','.sql','.yaml','.yml','.toml','.xml','.sh','.swift','.kt','.rb','.php','.graphql','.proto','.ini','.cfg']);

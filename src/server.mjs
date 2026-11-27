@@ -116,7 +116,7 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
   let benchmark = {status:'idle',report:null}, benchmarkPromise = null;
   const benchmarkFile=path.join(dataDir,'latest-benchmark.json');
   try {benchmark={status:'completed',report:JSON.parse(await fs.readFile(benchmarkFile,'utf8'))};}catch{}
-  let closing=false, closePromise;
+  let closing=false, closePromise, sessionReady = !auth;
   const sseClients = new Set();
   const run = id => { runtime.run(id).catch(error=>process.stderr.write(`Task ${id}: ${error.message}\n`)); };
   const server=http.createServer(async(req,res)=>{
@@ -144,9 +144,12 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
       if (isPreviewGet) {
         const pm = url.pathname.match(/^\/preview\/([a-f0-9]{32})(?:\/(.*))?$/);
         if (!pm) return send(res, 404, { error: 'Unknown preview route.' });
-        return await previews.serve(pm[1], pm[2] || '', res);
+        return await previews.serve(pm[1], pm[2] || '', res, req.headers.host);
       }
-      if(req.method==='GET' && url.pathname==='/api/health')return send(res,200,{app:'g0dc0d3',version:'0.2.0',authRequired:auth,desktopWorktrees:true,chatWorktrees:true,patchRequestPreview:true,veniceCatalog:true});
+      if(req.method==='GET' && url.pathname==='/api/health') {
+        if (!sessionReady) return send(res, 503, { error: 'Local session initializing' });
+        return send(res,200,{app:'g0dc0d3',version:'0.2.0',authRequired:auth,desktopWorktrees:true,chatWorktrees:true,patchRequestPreview:true,veniceCatalog:true});
+      }
       if(req.method==='POST' && url.pathname==='/api/session') {
         const now = Date.now();
         while (sessionFailTimestamps.length && now - sessionFailTimestamps[0] > 60000) sessionFailTimestamps.shift();
@@ -191,7 +194,10 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
         }
         if(req.method==='POST' && action==='stop-waiting') return send(res,200,worktrees.stopWaiting(id,(await readBody(req)).buildId));
         if(req.method==='POST' && action==='apply') return send(res,200,await worktrees.apply(id,(await readBody(req)).candidateId));
-        if(req.method==='POST' && action==='remove') return send(res,200,await worktrees.remove(id));
+        if(req.method==='POST' && action==='remove') {
+          const body = req.headers['content-length'] === '0' ? {} : await readBody(req).catch(() => ({}));
+          return send(res,200,await worktrees.remove(id, { force: Boolean(body?.force) }));
+        }
         if(req.method==='POST' && action==='check') return send(res,200,await worktrees.check(id,await readBody(req)));
       }
       if (url.pathname === '/api/prompt-commands') {
@@ -273,7 +279,13 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
       if(req.method==='GET' && url.pathname==='/api/privacy')return send(res,200,runtime.getPrivacy());
       if(req.method==='PATCH' && url.pathname==='/api/privacy')return send(res,200,runtime.updatePrivacy(await readBody(req)));
       if(req.method==='DELETE' && url.pathname==='/api/privacy/audit'){await readBody(req);return send(res,200,runtime.clearOutboundAudit());}
-      if(req.method==='POST' && url.pathname==='/api/privacy/burn')return send(res,200,await runtime.burnSession(await readBody(req)));
+      if(req.method==='POST' && url.pathname==='/api/privacy/burn') {
+        const body = await readBody(req);
+        if (body?.includeTasks) {
+          for (const client of [...sseClients]) client.close();
+        }
+        return send(res,200,await runtime.burnSession(body));
+      }
       if(req.method==='GET' && url.pathname==='/api/schedules') {
         return send(res,200,{jobs:runtime.listScheduledJobs(),summary:runtime.getSchedulesSummary(),presets:CRON_PRESETS,serverTime:new Date().toISOString()});
       }
@@ -979,9 +991,13 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
         }
         if(req.method==='GET'&&!action) {
           const task=runtime.getTask(id);
-          let snapshot,workspaceExpired=false;
-          try { snapshot=await runtime.snapshotTask(id); } catch(e) { if(e.code==='ENOENT') { snapshot={files:[],snapshotHash:''}; workspaceExpired=true; } else throw e; }
-          return send(res,200,{task:publicTask(task,runtime),crew:runtime.crew.summary(id),crewBusy:runtime.crew.busy(id),sourceApplications:runtime.sourceChanges.summaries(id),events:displayOutcomes(runtime.getRecentEvents(id,200)).map(value=>displayValue(value)),eventCount:task.eventSeq,displayLimits:{events:200,stringCharacters:32000,messageCharacters:200000,exportUrl:`/api/tasks/${id}/export`},operations:runtime.getOperations(id).slice(-100).map(value=>displayValue(value)),files:snapshot.files,diff:workspaceExpired?[]:fileDiff(task.initialSnapshot.files,snapshot.files),workspaceExpired});
+          let snapshot, workspaceExpired=false, snapshotWarning=null;
+          try { snapshot=await runtime.snapshotTask(id); } catch(e) {
+            if (e.code === 'ENOENT') { snapshot = { files: [], snapshotHash: '' }; workspaceExpired = true; }
+            else if (e.code === 'SNAPSHOT_LIMIT' || e.code === 'SNAPSHOT_UNSUPPORTED') { snapshot = { files: [], snapshotHash: '' }; snapshotWarning = e.message; }
+            else throw e;
+          }
+          return send(res,200,{task:publicTask(task,runtime),crew:runtime.crew.summary(id),crewBusy:runtime.crew.busy(id),sourceApplications:runtime.sourceChanges.summaries(id),events:displayOutcomes(runtime.getRecentEvents(id,200)).map(value=>displayValue(value)),eventCount:task.eventSeq,displayLimits:{events:200,stringCharacters:32000,messageCharacters:200000,exportUrl:`/api/tasks/${id}/export`},operations:runtime.getOperations(id).slice(-100).map(value=>displayValue(value)),files:snapshot.files,diff:(workspaceExpired||snapshotWarning)?[]:fileDiff(task.initialSnapshot.files,snapshot.files),workspaceExpired,...(snapshotWarning?{snapshotWarning}:{})});
         }
         if(req.method==='DELETE'&&!action) {
           await readBody(req);
@@ -1104,7 +1120,7 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
     async listen(port=Number(process.env.G0D_PORT||4317)) {
       await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,'127.0.0.1',()=>{server.off('error',reject);resolve();});});
       baseUrl=`http://127.0.0.1:${server.address().port}`;
-      try {await session.publishToken(server.address().port);} catch(error){await new Promise(resolve=>server.close(resolve));throw error;}
+      try {await session.publishToken(server.address().port); sessionReady = true;} catch(error){await new Promise(resolve=>server.close(resolve));throw error;}
       return baseUrl;
     },
     close(){
@@ -1112,6 +1128,7 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
       closing=true;
       for (const client of [...sseClients]) client.close();
       server.closeIdleConnections();
+      server.closeAllConnections?.();
       closePromise=(async()=>{
         await worktrees.close();
         const outcomes=await Promise.allSettled([new Promise(resolve=>server.close(()=>resolve())),runtime.close(),benchmarkPromise]);

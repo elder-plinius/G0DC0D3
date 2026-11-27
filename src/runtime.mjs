@@ -703,9 +703,11 @@ export class Runtime {
     this.outboundAudit = new OutboundAuditLog({ maxEntries: 100 });
     this.activeSubagents = new Map();
     this._workerSteers = new Map();
+    this._liveTurn = new Map();
     this.cron = new CronScheduler({
       store: this.store,
       tickMs: schedulerTickMs,
+      reconcileOnBoot: Boolean(startScheduler),
       onTrigger: (job, run) => this._executeScheduledJob(job, run),
     });
     if (startScheduler) this.cron.start();
@@ -713,9 +715,43 @@ export class Runtime {
   subscribeStream(taskId, callback) {
     if (!this._streamSubs.has(taskId)) this._streamSubs.set(taskId, new Set());
     this._streamSubs.get(taskId).add(callback);
+    const live = this._liveTurn.get(taskId);
+    if (live && this.runs.has(taskId)) {
+      try {
+        callback({ type: 'turn_start', replay: true });
+        if (live.thinking) callback({ type: 'thinking', text: live.thinking });
+        if (live.text) callback({ type: 'text', text: live.text });
+        if (live.toolName) callback({ type: 'tool.start', name: live.toolName, ...(live.toolArgs ? { args: live.toolArgs } : {}) });
+      } catch {}
+    }
     return () => { const subs = this._streamSubs.get(taskId); if (subs) { subs.delete(callback); if (!subs.size) this._streamSubs.delete(taskId); } };
   }
   _emitStream(taskId, event) {
+    if (event && typeof event === 'object') {
+      if (event.type === 'turn_start') {
+        this._liveTurn.set(taskId, { text: '', thinking: '', toolName: '', toolArgs: null, startedAt: Date.now() });
+      } else if (event.type === 'thinking' && typeof event.text === 'string') {
+        const cur = this._liveTurn.get(taskId) || { text: '', thinking: '', toolName: '', toolArgs: null, startedAt: Date.now() };
+        if (cur.thinking.length < 24576) cur.thinking = (cur.thinking + event.text).slice(0, 24576);
+        cur.toolName = '';
+        this._liveTurn.set(taskId, cur);
+      } else if (event.type === 'text' && typeof event.text === 'string') {
+        const cur = this._liveTurn.get(taskId) || { text: '', thinking: '', toolName: '', toolArgs: null, startedAt: Date.now() };
+        if (cur.text.length < 65536) cur.text = (cur.text + event.text).slice(0, 65536);
+        cur.toolName = '';
+        this._liveTurn.set(taskId, cur);
+      } else if (event.type === 'tool.start') {
+        const cur = this._liveTurn.get(taskId) || { text: '', thinking: '', toolName: '', toolArgs: null, startedAt: Date.now() };
+        cur.text = '';
+        cur.thinking = '';
+        cur.toolName = event.name || '';
+        cur.toolArgs = event.args || null;
+        this._liveTurn.set(taskId, cur);
+      } else if (event.type === 'tool.completed') {
+        const cur = this._liveTurn.get(taskId);
+        if (cur) { cur.toolName = ''; cur.toolArgs = null; }
+      }
+    }
     const subs = this._streamSubs.get(taskId);
     if (subs) for (const cb of subs) try { cb(event); } catch {}
   }
@@ -740,10 +776,18 @@ export class Runtime {
       if (crewRole === 'verifier') {
         throw fault('INVALID_STEER', 'Independent verifier checks cannot be steered mid-run.');
       }
-      // Record crew steer out-of-band without mutating pendingMessages (which would invalidate contractVersion)
-      this.store.appendEvent(taskId, 'conclave.steered', { workerId: cleanWorkerId, role: crewRole, message: text, target: 'crew_worker' });
-      this._emitStream(taskId, { type: 'conclave.steered', workerId: cleanWorkerId, role: crewRole, message: text, target: 'crew_worker' });
-      return { ok: true, target: 'crew_worker', workerId: cleanWorkerId, queued: 1 };
+      // Deliver steer directly into the active crew worker's child task when running, plus record event on parent.
+      let deliveredToChild = false;
+      try {
+        const childTask = this.store.getTask(cleanWorkerId);
+        if (childTask && active.has(childTask.status)) {
+          await this.submitMessage(cleanWorkerId, `[Conclave steer → ${crewRole}] ${text}`, undefined, 'steer');
+          deliveredToChild = true;
+        }
+      } catch {}
+      this.store.appendEvent(taskId, 'conclave.steered', { workerId: cleanWorkerId, role: crewRole, message: text, target: deliveredToChild ? 'crew_worker' : 'note' });
+      this._emitStream(taskId, { type: 'conclave.steered', workerId: cleanWorkerId, role: crewRole, message: text, target: deliveredToChild ? 'crew_worker' : 'note' });
+      return { ok: true, target: deliveredToChild ? 'crew_worker' : 'note', workerId: cleanWorkerId, queued: 1 };
     }
     if (active.has(task.status)) {
       const res = await this.submitMessage(task.id, `[Conclave steer → ${cleanWorkerId}] ${text}`, undefined, 'steer');
@@ -1266,7 +1310,12 @@ export class Runtime {
         const [message, ...rest] = current.deferredMessages || [];
         if (!message) break;
         const followup = { ...message, appliedAt: new Date().toISOString(), contractVersion: current.contractVersion + 1 };
-        const proposed = { ...withFollowups(current, [...(current.followups || []), followup]), deferredMessages: rest, status: 'queued' };
+        const proposed = {
+          ...withFollowups(current, [...(current.followups || []), followup]),
+          deferredMessages: rest,
+          status: 'queued',
+          ...(Array.isArray(message.attachments) && message.attachments.length ? { attachments: message.attachments } : {}),
+        };
         const deferredProvider = this.selectedProvider(proposed.providerId, proposed.workspaceKind);
         buildContext({ task: proposed, provider: deferredProvider, history: this.getRecentEvents(id), totalHistoryCount: current.eventSeq + 2, files: snapshot.files, snapshotHash: snapshot.snapshotHash, learning: this.getLearning(), memories: this._memoriesForTask(proposed), transparency: current.fixtureId ? null : this.getTransparencyConfig() });
         this.store.updateTask(id, () => proposed, 'user.messages.applied', { ids: [message.id], contractVersion: proposed.contractVersion, source: 'owner' });
@@ -1276,7 +1325,10 @@ export class Runtime {
       const current = this.getTask(id);
       if (active.has(current.status) || (current.status === 'completed' && current.deferredMessages?.length)) return this.store.updateTask(id, value => { value.status = 'failed'; value.blocker = { code: cause.code || 'RUNTIME_ERROR', message: cause.message }; return value; }, 'task.status', { status: 'failed', error: cause.message });
       return current;
-    }).finally(() => { if (this.runs.get(id) === entry) this.runs.delete(id); });
+    }).finally(() => {
+      if (this.runs.get(id) === entry) this.runs.delete(id);
+      this._liveTurn.delete(id);
+    });
     return entry.promise;
   }
   async _run(id, controller) {
@@ -2421,7 +2473,12 @@ export class Runtime {
     if (this.getOperations(id).some(operation => !['succeeded', 'failed'].includes(operation.status))) throw fault('OUTCOME_UNKNOWN', 'Reconcile unresolved operations before applying queued instructions.');
     const appliedAt = new Date().toISOString();
     const additions = messages.map((message, index) => ({ ...message, appliedAt, contractVersion: (task.contractVersion || 1) + index + 1 }));
-    const proposed = { ...withFollowups(task, [...(task.followups || []), ...additions]), pendingMessages: [] };
+    const queuedAttachments = additions.flatMap(m => (Array.isArray(m.attachments) ? m.attachments : [])).slice(-4);
+    const proposed = {
+      ...withFollowups(task, [...(task.followups || []), ...additions]),
+      pendingMessages: [],
+      ...(queuedAttachments.length ? { attachments: queuedAttachments } : {}),
+    };
     // Preflight the complete new contract before atomically consuming the queue.
     const pendingProvider = this.selectedProvider(proposed.providerId, proposed.workspaceKind);
     buildContext({ task: { ...proposed, calls: proposed.calls + 1, version: task.version + 2, eventSeq: task.eventSeq + 2 }, provider: pendingProvider, history: this.getRecentEvents(id), totalHistoryCount: task.eventSeq + 2, files: snapshot.files, snapshotHash: snapshot.snapshotHash, learning: this.getLearning(), memories: this._memoriesForTask(proposed) });
@@ -4008,6 +4065,21 @@ export class Runtime {
         current.forkedFromHash = forkedFromHash;
         if (source.sourcePath) current.sourcePath = source.sourcePath;
         if (source.importManifest) current.importManifest = structuredClone(source.importManifest);
+        if (source.initialSnapshot?.files) {
+          if (source.sourcePath && Array.isArray(source.sourceApplications) && source.sourceApplications.length) {
+            try {
+              const baseMap = this.sourceChanges.base(source);
+              current.initialSnapshot = {
+                ...structuredClone(source.initialSnapshot),
+                files: [...baseMap.entries()].map(([p, v]) => ({ path: p, content: v.content, bytes: v.bytes ?? (typeof v.content === 'string' ? Buffer.byteLength(v.content) : 0), sha256: v.sha256 })),
+              };
+            } catch {
+              current.initialSnapshot = structuredClone(source.initialSnapshot);
+            }
+          } else {
+            current.initialSnapshot = structuredClone(source.initialSnapshot);
+          }
+        }
         if (Array.isArray(source.followups) && source.followups.length) {
           current.followups = structuredClone(source.followups);
           current.contractVersion = source.contractVersion || 1;
@@ -4310,13 +4382,36 @@ export class Runtime {
       }
       if (this.getEvents(id).some(event => event.type === 'user.message.removed' && event.data.id === messageId)) throw fault('MESSAGE_REMOVED', 'This message was removed. Send it again with a new message ID.');
     }
-    if (active.has(task.status) || task.pendingMessages?.length || task.deferredMessages?.length) {
-      if (terminal.has(task.status)) throw fault('TASK_TERMINAL', 'This task cannot receive queued instructions.');
-      const pending = { id: messageId || randomUUID(), message, createdAt: new Date().toISOString(), mode };
+    const isRunning = active.has(task.status) || this.runs.has(id);
+    if (isRunning || task.pendingMessages?.length || task.deferredMessages?.length) {
+      if (task.status === 'cancelled' || (isRunning && terminal.has(task.status))) {
+        throw fault('TASK_TERMINAL', 'This task cannot receive queued instructions.');
+      }
+      const pending = {
+        id: messageId || randomUUID(),
+        message,
+        createdAt: new Date().toISOString(),
+        mode,
+        ...(validAttachments.length ? { attachments: validAttachments } : {}),
+      };
       const field = mode === 'queue' ? 'deferredMessages' : 'pendingMessages';
-      const proposed = { ...task, [field]: [...(task[field] || []), pending], ...(validAttachments.length ? { attachments: validAttachments } : {}) };
+      const proposed = { ...task, [field]: [...(task[field] || []), pending] };
       checkMessageLimit([...(task.followups || []), ...(proposed.pendingMessages || []), ...(proposed.deferredMessages || [])]);
-      return { task: this.store.updateTask(id, () => proposed, 'user.message.queued', { ...pending, source: 'owner' }), queued: true };
+      // If the task is currently idle (paused/waiting/blocked/failed/completed with residual deferred items), wake it!
+      const shouldStart = !isRunning;
+      if (shouldStart) {
+        proposed.status = 'queued';
+        proposed.blocker = null;
+        if (proposed.status === 'queued') {
+          proposed.completionKind = null;
+          delete proposed.completedAt;
+        }
+      }
+      return {
+        task: this.store.updateTask(id, () => proposed, 'user.message.queued', { ...pending, source: 'owner' }),
+        queued: true,
+        ...(shouldStart ? { start: true } : {}),
+      };
     }
     return { task: await this.addMessage(id, message, messageId, validAttachments), queued: false, start: true };
   }

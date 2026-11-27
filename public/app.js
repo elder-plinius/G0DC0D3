@@ -1541,7 +1541,12 @@ async function executeSlashCommand(raw) {
     return { handled: true };
   }
   if (cmd === '/build') {
-    if (task?.workspaceKind === 'conversation' && !task?.planMode) return { handled: false };
+    if (task?.workspaceKind === 'conversation') {
+      if (task?.planMode) await togglePlanMode(task, false);
+      if (arg || task?.codeWorkspace) return { handled: false };
+      clearInput();
+      return { handled: true };
+    }
     clearInput();
     await togglePlanMode(task, false);
     return { handled: true };
@@ -3503,7 +3508,7 @@ async function updateCliSettings(id, patch, feedbackMsg = '') {
     });
     await refresh();
     if ($('#settings-dialog')?.open) {
-      await Promise.all([loadModelConnections(), loadServices(), loadModelGroups(selectedModelSort)]);
+      await Promise.all([loadServices(), loadModelGroups(selectedModelSort)]);
       renderModelSettings();
     }
     if ($('#model-picker')?.open) renderModelPicker();
@@ -4302,58 +4307,66 @@ function renderDiffLineCode(text, lang, intraHtml) {
   return escapeHTML(text) || ' ';
 }
 
-function renderInlineCommentBox(filePath, lineNum) {
+const reviewedHunks = new Set();
+
+function renderInlineCommentBox(filePath, lineNum, side = 'new') {
   if (!diffCommentTarget || diffCommentTarget.path !== filePath || diffCommentTarget.line !== lineNum) return '';
+  if (diffCommentTarget.side && diffCommentTarget.side !== side) return '';
   return `<form class="diff-comment-box" data-diff-comment-form data-comment-path="${escapeHTML(filePath)}" data-comment-line="${lineNum}" autocomplete="off"><span class="diff-comment-ref">@${escapeHTML(filePath)}:L${lineNum}</span><input type="text" class="diff-comment-input" name="note" maxlength="1000" placeholder="Add review feedback for line ${lineNum}…" aria-label="Review comment for ${escapeHTML(filePath)} line ${lineNum}" required><button type="submit" class="button button-primary">Send to composer</button><button type="button" class="button button-quiet" data-diff-comment-cancel>Cancel</button></form>`;
 }
 
 function renderUnifiedDiff(hunks, file) {
+  if (file.binary) return `<div class="diff-empty">Binary file changed${file.beforeBytes != null || file.afterBytes != null ? ` (${file.beforeBytes != null ? `${file.beforeBytes.toLocaleString()} B` : 'new'} → ${file.afterBytes != null ? `${file.afterBytes.toLocaleString()} B` : 'deleted'})` : ''}.</div>`;
   if (!hunks || !hunks.length) return `<div class="diff-empty">No differences</div>`;
   const canEdit = selectedData?.task && !ACTIVE.has(selectedData.task.status) && !selectedData.task.draining;
   const lang = diffLanguageForPath(file.path);
   return hunks.map((hunk, idx) => {
     const oldCount = hunk.lines.filter(l => l.type !== 'add').length;
     const newCount = hunk.lines.filter(l => l.type !== 'remove').length;
-    const buttons = canEdit && hunks.length > 0 ? `<span class="hunk-actions"><button type="button" class="hunk-btn hunk-accept" data-hunk-index="${idx}" data-hunk-action="accept" data-hunk-path="${escapeHTML(file.path)}" title="Accept this change">&#10003;</button><button type="button" class="hunk-btn hunk-reject" data-hunk-index="${idx}" data-hunk-action="reject" data-hunk-path="${escapeHTML(file.path)}" title="Reject this change">&#10005;</button></span>` : '';
+    const isReviewed = reviewedHunks.has(`${selectedId}:${file.path}:${idx}`);
+    const buttons = canEdit && hunks.length > 0 ? `<span class="hunk-actions"><button type="button" class="hunk-btn hunk-accept" data-hunk-index="${idx}" data-hunk-action="accept" data-hunk-path="${escapeHTML(file.path)}" aria-pressed="${isReviewed ? 'true' : 'false'}" title="Accept this change">&#10003;</button><button type="button" class="hunk-btn hunk-reject" data-hunk-index="${idx}" data-hunk-action="reject" data-hunk-path="${escapeHTML(file.path)}" title="Reject this change">&#10005;</button></span>` : '';
     const paired = pairHunkLines(hunk.lines);
     const body = paired.map(row => {
       if (row.kind === 'equal') {
         const line = row.left;
         const lineNum = line.newLine ?? line.oldLine;
-        return `<div class="diff-line diff-equal"><span class="diff-ln">${line.oldLine}</span><span class="diff-ln">${line.newLine}</span><button type="button" class="diff-comment-trigger" data-diff-comment data-comment-path="${escapeHTML(file.path)}" data-comment-line="${lineNum}" title="Comment on line ${lineNum}" aria-label="Comment on line ${lineNum}">+</button><span class="diff-prefix"> </span><span class="diff-text hljs">${renderDiffLineCode(line.text, lang, null)}</span></div>${renderInlineCommentBox(file.path, lineNum)}`;
+        return `<div class="diff-line diff-equal"><span class="diff-ln">${line.oldLine}</span><span class="diff-ln">${line.newLine}</span><button type="button" class="diff-comment-trigger" data-diff-comment data-comment-path="${escapeHTML(file.path)}" data-comment-line="${lineNum}" data-comment-side="new" title="Comment on line ${lineNum}" aria-label="Comment on line ${lineNum}">+</button><span class="diff-prefix"> </span><span class="diff-text hljs">${renderDiffLineCode(line.text, lang, null)}</span></div>${renderInlineCommentBox(file.path, lineNum, 'new')}`;
       }
       let html = '';
       if (row.left) {
         const lineNum = row.left.oldLine;
-        html += `<div class="diff-line diff-remove"><span class="diff-ln">${row.left.oldLine}</span><span class="diff-ln"></span><button type="button" class="diff-comment-trigger" data-diff-comment data-comment-path="${escapeHTML(file.path)}" data-comment-line="${lineNum}" title="Comment on line ${lineNum}" aria-label="Comment on line ${lineNum}">+</button><span class="diff-prefix">-</span><span class="diff-text hljs">${renderDiffLineCode(row.left.text, lang, row.intra?.oldHtml)}</span></div>${renderInlineCommentBox(file.path, lineNum)}`;
+        html += `<div class="diff-line diff-remove"><span class="diff-ln">${row.left.oldLine}</span><span class="diff-ln"></span><button type="button" class="diff-comment-trigger" data-diff-comment data-comment-path="${escapeHTML(file.path)}" data-comment-line="${lineNum}" data-comment-side="old" title="Comment on line ${lineNum}" aria-label="Comment on line ${lineNum}">+</button><span class="diff-prefix">-</span><span class="diff-text hljs">${renderDiffLineCode(row.left.text, lang, row.intra?.oldHtml)}</span></div>${renderInlineCommentBox(file.path, lineNum, 'old')}`;
       }
       if (row.right) {
         const lineNum = row.right.newLine;
-        html += `<div class="diff-line diff-add"><span class="diff-ln"></span><span class="diff-ln">${row.right.newLine}</span><button type="button" class="diff-comment-trigger" data-diff-comment data-comment-path="${escapeHTML(file.path)}" data-comment-line="${lineNum}" title="Comment on line ${lineNum}" aria-label="Comment on line ${lineNum}">+</button><span class="diff-prefix">+</span><span class="diff-text hljs">${renderDiffLineCode(row.right.text, lang, row.intra?.newHtml)}</span></div>${renderInlineCommentBox(file.path, lineNum)}`;
+        html += `<div class="diff-line diff-add"><span class="diff-ln"></span><span class="diff-ln">${row.right.newLine}</span><button type="button" class="diff-comment-trigger" data-diff-comment data-comment-path="${escapeHTML(file.path)}" data-comment-line="${lineNum}" data-comment-side="new" title="Comment on line ${lineNum}" aria-label="Comment on line ${lineNum}">+</button><span class="diff-prefix">+</span><span class="diff-text hljs">${renderDiffLineCode(row.right.text, lang, row.intra?.newHtml)}</span></div>${renderInlineCommentBox(file.path, lineNum, 'new')}`;
       }
       return html;
     }).join('');
-    return `<div class="diff-hunk"><div class="diff-hunk-header"><span>@@ -${hunk.oldStart},${oldCount} +${hunk.newStart},${newCount} @@</span>${buttons}</div>${body}</div>`;
+    return `<div class="diff-hunk${isReviewed ? ' is-reviewed' : ''}"><div class="diff-hunk-header"><span>@@ -${hunk.oldStart},${oldCount} +${hunk.newStart},${newCount} @@</span>${buttons}</div>${body}</div>`;
   }).join('');
 }
 
 function renderSplitDiff(hunks, file) {
+  if (file.binary) return `<div class="diff-empty">Binary file changed${file.beforeBytes != null || file.afterBytes != null ? ` (${file.beforeBytes != null ? `${file.beforeBytes.toLocaleString()} B` : 'new'} → ${file.afterBytes != null ? `${file.afterBytes.toLocaleString()} B` : 'deleted'})` : ''}.</div>`;
   if (!hunks || !hunks.length) return `<div class="diff-empty">No differences</div>`;
   const canEdit = selectedData?.task && !ACTIVE.has(selectedData.task.status) && !selectedData.task.draining;
   const lang = diffLanguageForPath(file.path);
   return hunks.map((hunk, idx) => {
     const oldCount = hunk.lines.filter(l => l.type !== 'add').length;
     const newCount = hunk.lines.filter(l => l.type !== 'remove').length;
-    const buttons = canEdit && hunks.length > 0 ? `<span class="hunk-actions"><button type="button" class="hunk-btn hunk-accept" data-hunk-index="${idx}" data-hunk-action="accept" data-hunk-path="${escapeHTML(file.path)}" title="Accept this change">&#10003;</button><button type="button" class="hunk-btn hunk-reject" data-hunk-index="${idx}" data-hunk-action="reject" data-hunk-path="${escapeHTML(file.path)}" title="Reject this change">&#10005;</button></span>` : '';
+    const isReviewed = reviewedHunks.has(`${selectedId}:${file.path}:${idx}`);
+    const buttons = canEdit && hunks.length > 0 ? `<span class="hunk-actions"><button type="button" class="hunk-btn hunk-accept" data-hunk-index="${idx}" data-hunk-action="accept" data-hunk-path="${escapeHTML(file.path)}" aria-pressed="${isReviewed ? 'true' : 'false'}" title="Accept this change">&#10003;</button><button type="button" class="hunk-btn hunk-reject" data-hunk-index="${idx}" data-hunk-action="reject" data-hunk-path="${escapeHTML(file.path)}" title="Reject this change">&#10005;</button></span>` : '';
     const rows = pairHunkLines(hunk.lines).map(row => {
       const leftCls = row.left ? (row.kind === 'equal' ? 'diff-equal' : 'diff-remove') : 'diff-pad';
       const rightCls = row.right ? (row.kind === 'equal' ? 'diff-equal' : 'diff-add') : 'diff-pad';
       const leftHtml = row.left ? renderDiffLineCode(row.left.text, lang, row.intra?.oldHtml) : ' ';
       const rightHtml = row.right ? renderDiffLineCode(row.right.text, lang, row.intra?.newHtml) : ' ';
       const commentLine = row.right?.newLine ?? row.left?.oldLine ?? 1;
-      return `<div class="diff-split-row"><div class="diff-split-cell ${leftCls}"><span class="diff-ln">${row.left?.oldLine ?? ''}</span><span class="diff-prefix">${row.left ? (row.kind === 'equal' ? ' ' : '-') : ''}</span><span class="diff-text hljs">${leftHtml}</span></div><div class="diff-split-cell ${rightCls}"><span class="diff-ln">${row.right?.newLine ?? ''}</span><button type="button" class="diff-comment-trigger" data-diff-comment data-comment-path="${escapeHTML(file.path)}" data-comment-line="${commentLine}" title="Comment on line ${commentLine}" aria-label="Comment on line ${commentLine}">+</button><span class="diff-prefix">${row.right ? (row.kind === 'equal' ? ' ' : '+') : ''}</span><span class="diff-text hljs">${rightHtml}</span></div></div>${renderInlineCommentBox(file.path, commentLine)}`;
+      const commentSide = row.right ? 'new' : 'old';
+      return `<div class="diff-split-row"><div class="diff-split-cell ${leftCls}"><span class="diff-ln">${row.left?.oldLine ?? ''}</span><span class="diff-prefix">${row.left ? (row.kind === 'equal' ? ' ' : '-') : ''}</span><span class="diff-text hljs">${leftHtml}</span></div><div class="diff-split-cell ${rightCls}"><span class="diff-ln">${row.right?.newLine ?? ''}</span><button type="button" class="diff-comment-trigger" data-diff-comment data-comment-path="${escapeHTML(file.path)}" data-comment-line="${commentLine}" data-comment-side="${commentSide}" title="Comment on line ${commentLine}" aria-label="Comment on line ${commentLine}">+</button><span class="diff-prefix">${row.right ? (row.kind === 'equal' ? ' ' : '+') : ''}</span><span class="diff-text hljs">${rightHtml}</span></div></div>${renderInlineCommentBox(file.path, commentLine, commentSide)}`;
     }).join('');
-    return `<div class="diff-hunk"><div class="diff-hunk-header"><span>@@ -${hunk.oldStart},${oldCount} +${hunk.newStart},${newCount} @@</span>${buttons}</div><div class="diff-split-table">${rows}</div></div>`;
+    return `<div class="diff-hunk${isReviewed ? ' is-reviewed' : ''}"><div class="diff-hunk-header"><span>@@ -${hunk.oldStart},${oldCount} +${hunk.newStart},${newCount} @@</span>${buttons}</div><div class="diff-split-table">${rows}</div></div>`;
   }).join('');
 }
 
@@ -4445,8 +4458,18 @@ function renderChanges(diff) {
     ? `<form class="changes-commit-bar" id="changes-commit-form" autocomplete="off"><input id="changes-commit-message" type="text" maxlength="500" placeholder="Checkpoint commit message (default: checkpoint)" aria-label="Checkpoint commit message"><button type="submit" class="button button-primary" ${commitBusy ? 'disabled' : ''}>${commitBusy ? 'Committing…' : 'Save checkpoint'}</button><button type="button" class="button button-quiet" data-commit-cancel ${commitBusy ? 'disabled' : ''}>Cancel</button></form>`
     : '';
   const diffModeSwitch = `<span class="diff-mode-switch" role="group" aria-label="Diff view mode"><button type="button" class="diff-mode-btn ${diffViewMode === 'unified' ? 'active' : ''}" data-diff-view-mode="unified" aria-pressed="${diffViewMode === 'unified'}">Unified</button><button type="button" class="diff-mode-btn ${diffViewMode === 'split' ? 'active' : ''}" data-diff-view-mode="split" aria-pressed="${diffViewMode === 'split'}">Split</button></span>`;
-  const renderedDiff = hunks ? (diffViewMode === 'split' ? renderSplitDiff(hunks, file) : renderUnifiedDiff(hunks, file)) : `<div class="diff-grid"><div class="diff-side before"><div class="diff-label">Before</div><pre tabindex="0">${escapeHTML(file.before ?? 'File did not exist')}</pre></div><div class="diff-side after"><div class="diff-label">After</div><pre tabindex="0">${escapeHTML(file.after ?? 'File deleted')}</pre></div></div>`;
+  const prevViewerScroll = $('.diff-viewer', panel)?.scrollTop || 0;
+  const prevListScroll = $('.diff-file-list', panel)?.scrollTop || 0;
+  const prevCommitDraft = $('#changes-commit-message', panel)?.value ?? null;
+  const prevCommentDraft = $('.diff-comment-input', panel)?.value ?? null;
+  const renderedDiff = hunks ? (diffViewMode === 'split' ? renderSplitDiff(hunks, file) : renderUnifiedDiff(hunks, file)) : (file.binary ? renderUnifiedDiff([], file) : `<div class="diff-grid"><div class="diff-side before"><div class="diff-label">Before</div><pre tabindex="0">${escapeHTML(file.before ?? 'File did not exist')}</pre></div><div class="diff-side after"><div class="diff-label">After</div><pre tabindex="0">${escapeHTML(file.after ?? 'File deleted')}</pre></div></div>`);
   panel.innerHTML = sourceControls + `<div class="changes-toolbar"><span class="change-summary">${diff.length} changed ${diff.length === 1 ? 'file' : 'files'} ${totalStatsHtml}</span>${patchActions}</div>${commitBar}<div class="diff-layout"><aside class="diff-file-list" aria-label="Changed files">${fileListHtml}</aside><section class="diff-viewer" tabindex="0" role="region" aria-label="Diff for ${escapeHTML(file.path)}"><h3 class="diff-viewer-header"><span>${escapeHTML(file.path)}</span><span class="diff-header-right">${diffModeSwitch}<span class="file-size">${fileLabel} ${fileStatsHtml}</span></span></h3>${renderedDiff}</section></div>`;
+  const nextViewer = $('.diff-viewer', panel);
+  const nextList = $('.diff-file-list', panel);
+  if (nextViewer && prevViewerScroll > 0) nextViewer.scrollTop = prevViewerScroll;
+  if (nextList && prevListScroll > 0) nextList.scrollTop = prevListScroll;
+  if (prevCommitDraft !== null && $('#changes-commit-message', panel)) $('#changes-commit-message', panel).value = prevCommitDraft;
+  if (prevCommentDraft !== null && $('.diff-comment-input', panel)) $('.diff-comment-input', panel).value = prevCommentDraft;
 }
 
 function sourceStatus(status) {
@@ -5640,6 +5663,9 @@ function renderFilePreview() {
   const file = selectedData?.files?.find(file => file.path === fileSelections.get(selectedId));
   if (!file) return;
   const renderPane = (f, paneId) => {
+    if (f.content === null) {
+      return `<div class="editor-pane" id="${paneId}"><header class="file-preview-header"><code title="${escapeHTML(f.path)}">${escapeHTML(f.path)}</code>${paneId === 'pane-right' ? `<button type="button" class="button button-quiet" data-close-split>Close</button>` : ''}</header><div class="panel-empty"><div><h3>Binary file</h3><p>${Number.isFinite(f.bytes) ? `${f.bytes.toLocaleString()} bytes` : 'Binary content'} · text preview unavailable.</p></div></div></div>`;
+    }
     const text = typeof f.content === 'string' ? f.content : pretty(f.content);
     const lines = text.split('\n'), key = `${selectedId}:${f.path}:${paneId}`, pageSize = 300;
     const page = Math.max(0, Math.min(filePages.get(key) || 0, Math.ceil(lines.length / pageSize) - 1));
@@ -5652,6 +5678,10 @@ function renderFilePreview() {
     $('#file-preview').innerHTML = `<div class="split-pane-editor">${renderPane(file, 'pane-left')}${renderPane(splitFile, 'pane-right')}</div>`;
   } else {
     splitPaneFile = null;
+    if (file.content === null) {
+      $('#file-preview').innerHTML = `<header class="file-preview-header"><code title="${escapeHTML(file.path)}">${escapeHTML(file.path)}</code></header><div class="panel-empty"><div><h3>Binary file</h3><p>${Number.isFinite(file.bytes) ? `${file.bytes.toLocaleString()} bytes` : 'Binary content'} · text preview unavailable.</p></div></div>`;
+      return;
+    }
     const text = typeof file.content === 'string' ? file.content : pretty(file.content);
     const lines = text.split('\n'), key = `${selectedId}:${file.path}`, pageSize = 300;
     const page = Math.max(0, Math.min(filePages.get(key) || 0, Math.ceil(lines.length / pageSize) - 1));
@@ -5962,7 +5992,6 @@ function renderSelected(data, force = false, opts = {}) {
   if (isCodingWorkspaceTask(task) && appMode !== 'godcode') {
     applyAppMode('godcode', { persist: false, notify: false, switchView: false });
   }
-  window.restoreChatCode?.(task);
   const project = projectLabel(task);
   if (project) projectLabels.set(task.id, project);
   setText('#workspace-context', task.codeWorkspace?.repository || project || (task.workspaceKind === 'conversation' ? 'Conversation' : 'Local workspace'));
@@ -5979,6 +6008,9 @@ function renderSelected(data, force = false, opts = {}) {
   window.G0DConclave?.syncTask(task);
   const oldTaskId = $('#selected-id').dataset.fullId;
   const taskChanged = oldTaskId !== task.id;
+  if (taskChanged && !artifactDockState.open && !document.body.classList.contains('inspector-open') && !window.G0DConclave?.isOpen?.() && !window.G0DBrowserLive?.isOpen?.()) {
+    window.restoreChatCode?.(task);
+  }
   const scroller = $('#task-content');
   const nearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 95;
   const oldScroll = scroller.scrollTop;
@@ -6318,7 +6350,7 @@ function renderEmpty() {
 
 async function selectTask(id) {
   if (id !== selectedId) {
-    window.closeChatCode?.();
+    window.closeChatCode?.({ remember: true });
     lastDetectedArtifact = null;
     splitPaneFile = null;
     diffCommentTarget = null;
@@ -6895,7 +6927,14 @@ document.addEventListener('click', (event) => {
   if (stripAction) {
     const task = selectedData?.task;
     if (task && stripAction.dataset.stripAction === 'compact') compactTaskAction(task);
-    else if (task && stripAction.dataset.stripAction === 'undo') rewindTaskAction(task, 1);
+    else if (task && stripAction.dataset.stripAction === 'undo') {
+      confirmModal({
+        title: 'Undo latest workspace checkpoint?',
+        message: 'This resets workspace files to the previous git checkpoint and discards uncommitted edits.',
+        confirmLabel: 'Undo checkpoint',
+        danger: true,
+      }).then(ok => { if (ok) rewindTaskAction(task, 1); });
+    }
     else if (task && stripAction.dataset.stripAction === 'fork') forkTaskAction(task);
     return;
   }
@@ -7179,7 +7218,11 @@ document.addEventListener('click', event => {
   }
   const diffCommentBtn = event.target.closest('[data-diff-comment]');
   if (diffCommentBtn) {
-    diffCommentTarget = { path: diffCommentBtn.dataset.commentPath, line: Number(diffCommentBtn.dataset.commentLine) || 1 };
+    diffCommentTarget = {
+      path: diffCommentBtn.dataset.commentPath,
+      line: Number(diffCommentBtn.dataset.commentLine) || 1,
+      side: diffCommentBtn.dataset.commentSide || 'new',
+    };
     changesSignature = '';
     if (selectedData) renderChanges(selectedData.diff || []);
     setTimeout(() => $('.diff-comment-input')?.focus(), 0);
@@ -7220,7 +7263,10 @@ document.addEventListener('click', event => {
     const action = hunkBtn.dataset.hunkAction;
     if (action === 'accept') {
       const hunkEl = hunkBtn.closest('.diff-hunk');
+      const rKey = `${selectedId}:${filePath}:${hunkIndex}`;
       const reviewed = hunkEl?.classList.toggle('is-reviewed');
+      if (reviewed) reviewedHunks.add(rKey);
+      else reviewedHunks.delete(rKey);
       hunkBtn.setAttribute('aria-pressed', String(Boolean(reviewed)));
       toast(reviewed ? 'Hunk marked reviewed.' : 'Hunk review mark cleared.');
       return;
@@ -8524,7 +8570,7 @@ document.addEventListener('keydown', (event) => {
   if(taskMenu){taskMenu.open=false;$('summary',taskMenu)?.focus();event.preventDefault();return;}
   if (document.body.classList.contains('inspector-open')) { setInspector(false, true); event.preventDefault(); return; }
   if (narrowLayout.matches && document.body.classList.contains('sidebar-open')) { setSidebar(false); $('#sidebar-toggle').focus(); event.preventDefault(); return; }
-  if (artifactDockState.open && !artifactDockState.inspecting) { closeArtifactDock({ recordDismiss: true }); event.preventDefault(); return; }
+  if (artifactDockState.open && !artifactDockState.inspectMode && !artifactDockState.fullscreen) { closeArtifactDock({ recordDismiss: true }); event.preventDefault(); return; }
   const activeTaskNow = selectedData?.task?.id === selectedId ? selectedData.task : null;
   if (activeTaskNow && ACTIVE.has(activeTaskNow.status) && !$('#composer-input')?.value?.trim()) {
     event.preventDefault();
