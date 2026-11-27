@@ -1904,7 +1904,7 @@ export function parsePlannerDecisionEnvelope(rawText, tools, providerLabel = 'CL
     : { type: 'message', text: value.text || '', finish: value.finish || 'done' };
 }
 
-function runSubprocessPlanner(owner, { args, cwd, signal, turnTimeoutMs, input, env, label }) {
+function runSubprocessPlanner(owner, { args, cwd, signal, turnTimeoutMs, timeoutOverrideMs, input, env, label }) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) { reject(Object.assign(new Error(`${label} bridge cancelled`), { code: 'cancelled' })); return; }
     const child = spawn(owner.binary, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'], env, detached: process.platform !== 'win32' });
@@ -1921,7 +1921,9 @@ function runSubprocessPlanner(owner, { args, cwd, signal, turnTimeoutMs, input, 
     owner.children.add(record);
     const done = (error, value) => { if (settled) return; settled = true; clearTimeout(timer); signal?.removeEventListener('abort', abort); error ? reject(error) : resolve(value); };
     const abort = () => { kill(); done(Object.assign(new Error(`${label} bridge cancelled`), { code: 'cancelled' })); };
-    const cliTimeoutMs = Number.isFinite(turnTimeoutMs) && turnTimeoutMs > 0 ? Math.max(owner.timeoutMs, turnTimeoutMs) : owner.timeoutMs;
+    const cliTimeoutMs = Number.isFinite(timeoutOverrideMs) && timeoutOverrideMs > 0
+      ? timeoutOverrideMs
+      : (Number.isFinite(turnTimeoutMs) && turnTimeoutMs > 0 ? Math.max(owner.timeoutMs, turnTimeoutMs) : owner.timeoutMs);
     const timer = setTimeout(() => { kill(); done(Object.assign(new Error(`${label} bridge timed out`), { code: 'ETIMEDOUT' })); }, cliTimeoutMs);
     signal?.addEventListener('abort', abort, { once: true });
     child.on('error', () => done(Object.assign(new Error(`${label} CLI could not start. Check its installation.`), { code: 'provider_configuration', retryable: false })));
@@ -2001,6 +2003,72 @@ export class GeminiCliProvider extends CodexProvider {
   }
 }
 
+function compactToolCatalog(tools = []) {
+  return tools.map(t => ({
+    name: t.name,
+    description: t.description,
+    parameters: t.parameters,
+  }));
+}
+
+function antigravityContractSignature(context) {
+  const task = context.task || {};
+  const pp = task.probeProgress || null;
+  return createHash('sha256').update(JSON.stringify({
+    objective: task.objective || '',
+    constraints: task.constraints || [],
+    planMode: Boolean(task.planMode),
+    effort: task.effort || 'medium',
+    execution: task.execution || null,
+    checks: (task.checks || []).map(c => ({ name: c?.name, command: c?.command })),
+    persona: task.persona || 'plinian',
+    overseerGuidance: task.overseerGuidance || null,
+    probeHasProgress: Boolean((pp?.passed || 0) > 0 || (pp?.highWater || 0) > 0),
+    probeRolledBack: Boolean(pp?.rolledBack),
+  })).digest('hex');
+}
+
+function buildAntigravityDeltaPayload(context, cached) {
+  const lastEventSeq = cached?.lastEventSeq || 0;
+  const prevFollowupsCount = cached?.followupsCount || 0;
+  const prevFiles = cached?.fileSnapshots instanceof Map ? cached.fileSnapshots : new Map();
+  const task = context.task || {};
+  const history = Array.isArray(context.history) ? context.history : [];
+  const deltaEvents = history
+    .filter(e => e && Number.isInteger(e.seq) && e.seq > lastEventSeq && !['model.request', 'model.response', 'tool.started'].includes(e.type))
+    .map(({ seq, type, data }) => ({ seq, type, data }));
+  const fileIndex = (context.files || []).map(f => {
+    const prev = prevFiles.get(f.path);
+    const includeContent = typeof f.content === 'string' && (!prev || prev.sha256 !== f.sha256 || !prev.hasContent);
+    return {
+      path: f.path,
+      sha256: f.sha256,
+      bytes: f.bytes,
+      ...(includeContent ? { content: f.content } : {}),
+    };
+  });
+  const followups = Array.isArray(task.followups) ? task.followups : [];
+  const newFollowups = followups.slice(prevFollowupsCount);
+  const delta = {
+    task: {
+      id: task.id,
+      calls: task.calls,
+      remainingCalls: context.remainingCalls,
+      snapshotHash: context.snapshotHash,
+      verification: task.verificationSummary || null,
+      probeProgress: task.probeProgress || null,
+    },
+    eventsSinceLastTurn: deltaEvents,
+    currentFiles: fileIndex,
+    ...(Array.isArray(task.todos) && task.todos.length ? { todos: task.todos } : {}),
+    ...(newFollowups.length ? { newFollowups } : {}),
+    ...(task.overseerGuidance ? { overseerGuidance: String(task.overseerGuidance).slice(0, 600) } : {}),
+  };
+  return `Continue the task. CRITICAL: planner-only JSON bridge — DO NOT invoke any Antigravity CLI built-in tools. Return ONLY one raw JSON decision envelope (no markdown fences, no prose): {"type":"tool"|"message","calls":[{"id":"unique","name":"tool.name","arguments":"JSON string"}],"text":"","finish":"continue"|"done"|"refusal"}.\n` +
+    `On repo.write, OMIT expectedHash (the broker tracks hashes automatically). Batch independent file edits in one turn.\n\n` +
+    `Delta since your last turn (JSON):\n${JSON.stringify(delta)}`;
+}
+
 /** Subscription-authenticated Google Antigravity CLI (agy) planner. CLI owns Google auth; the broker owns effects. */
 export class AntigravityCliProvider extends CodexProvider {
   constructor({ id = 'antigravity-cli', label = 'Google Antigravity (agy) · CLI default', binary = process.env.G0D_ANTIGRAVITY_BINARY || 'agy', timeoutMs = 180000, model, environment = process.env, subscriptionId = 'antigravity-cli', cliSettings = {} } = {}) {
@@ -2008,6 +2076,13 @@ export class AntigravityCliProvider extends CodexProvider {
     this.kind = 'antigravity-cli';
     this.tier = inferProviderTier({ id, model: model || 'gemini-4-neon-high' });
     this.accounting = 'Antigravity CLI turns and reported usage; underlying provider attempts are opaque';
+    this.sessions = new Map();
+    this.inFlightSessions = new Set();
+  }
+  close() {
+    this.sessions.clear();
+    this.inFlightSessions.clear();
+    return super.close();
   }
   async turn(context, { signal, turnTimeoutMs, privacy = DEFAULT_PRIVACY_SETTINGS, onOutbound, extraSecrets } = {}) {
     if (this.closed) throw Object.assign(new Error('Antigravity CLI provider is closed'), { code: 'PROVIDER_CLOSED', retryable: false });
@@ -2021,44 +2096,143 @@ export class AntigravityCliProvider extends CodexProvider {
     context = cleaned.value;
     onOutbound?.({ providerId: this.id, host: 'cli:antigravity', protocol: this.kind, zdrClass: gate.posture.zdrClass, zdrFlags: ['cli:telemetry-disabled'], secretsRedacted: cleaned.count, blocked: false });
     const tools = context.tools ?? canonicalTools;
+    const taskId = typeof context.task?.id === 'string' && context.task.id ? context.task.id : null;
+    const history = Array.isArray(context.history) ? context.history : [];
+    const maxEventSeq = history.reduce((m, e) => (Number.isInteger(e?.seq) && e.seq > m ? e.seq : m), 0);
+    const strategy = context.strategy || 'continue';
+    const contractVersion = context.task?.contractVersion ?? 1;
+    const recoveries = context.task?.recoveries ?? 0;
+    const compactedBeforeSeq = context.task?.workingSummary?.compactedBeforeSeq || 0;
+    const toolSig = tools.map(t => t.name).join(',');
+    const contractSig = antigravityContractSignature(context);
+    const validConvId = id => typeof id === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(id);
+
+    // Only stateful multi-turn tasks with durable event history participate in session reuse.
+    // Stateless subagent/overseer/compactor turns (history: []) and overlapping calls never touch this.sessions.
+    const canManageSession = Boolean(taskId && history.length > 0 && maxEventSeq > 0 && !this.inFlightSessions.has(taskId));
+    if (canManageSession) this.inFlightSessions.add(taskId);
+
+    const cached = canManageSession ? this.sessions.get(taskId) : null;
+    const canReuseSession = Boolean(
+      canManageSession
+      && cached
+      && validConvId(cached.conversationId)
+      && cached.strategy === strategy
+      && cached.contractVersion === contractVersion
+      && cached.recoveries === recoveries
+      && cached.toolSig === toolSig
+      && cached.contractSig === contractSig
+      && cached.lastEventSeq > 0
+      && maxEventSeq >= cached.lastEventSeq
+      && compactedBeforeSeq <= cached.lastEventSeq
+    );
+    if (canManageSession && cached && !canReuseSession) {
+      this.sessions.delete(taskId);
+    }
+
+    const turnStartedAt = Date.now();
+    const turnBudgetMs = Number.isFinite(turnTimeoutMs) && turnTimeoutMs > 0 ? Math.max(this.timeoutMs, turnTimeoutMs) : this.timeoutMs;
     const working = await fs.mkdtemp(path.join(tmpdir(), 'g0d-agy-planner-'));
     try {
       if (this.closed) throw Object.assign(new Error('Antigravity CLI provider is closed'), { code: 'PROVIDER_CLOSED', retryable: false });
-      // Omit --print so agy reads the complete planner prompt directly from stdin (avoids argv prompt leaks & E2BIG).
-      const args = ['--output-format', 'json', '--disable-slash-commands', '--sandbox'];
-      if (this.model) args.push('--model', this.model);
-      const effort = this.cliSettings?.reasoningEffort;
-      if (effort && ['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) args.push('--effort', effort);
-      const stdinPayload = `CRITICAL: You are running inside a planner-only JSON bridge. DO NOT invoke any Antigravity CLI built-in tools (no read_file, write_file, run_command, etc.). Return ONLY one raw JSON object matching the decision envelope below (no markdown fences, no prose).\n\n` +
+      const env = antigravitySubscriptionEnvironment(cliEnvironments.get(this));
+      const buildArgs = conversationId => {
+        // Omit --print so agy reads the complete planner prompt directly from stdin (avoids argv prompt leaks & E2BIG).
+        const args = ['--output-format', 'json', '--disable-slash-commands', '--sandbox'];
+        if (this.model) args.push('--model', this.model);
+        const effort = this.cliSettings?.reasoningEffort;
+        if (effort && ['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) args.push('--effort', effort);
+        if (conversationId) args.push('--conversation', conversationId);
+        return args;
+      };
+      const buildFullPayload = () =>
+        `CRITICAL: You are running inside a planner-only JSON bridge. DO NOT invoke any Antigravity CLI built-in tools (no read_file, write_file, run_command, etc.). Return ONLY one raw JSON object matching the decision envelope below (no markdown fences, no prose).\n` +
+        `EFFICIENCY RULES:\n` +
+        `- Batch all independent file edits (repo.write / repo.patch) in a SINGLE type="tool" turn.\n` +
+        `- On repo.write, OMIT expectedHash (the broker tracks file hashes automatically).\n` +
+        `- After writing files, verify with check.run or process.run before returning finish="done".\n\n` +
         `${compilePrompt({ ...context, tools })}\n\n` +
         `Return ONLY raw JSON matching:\n` +
         `{"type":"tool"|"message","calls":[{"id":"unique","name":"tool.name","arguments":"JSON string"}],"text":"","finish":"continue"|"done"|"refusal"}\n` +
-        `Available tools: ${JSON.stringify(tools)}\n` +
+        `Available tools: ${JSON.stringify(compactToolCatalog(tools))}\n` +
         `For tool actions set type="tool", calls=[...], text="", finish="continue". For final replies set type="message", calls=[], text="summary", finish="done".`;
-      const env = antigravitySubscriptionEnvironment(cliEnvironments.get(this));
-      const output = await runSubprocessPlanner(this, { args, cwd: working, signal, turnTimeoutMs, input: stdinPayload, env, label: 'Antigravity' });
-      let envelopeText = output, usage = null, parsed = null;
-      const trimmedOut = output.trim();
-      try { parsed = JSON.parse(trimmedOut); } catch {
-        const fb = trimmedOut.indexOf('{'), lb = trimmedOut.lastIndexOf('}');
-        if (fb >= 0 && lb > fb) { try { parsed = JSON.parse(trimmedOut.slice(fb, lb + 1)); } catch {} }
-      }
-      if (parsed && typeof parsed === 'object') {
-        if (typeof parsed.status === 'string' && parsed.status && parsed.status !== 'SUCCESS') {
-          const safeStatus = String(parsed.status).replace(/[^A-Za-z0-9_ -]/g, '').slice(0, 40) || 'ERROR';
-          throw Object.assign(new Error(`Antigravity CLI returned status ${safeStatus}`), { code: 'provider_configuration', retryable: false });
+
+      const invokeAndParse = async (conversationId, timeoutOverrideMs = null) => {
+        const args = buildArgs(conversationId);
+        const stdinPayload = conversationId
+          ? buildAntigravityDeltaPayload(context, cached)
+          : buildFullPayload();
+        const output = await runSubprocessPlanner(this, { args, cwd: working, signal, turnTimeoutMs, timeoutOverrideMs, input: stdinPayload, env, label: 'Antigravity' });
+        let envelopeText = output, usage = null, parsed = null;
+        const trimmedOut = output.trim();
+        try { parsed = JSON.parse(trimmedOut); } catch {
+          const fb = trimmedOut.indexOf('{'), lb = trimmedOut.lastIndexOf('}');
+          if (fb >= 0 && lb > fb) { try { parsed = JSON.parse(trimmedOut.slice(fb, lb + 1)); } catch {} }
         }
-        if (Number(parsed.num_turns) > 1 && !parsed.structured_output) {
-          throw Object.assign(new Error('Planner-only Antigravity CLI bridge attempted an internal tool turn; response rejected'), { code: 'tool_protocol' });
+        if (parsed && typeof parsed === 'object') {
+          if (typeof parsed.status === 'string' && parsed.status && parsed.status !== 'SUCCESS') {
+            const safeStatus = String(parsed.status).replace(/[^A-Za-z0-9_ -]/g, '').slice(0, 40) || 'ERROR';
+            throw Object.assign(new Error(`Antigravity CLI returned status ${safeStatus}`), { code: 'provider_configuration', retryable: false });
+          }
+          if (Number(parsed.num_turns) > 1 && !parsed.structured_output) {
+            throw Object.assign(new Error('Planner-only Antigravity CLI bridge attempted an internal tool turn; response rejected'), { code: 'tool_protocol' });
+          }
+          if (parsed.structured_output && typeof parsed.structured_output === 'object') envelopeText = JSON.stringify(parsed.structured_output);
+          else if (typeof parsed.response === 'string') envelopeText = parsed.response;
+          else if (typeof parsed.text === 'string' && !parsed.type) envelopeText = parsed.text;
+          if (parsed.usage && typeof parsed.usage === 'object') usage = parsed.usage;
         }
-        if (parsed.structured_output && typeof parsed.structured_output === 'object') envelopeText = JSON.stringify(parsed.structured_output);
-        else if (typeof parsed.response === 'string') envelopeText = parsed.response;
-        else if (typeof parsed.text === 'string' && !parsed.type) envelopeText = parsed.text;
-        if (parsed.usage && typeof parsed.usage === 'object') usage = parsed.usage;
+        const decision = parsePlannerDecisionEnvelope(envelopeText, tools, 'Antigravity CLI');
+        const nextConversationId = validConvId(parsed?.conversation_id) ? parsed.conversation_id : conversationId;
+        return { decision, usage, nextConversationId };
+      };
+
+      let result;
+      if (canReuseSession) {
+        try {
+          result = await invokeAndParse(cached.conversationId);
+        } catch (err) {
+          this.sessions.delete(taskId);
+          const remainingMs = turnBudgetMs - (Date.now() - turnStartedAt);
+          if (err?.code === 'cancelled' || err?.code === 'PROVIDER_CLOSED' || err?.code === 'ETIMEDOUT' || signal?.aborted || this.closed || remainingMs < 15000) throw err;
+          // Warm session expired or errored — fall back transparently to a fresh full-context turn within remaining timeout budget.
+          result = await invokeAndParse(null, remainingMs);
+        }
+      } else {
+        result = await invokeAndParse(null);
       }
-      const decision = parsePlannerDecisionEnvelope(envelopeText, tools, 'Antigravity CLI');
-      return { ...decision, usage, model: this.model || 'antigravity-cli-default', evidenceKind: 'live_antigravity_cli', accounting: this.accounting };
-    } finally { await fs.rm(working, { recursive: true, force: true }); }
+
+      if (canManageSession) {
+        if (result.decision.finish === 'refusal' || !validConvId(result.nextConversationId)) {
+          this.sessions.delete(taskId);
+        } else {
+          const fileSnapshots = new Map(
+            (context.files || []).map(f => [f.path, { sha256: f.sha256, hasContent: typeof f.content === 'string' }])
+          );
+          this.sessions.set(taskId, {
+            conversationId: result.nextConversationId,
+            lastEventSeq: maxEventSeq,
+            followupsCount: Array.isArray(context.task?.followups) ? context.task.followups.length : 0,
+            fileSnapshots,
+            strategy,
+            contractVersion,
+            recoveries,
+            toolSig,
+            contractSig,
+          });
+          // Bound session cache size to prevent unbounded growth in long-lived servers
+          if (this.sessions.size > 200) {
+            const oldestKey = this.sessions.keys().next().value;
+            if (oldestKey && oldestKey !== taskId) this.sessions.delete(oldestKey);
+          }
+        }
+      }
+
+      return { ...result.decision, usage: result.usage, model: this.model || 'antigravity-cli-default', evidenceKind: 'live_antigravity_cli', accounting: this.accounting };
+    } finally {
+      if (canManageSession) this.inFlightSessions.delete(taskId);
+      await fs.rm(working, { recursive: true, force: true });
+    }
   }
 }
 

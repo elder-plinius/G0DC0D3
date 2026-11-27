@@ -14,15 +14,18 @@ import { Broker, snapshotWorkspace, sha256, taskTools, conversationWithoutChecks
 import { BrowserPool, DEFAULT_BROWSER_SETTINGS, normalizeBrowserSettings, findChromiumBinary } from './browser-env.mjs';
 import { validateTool } from './tool-schema.mjs';
 import { diagnoseIncident, detectRefusal, rankCandidates, providerIdentity, candidateEligibility, requestProfile, providerTier } from './routing.mjs';
-import { learningContext, inferModelFamily, bestStrategyForFamily, extractDeclineSignature } from './learning.mjs';
+import { learningContext, inferModelFamily, bestStrategyForFamily, extractDeclineSignature, providerObservedStats } from './learning.mjs';
 import {
   DEFAULT_OVERSEER_SETTINGS,
+  OVERSEER_POSTURES,
   normalizeOverseerSettings,
   scoreOverseerSuitability,
   looksAmbiguousEvasion,
   judgeAmbiguousReply,
   judgePermissionRisk,
-  adviseUnblock
+  adviseUnblock,
+  auditCompletion,
+  coachTrajectory
 } from './overseer.mjs';
 import { runSpecialistSubagent } from './subagents.mjs';
 import {
@@ -1219,15 +1222,16 @@ export class Runtime {
     });
   }
   _recordInterceptedToolError(taskId, call, epoch, code, message) {
-    const id = `${taskId}:${call.id}`;
-    const argsHash = sha256(stableJson(call.args || {}));
+    const safeCallId = typeof call?.id === 'string' && call.id && call.id.length <= 240 ? call.id : `invalid_${randomUUID()}`;
+    const id = `${taskId}:${safeCallId}`;
+    const argsHash = sha256(stableJson(call?.args || {}));
     const result = { ok: false, error: { code, message } };
     const operation = {
-      id, taskId, callId: call.id, name: call.name, args: call.args || {}, argsHash, epoch,
+      id, taskId, callId: safeCallId, name: call?.name || 'unknown', args: call?.args || {}, argsHash, epoch,
       status: 'failed', result, createdAt: new Date().toISOString(), finishedAt: new Date().toISOString()
     };
-    this.store.putOperation(operation, 'tool.completed', { operationId: id, name: call.name, status: 'failed', result });
-    this._emitStream(taskId, { type: 'tool.completed', name: call.name, callId: call.id, ok: false, errorCode: code });
+    this.store.putOperation(operation, 'tool.completed', { operationId: id, name: operation.name, status: 'failed', result });
+    this._emitStream(taskId, { type: 'tool.completed', name: operation.name, callId: safeCallId, ok: false, errorCode: code });
     return result;
   }
   async contextForTask(id) {
@@ -1574,6 +1578,9 @@ export class Runtime {
         let failure;
         let writes = false;
         let deniedInTurn = false;
+        let softBatchErrorsOnly = true;
+        const RECOVERABLE_BATCH_ERRORS = new Set(['INVALID_TOOL', 'PREIMAGE_MISMATCH', 'PATCH_AMBIGUOUS', 'PATCH_TARGET_INVALID', 'ENOENT']);
+        const failedPaths = new Set();
         const observedHashes = new Map(snapshot.files.map(file => [file.path, file.sha256]));
         const streamArgsFor = call => call.name === 'repo.read' || call.name === 'repo.write' || call.name === 'repo.patch' || call.name === 'repo.delete' ? { path: call.args?.path }
           : call.name === 'repo.move' ? { from: call.args?.from, to: call.args?.to }
@@ -1631,17 +1638,29 @@ export class Runtime {
             try {
               for (const call of batch) this._emitStream(id, { type: 'tool.start', name: call.name, callId: call.id, args: streamArgsFor(call) });
               const results = await this.broker.executeReadBatch(id, batch, { epoch, signal: controller.signal, outbound: this.outboundOptions() });
+              let batchFatal = null;
               for (let j = 0; j < batch.length; j++) {
                 const call = batch[j], result = results[j];
                 this._emitStream(id, { type: 'tool.completed', name: call.name, callId: call.id, ok: result?.ok ?? false, path: result?.path });
                 this._recordToolCallSig(id, call, sha256(stableJson([call.name, call.args || {}])), false);
-                if (result?.ok === false && !failure) failure = result.error;
-                else trackResult(call, result);
+                if (result?.ok === false) {
+                  const errCode = result.error?.code || 'TOOL_ERROR';
+                  if (response.calls.length > 1 && RECOVERABLE_BATCH_ERRORS.has(errCode)) {
+                    if (!failure) failure = result.error;
+                  } else {
+                    failure = result.error;
+                    softBatchErrorsOnly = false;
+                    batchFatal = result.error;
+                  }
+                } else {
+                  trackResult(call, result);
+                }
               }
-              if (failure) break;
+              if (batchFatal) break;
             } catch (cause) {
               if (!this._current(id, epoch, controller.signal)) break;
               failure = { code: cause.code || 'TOOL_ERROR', message: cause.message };
+              softBatchErrorsOnly = false;
               if (this.getOperations(id).some(operation => operation.status === 'outcome_unknown')) {
                 return this._status(id, epoch, 'blocked', { code: 'OUTCOME_UNKNOWN', message: cause.message });
               }
@@ -1667,17 +1686,29 @@ export class Runtime {
               try {
                 for (const call of spawnBatch) this._emitStream(id, { type: 'tool.start', name: call.name, callId: call.id, args: streamArgsFor(call) });
                 const results = await Promise.all(spawnBatch.map(call => this._executeAgentSpawn(id, epoch, call, controller.signal)));
+                let spawnFatal = null;
                 for (let j = 0; j < spawnBatch.length; j++) {
                   const call = spawnBatch[j], result = results[j];
                   this._emitStream(id, { type: 'tool.completed', name: call.name, callId: call.id, ok: result?.ok ?? false });
                   this._recordToolCallSig(id, call, sha256(stableJson([call.name, call.args || {}])), false);
-                  if (result?.ok === false && !failure) failure = result.error;
-                  else trackResult(call, result);
+                  if (result?.ok === false) {
+                    const errCode = result.error?.code || 'TOOL_ERROR';
+                    if (response.calls.length > 1 && RECOVERABLE_BATCH_ERRORS.has(errCode)) {
+                      if (!failure) failure = result.error;
+                    } else {
+                      failure = result.error;
+                      softBatchErrorsOnly = false;
+                      spawnFatal = result.error;
+                    }
+                  } else {
+                    trackResult(call, result);
+                  }
                 }
-                if (failure) break;
+                if (spawnFatal) break;
               } catch (cause) {
                 if (!this._current(id, epoch, controller.signal)) break;
                 failure = { code: cause.code || 'TOOL_ERROR', message: cause.message };
+                softBatchErrorsOnly = false;
                 break;
               }
               idx = spawnEnd;
@@ -1710,6 +1741,7 @@ export class Runtime {
                   args: call.args || {},
                   target: perm.target,
                   objective: permTask.objective,
+                  customInstructions: overseer.settings.customInstructions,
                   ...this.outboundOptions(),
                   signal: controller.signal
                 });
@@ -1777,7 +1809,17 @@ export class Runtime {
             failure = { code: 'DOOM_LOOP_DETECTED', message: doomMsg };
             break;
           }
+          let startedToolStream = false;
           try {
+            const targetPath = typeof call.args?.path === 'string' ? call.args.path : (typeof call.args?.from === 'string' ? call.args.from : null);
+            const isMutatingFileTool = ['repo.write', 'repo.patch', 'repo.delete', 'repo.move'].includes(call.name);
+            if (isMutatingFileTool && targetPath && failedPaths.has(targetPath)) {
+              const staleMsg = `Skipped ${call.name} on ${targetPath} because an earlier edit on the same file failed in this batch.`;
+              this._recordInterceptedToolError(id, call, epoch, 'PREIMAGE_MISMATCH', staleMsg);
+              this._recordToolCallSig(id, call, doom.sig, false);
+              if (!failure) failure = { code: 'PREIMAGE_MISMATCH', message: staleMsg };
+              continue;
+            }
             const preHook = await runLifecycleHooks('PreToolUse', this.getTask(id), call.name, call.args || {}, { signal: controller.signal });
             if (preHook.blocked) {
               const hookMsg = preHook.reason || `PreToolUse hook blocked ${call.name}.`;
@@ -1788,6 +1830,7 @@ export class Runtime {
               break;
             }
             this._emitStream(id, { type: 'tool.start', name: call.name, callId: call.id, args: streamArgsFor(call) });
+            startedToolStream = true;
             let result;
             if (call.name === 'agent.spawn') {
               result = await this._executeAgentSpawn(id, epoch, call, controller.signal);
@@ -1798,34 +1841,69 @@ export class Runtime {
               result = await this.broker.execute(id, call, { epoch, signal: controller.signal, expectedHash: call.name === 'repo.write' ? (observedHashes.get(call.args?.path) ?? null) : undefined, onOutput, outbound: this.outboundOptions() });
             }
             this._emitStream(id, { type: 'tool.completed', name: call.name, callId: call.id, ok: result?.ok ?? false, path: result?.path });
-            const mutatingEditOk = result?.ok === true && ['repo.write', 'repo.patch', 'repo.delete', 'repo.move'].includes(call.name);
-            this._recordToolCallSig(id, call, doom.sig, mutatingEditOk);
-            if (result?.ok === false) { failure = result.error; break; }
+            startedToolStream = false;
+            const priorHash = targetPath ? observedHashes.get(targetPath) : undefined;
+            const changedFile = result?.ok === true && (
+              call.name === 'repo.delete' || call.name === 'repo.move'
+              || (['repo.write', 'repo.patch'].includes(call.name) && (priorHash === undefined || result.sha256 !== priorHash))
+            );
+            this._recordToolCallSig(id, call, doom.sig, changedFile);
+            if (result?.ok === false) {
+              const errCode = result.error?.code || 'TOOL_ERROR';
+              if (isMutatingFileTool && targetPath) failedPaths.add(targetPath);
+              if (response.calls.length > 1 && RECOVERABLE_BATCH_ERRORS.has(errCode)) {
+                if (!failure) failure = result.error;
+                continue;
+              }
+              failure = result.error;
+              softBatchErrorsOnly = false;
+              break;
+            }
             trackResult(call, result);
-            const postHook = await runLifecycleHooks('PostToolUse', this.getTask(id), call.name, call.args || {}, { signal: controller.signal });
-            if (postHook.results?.length) {
-              this.store.appendEvent(id, 'hook.post_tool', { callId: call.id, tool: call.name, results: postHook.results });
+            try {
+              const postHook = await runLifecycleHooks('PostToolUse', this.getTask(id), call.name, call.args || {}, { signal: controller.signal });
+              if (postHook.results?.length) {
+                this.store.appendEvent(id, 'hook.post_tool', { callId: call.id, tool: call.name, results: postHook.results });
+              }
+            } catch (hookCause) {
+              if (!this._current(id, epoch, controller.signal)) break;
+              failure = { code: hookCause.code || 'HOOK_ERROR', message: hookCause.message };
+              softBatchErrorsOnly = false;
+              break;
             }
           } catch (cause) {
             if (!this._current(id, epoch, controller.signal)) break;
-            failure = { code: cause.code || 'TOOL_ERROR', message: cause.message };
+            const errCode = cause.code || 'TOOL_ERROR';
+            const existingOp = typeof call?.id === 'string' && call.id ? this.store.getOperation(`${id}:${call.id}`) : null;
+            if (!existingOp) {
+              this._recordInterceptedToolError(id, call, epoch, errCode, cause.message);
+            } else if (startedToolStream) {
+              this._emitStream(id, { type: 'tool.completed', name: call.name, callId: call.id, ok: false, errorCode: errCode });
+            }
+            this._recordToolCallSig(id, call, doom.sig, false);
             if (this.getOperations(id).some(operation => operation.status === 'outcome_unknown')) {
               return this._status(id, epoch, 'blocked', { code: 'OUTCOME_UNKNOWN', message: cause.message });
             }
+            const targetPath = typeof call.args?.path === 'string' ? call.args.path : (typeof call.args?.from === 'string' ? call.args.from : null);
+            if (['repo.write', 'repo.patch', 'repo.delete', 'repo.move'].includes(call.name) && targetPath) failedPaths.add(targetPath);
+            if (response.calls.length > 1 && RECOVERABLE_BATCH_ERRORS.has(errCode)) {
+              if (!failure) failure = { code: errCode, message: cause.message };
+              continue;
+            }
+            failure = { code: errCode, message: cause.message };
+            softBatchErrorsOnly = false;
             break;
           }
         }
         if (!this._current(id, epoch, controller.signal)) break;
         if (writes) this.store.updateTask(id, current => { current.verification = null; return current; }, 'workspace.changed');
-        if (failure) {
-          const softToolRecovery = [
-            'BROWSER_EVAL_ERROR', 'BROWSER_ELEMENT_NOT_FOUND', 'BROWSER_ELEMENT_DISABLED',
-            'BROWSER_NAV_FAILED', 'BROWSER_TIMEOUT', 'BROWSER_NOT_OPEN', 'BROWSER_TARGET_REQUIRED',
-            'BROWSER_URL_DENIED', 'WEB_FETCH_ERROR', 'WEB_SEARCH_ERROR'
-          ].includes(failure.code);
-          if (!softToolRecovery) {
-            await this._recover(id, epoch, { ...failure, fromTool: true });
-          }
+        const softToolRecovery = Boolean(failure) && ([
+          'BROWSER_EVAL_ERROR', 'BROWSER_ELEMENT_NOT_FOUND', 'BROWSER_ELEMENT_DISABLED',
+          'BROWSER_NAV_FAILED', 'BROWSER_TIMEOUT', 'BROWSER_NOT_OPEN', 'BROWSER_TARGET_REQUIRED',
+          'BROWSER_URL_DENIED', 'WEB_FETCH_ERROR', 'WEB_SEARCH_ERROR'
+        ].includes(failure.code) || (writes && softBatchErrorsOnly && RECOVERABLE_BATCH_ERRORS.has(failure.code)));
+        if (failure && !softToolRecovery) {
+          await this._recover(id, epoch, { ...failure, fromTool: true });
         }
         else if (deniedInTurn) continue;
         else if (this.getTask(id).pendingMessages?.length) continue;
@@ -1877,6 +1955,42 @@ export class Runtime {
                 failingChecks: ws.latestFailingChecks?.length || 0,
                 source: 'controller',
               });
+            }
+          }
+          // Proactive Overseer mid-run trajectory coaching every 6 turns on long non-fixture runs
+          if (!stalled.fixtureId && stalled.calls >= 6 && stalled.calls % 6 === 0 && (stalled.routing?.lastOverseerCoachCall || 0) < stalled.calls) {
+            const overseer = this._resolveOverseer();
+            if (overseer && overseer.settings.autoCoachLongRuns && overseer.provider.id !== stalled.providerId) {
+              const ev = this._overseerEvidence(id, stalled);
+              const coach = await coachTrajectory({
+                provider: overseer.provider,
+                backupProviders: overseer.backupProviders,
+                task: stalled,
+                candidates: this._overseerCandidateBriefs(stalled),
+                failingChecks: (stalled.routing?.probeProgress?.failing || []).slice(0, 6),
+                recentToolTrace: ev.recentToolTrace,
+                modifiedFiles: ev.modifiedFiles,
+                customInstructions: overseer.settings.customInstructions,
+                signal: controller.signal,
+                ...this.outboundOptions()
+              });
+              if (this._current(id, epoch, controller.signal) && coach.ok) {
+                this.store.updateTask(id, current => {
+                  current.routing ||= {};
+                  current.routing.lastOverseerCoachCall = stalled.calls;
+                  if (coach.guidance && coach.status !== 'on_track') current.routing.overseerGuidance = coach.guidance;
+                  return current;
+                }, 'overseer.coached', {
+                  overseerId: coach.providerId || overseer.provider.id,
+                  ...(coach.failoverFrom ? { failoverFrom: coach.failoverFrom } : {}),
+                  status: coach.status,
+                  diagnosis: coach.diagnosis,
+                  reason: coach.reason,
+                  nextActions: coach.nextActions,
+                  hasGuidance: Boolean(coach.guidance && coach.status !== 'on_track'),
+                  calls: stalled.calls
+                });
+              }
             }
           }
           if (snapshot.snapshotHash !== after.snapshotHash) {
@@ -2134,6 +2248,7 @@ export class Runtime {
             backupProviders: overseer.backupProviders,
             objective: task.routing?.originalObjective || task.objective,
             replyText: response.text,
+            customInstructions: overseer.settings.customInstructions,
             ...this.outboundOptions(),
             signal: controller.signal
           });
@@ -2144,12 +2259,13 @@ export class Runtime {
               ...(verdict.failoverFrom ? { failoverFrom: verdict.failoverFrom } : {}),
               providerId: task.providerId,
               classification: verdict.classification,
+              confidence: verdict.confidence,
               isRefusal: verdict.isRefusal,
               reason: verdict.reason
             });
             if (verdict.isRefusal) {
               if (task.policy?.learning !== false && !this.getPrivacy().settings.ephemeralSession) {
-                const sig = extractDeclineSignature(response.text);
+                const sig = verdict.extractedSignature || extractDeclineSignature(response.text);
                 if (sig) this.store.recordRefusalPattern({ signature: sig, source: 'overseer_judge', providerId: task.providerId });
               }
               await this._recover(id, epoch, {
@@ -2160,6 +2276,51 @@ export class Runtime {
                 retryable: true
               });
               continue;
+            }
+          }
+        }
+      }
+      // Pre-finish Quality & Completeness Audit (when Quality Guard or Full Co-Pilot posture is active)
+      if (!task.fixtureId && !task.planMode && task.crewMember?.role !== 'challenger' && response.finish === 'done'
+        && typeof response.text === 'string' && response.text.trim()
+        && task.calls < (task.policy?.maxCalls || 0)
+        && (task.routing?.overseerAuditedContract || 0) !== (task.contractVersion || 1)) {
+        const overseer = this._resolveOverseer();
+        if (overseer && overseer.settings.autoAuditCompletion && overseer.provider.id !== task.providerId) {
+          const ev = this._overseerEvidence(id, task);
+          const hasSubstance = ev.modifiedFiles.length > 0 || ev.recentToolTrace.length > 0 || String(task.objective || '').length >= 80;
+          if (hasSubstance) {
+            const audit = await auditCompletion({
+              provider: overseer.provider,
+              backupProviders: overseer.backupProviders,
+              task,
+              replyText: response.text,
+              modifiedFiles: ev.modifiedFiles,
+              recentToolTrace: ev.recentToolTrace,
+              customInstructions: overseer.settings.customInstructions,
+              ...this.outboundOptions(),
+              signal: controller.signal
+            });
+            if (!this._current(id, epoch, controller.signal)) break;
+            if (audit.ok) {
+              this.store.updateTask(id, current => {
+                current.routing ||= {};
+                current.routing.overseerAuditedContract = current.contractVersion || 1;
+                if (audit.verdict === 'needs_work' && audit.guidance) {
+                  current.routing.overseerGuidance = audit.guidance;
+                }
+                return current;
+              }, 'overseer.audited', {
+                overseerId: audit.providerId || overseer.provider.id,
+                ...(audit.failoverFrom ? { failoverFrom: audit.failoverFrom } : {}),
+                verdict: audit.verdict,
+                completenessScore: audit.completenessScore,
+                gaps: audit.gaps,
+                reason: audit.reason
+              });
+              if (audit.verdict === 'needs_work' && audit.guidance) {
+                continue;
+              }
             }
           }
         }
@@ -2673,14 +2834,24 @@ export class Runtime {
         const consultKey = `${fingerprint}:${diagnosis.category}`;
         if (overseer && overseer.settings.autoUnblockStuck && !task.routing?.overseerConsulted?.[consultKey]) {
           const previewRankings = rankCandidates({ task, providers: this._privacyFilteredProviders(), learning: task.policy.learning !== false ? this.getLearning() : null, diagnosis, requiredTools: this._requiredTools(task), fingerprint });
-          const failingChecks = (task.routing?.probeProgress?.failing || incident.checks || []).slice(0, 6);
+          const enrichedCandidates = previewRankings.map(c => {
+            const p = this.providers.get(c.id);
+            const obs = task.policy.learning !== false ? providerObservedStats(this.getLearning(), c.id, providerIdentity(c.id, p || {})) : null;
+            return { ...c, label: p?.label || c.id, tier: p?.tier || 'standard', ...(obs ? { observed: obs } : {}) };
+          });
+          const failingChecks = (task.routing?.probeProgress?.failing || incident.checks || []).slice(0, 8);
+          const ev = this._overseerEvidence(id, task);
           const advice = await adviseUnblock({
             provider: overseer.provider,
             backupProviders: overseer.backupProviders,
             task,
             incident,
-            candidates: previewRankings,
+            candidates: enrichedCandidates,
             failingChecks,
+            recentToolTrace: ev.recentToolTrace,
+            modifiedFiles: ev.modifiedFiles,
+            priorStrategies: ev.priorStrategies,
+            customInstructions: overseer.settings.customInstructions,
             signal,
             ...this.outboundOptions()
           });
@@ -2695,14 +2866,18 @@ export class Runtime {
               if (!current.routing.originalObjective) current.routing.originalObjective = current.objective;
               if (advice.reframedObjective) current.objective = advice.reframedObjective;
               if (advice.guidance) current.routing.overseerGuidance = advice.guidance;
+              if (advice.recommendedEffort) current.effort = normalizeEffort(advice.recommendedEffort);
               current.routing.lastRecoveryStrategy = { modelFamily: inferModelFamily(current.providerId), strategy: advice.strategy };
               return current;
             }, 'overseer.advised', {
               overseerId: advice.providerId || overseer.provider.id,
               ...(advice.failoverFrom ? { failoverFrom: advice.failoverFrom } : {}),
               strategy: advice.strategy,
+              rootCause: advice.rootCause,
               reason: advice.reason,
+              nextActions: advice.nextActions,
               recommendedProviderId: advice.recommendedProviderId,
+              recommendedEffort: advice.recommendedEffort,
               hasReframe: Boolean(advice.reframedObjective),
               hasGuidance: Boolean(advice.guidance)
             });
@@ -3000,6 +3175,7 @@ export class Runtime {
     const learning = this.getLearning();
     return {
       settings,
+      postures: OVERSEER_POSTURES,
       ready: Boolean(settings.enabled && ((selected && selected.allowedByPolicy) || (backup && backup.allowedByPolicy))),
       selectedProvider: selected,
       backupProvider: backup,
@@ -3322,6 +3498,83 @@ export class Runtime {
   deleteRefusalPattern(signature = null) {
     const learning = this.store.deleteRefusalPattern(signature);
     return { refusalPatterns: learning.refusalPatterns || [] };
+  }
+  _overseerEvidence(id, task) {
+    const events = this.getRecentEvents(id, 80);
+    const toolTrace = [];
+    const modifiedSet = new Set();
+    for (const ev of events) {
+      if (ev.type === 'tool.completed') {
+        const res = ev.data?.result || {};
+        const ok = ev.data?.status !== 'failed' && res.ok !== false;
+        const p = res.path || res.to || null;
+        if (ok && p && ['repo.write', 'repo.patch', 'repo.move', 'repo.delete'].includes(ev.data?.name)) {
+          modifiedSet.add(p);
+        }
+        toolTrace.push({
+          tool: ev.data?.name || 'tool',
+          ok,
+          ...(p ? { path: p } : {}),
+          ...(res.error?.code ? { errorCode: res.error.code, error: String(res.error.message || '').slice(0, 140) } : {})
+        });
+      }
+    }
+    const priorStrategies = [...new Set((task?.routing?.attempts || []).map(a => a?.strategy).filter(Boolean))];
+    return {
+      recentToolTrace: toolTrace.slice(-10),
+      modifiedFiles: [...modifiedSet].slice(0, 20),
+      priorStrategies
+    };
+  }
+  _overseerCandidateBriefs(task) {
+    const ids = Array.isArray(task?.providers) ? task.providers : [];
+    return ids.map(pid => {
+      const p = this.providers.get(pid);
+      return { id: pid, label: p?.label || pid, excluded: !p || p.available === false || p.closed ? 'unavailable' : null };
+    });
+  }
+  async consultOverseer(id, { question = '' } = {}) {
+    if (this.closed) throw fault('RUNTIME_CLOSED', 'Runtime is closed.');
+    const task = this.getTask(id);
+    const overseer = this._resolveOverseer();
+    if (!overseer) {
+      throw Object.assign(new Error('Overseer is not enabled or no privacy-allowed Overseer model is available.'), { code: 'OVERSEER_UNAVAILABLE', status: 400 });
+    }
+    const ev = this._overseerEvidence(id, task);
+    const advice = await coachTrajectory({
+      provider: overseer.provider,
+      backupProviders: overseer.backupProviders,
+      task,
+      question: String(question || '').slice(0, 600),
+      candidates: this._overseerCandidateBriefs(task),
+      failingChecks: (task.routing?.probeProgress?.failing || task.verification?.checks?.filter(c => c.status !== 'pass') || []).slice(0, 8),
+      recentToolTrace: ev.recentToolTrace,
+      modifiedFiles: ev.modifiedFiles,
+      customInstructions: overseer.settings.customInstructions,
+      ...this.outboundOptions()
+    });
+    if (!advice.ok) {
+      throw Object.assign(new Error(advice.error || 'Overseer consultation failed.'), { code: advice.blocked ? 'PRIVACY_BLOCKED' : 'OVERSEER_FAILED', status: advice.blocked ? 403 : 502 });
+    }
+    const updated = this.store.updateTask(id, current => {
+      current.routing ||= {};
+      if (advice.guidance) current.routing.overseerGuidance = advice.guidance;
+      if (advice.recommendedEffort) current.effort = normalizeEffort(advice.recommendedEffort);
+      current.routing.lastOverseerCoachCall = current.calls || 0;
+      return current;
+    }, 'overseer.coached', {
+      overseerId: advice.providerId || overseer.provider.id,
+      ...(advice.failoverFrom ? { failoverFrom: advice.failoverFrom } : {}),
+      manual: true,
+      status: advice.status,
+      diagnosis: advice.diagnosis,
+      reason: advice.reason,
+      nextActions: advice.nextActions,
+      recommendedProviderId: advice.recommendedProviderId,
+      recommendedEffort: advice.recommendedEffort,
+      hasGuidance: Boolean(advice.guidance)
+    });
+    return { ok: true, advice, task: updated };
   }
   updateOverseer(patch = {}) {
     const current = this.getOverseer().settings;

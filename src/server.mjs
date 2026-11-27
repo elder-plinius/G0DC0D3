@@ -847,7 +847,7 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
           return send(res, 200, runtime.broker.browser.getStatus(taskId));
         }
       }
-      const match=url.pathname.match(/^\/api\/tasks\/([^/]+)(?:\/(run|pause|resume|cancel|accept|report-refusal|policy|providers|answer-race|message|export|patch|execution|checks|persona|effort|prompt|apply-preview|apply-source|inspect-apply|undo-apply|source-backup|hunk|generation|rewind|plan-mode|compact|checkpoints|permissions|approval|fork|transcript|commit|title))?$/);
+      const match=url.pathname.match(/^\/api\/tasks\/([^/]+)(?:\/(run|pause|resume|cancel|accept|report-refusal|overseer-consult|policy|providers|answer-race|message|export|patch|execution|checks|persona|effort|prompt|apply-preview|apply-source|inspect-apply|undo-apply|source-backup|hunk|generation|rewind|plan-mode|compact|checkpoints|permissions|approval|fork|transcript|commit|title))?$/);
       if(match) {
         const [,id,action]=match;
         if(mutation&&runtime.getTask(id).crewMember)throw Object.assign(new Error('Control crew workers through their parent conversation.'),{code:'CREW_MEMBER'});
@@ -1046,6 +1046,11 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
           const task=await runtime.reportRefusal(id,body);
           if(task.status==='queued')run(id);
           return send(res,200,{task:publicTask(runtime.getTask(id),runtime)});
+        }
+        if(req.method==='POST'&&action==='overseer-consult') {
+          const body=await readBody(req);
+          const result=await runtime.consultOverseer(id,{question:body.question||''});
+          return send(res,200,{ok:true,advice:result.advice,task:publicTask(result.task,runtime)});
         }
         if(req.method==='POST'&&['run','pause','resume','cancel','accept'].includes(action)) {
           await readBody(req);

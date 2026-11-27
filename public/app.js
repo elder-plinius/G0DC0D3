@@ -27,6 +27,7 @@ let streamSource = null;
 let streamTaskId = null;
 let streamText = '';
 let streamThinking = '';
+let streamThinkingExpanded = false;
 let streamToolName = '';
 let routeBusy = false;
 let detailSignature = '';
@@ -1768,12 +1769,19 @@ async function executeSlashCommand(raw) {
     return { handled: true };
   }
   if (cmd === '/conclave' || cmd === '/swarm') {
-    clearInput();
-    if (arg && /^(demo|preview)$/i.test(arg.trim())) window.G0DConclave?.open({ demo: true });
-    else if (arg && /^(cards|timeline|stage|roster)$/i.test(arg.trim())) window.G0DConclave?.open({ lens: arg.trim().toLowerCase() });
-    else if (arg && /^(builder|forge)$/i.test(arg.trim())) { window.G0DConclave?.open({ lens: 'roster' }); window.G0DConclave?.openBuilder(null); }
-    else window.G0DConclave?.toggle();
-    return { handled: true };
+    const sub = arg.trim();
+    if (!sub) {
+      clearInput();
+      window.G0DConclave?.toggle();
+      return { handled: true };
+    }
+    if (/^(demo|preview)$/i.test(sub)) { clearInput(); window.G0DConclave?.open({ demo: true }); return { handled: true }; }
+    if (/^(cards|timeline|stage|roster)$/i.test(sub)) { clearInput(); window.G0DConclave?.open({ lens: sub.toLowerCase() }); return { handled: true }; }
+    if (/^(builder|forge)$/i.test(sub)) { clearInput(); window.G0DConclave?.open({ lens: 'roster' }); window.G0DConclave?.openBuilder(null); return { handled: true }; }
+    // Direct 1-command launch: `/conclave <any long-form mission>` auto-picks specialists and runs immediately!
+    window.G0DConclave?.open({ lens: 'stage' });
+    const built = window.G0DConclave?.buildMissionPrompt ? window.G0DConclave.buildMissionPrompt(sub) : sub;
+    return { handled: false, overrideMessage: built };
   }
   if (cmd === '/benchmark') {
     clearInput();
@@ -1809,6 +1817,45 @@ function closeAllRightDocks({ except = null } = {}) {
   }
 }
 window.closeAllRightDocks = closeAllRightDocks;
+window.submitConclaveMission = function submitConclaveMission(promptText) {
+  const input = $('#composer-input');
+  const form = $('#composer-form');
+  const sendBtn = $('#composer-send');
+  if (!input || !promptText) return false;
+  if ($('#connection') && !$('#connection').classList.contains('online')) {
+    toast('Server is offline — reconnect before launching a Conclave.');
+    return false;
+  }
+  const key = selectedId || 'welcome';
+  if (!selectedId) {
+    const avail = typeof newConversationProviders === 'function' ? newConversationProviders() : [];
+    if (!avail.length) {
+      toast('Connect at least one AI provider in Settings → Models before launching a Conclave.');
+      return false;
+    }
+  } else {
+    const task = selectedData?.task;
+    if (!task || task.id !== selectedId || task.status === 'cancelled' || task.draining || task.sourceBusy || sourceActionBusy || isCrewBusy(task) || messageBusyTasks.has(key) || actionBusy) {
+      toast('Current task is busy or unavailable — start a new chat or wait a moment.');
+      return false;
+    }
+  }
+  const prevValue = input.value;
+  input.value = String(promptText);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  if (sendBtn?.disabled) {
+    input.value = prevValue;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    toast('Composer is currently unavailable to send — check your connected model or task state.');
+    return false;
+  }
+  if (form?.requestSubmit) {
+    form.requestSubmit();
+    return true;
+  }
+  input.focus();
+  return false;
+};
 
 function dismissDrawers() {
   let changed = false;
@@ -1909,6 +1956,7 @@ function newConversation() {
   chooseTab('timeline');
   renderTasks(true);
   renderEmpty();
+  window.G0DConclave?.syncTask(null);
   loadSkills(null);
   if (narrowLayout.matches) setSidebar(false);
   $('#composer-input')?.focus();
@@ -2777,7 +2825,15 @@ function renderOverseerEdge() {
   ].join('');
   const patternCount = (data.refusalPatterns || []).length;
   const stratCount = (data.strategyStats || []).length;
-  body.innerHTML = `
+  const postures = Array.isArray(data.postures) && data.postures.length ? data.postures : [
+    { id: 'reactive', label: 'Unblock Only', description: 'Zero idle cost — steps in on soft refusals, loops & check plateaus.' },
+    { id: 'active', label: 'Quality Guard', description: 'Adds pre-finish stub & completeness audit before workers finish.' },
+    { id: 'proactive', label: 'Full Co-Pilot', description: 'Adds mid-run trajectory coaching on long 6+ turn runs.' },
+  ];
+  const curPosture = s.posture || (s.autoCoachLongRuns ? 'proactive' : s.autoAuditCompletion ? 'active' : 'reactive');
+  const curPostureDesc = postures.find(p => p.id === curPosture)?.description || '';
+  const canConsult = Boolean(data.ready && selectedId && !overseerBusy);
+  const nextHtml = `
     <div class="overseer-pop-row">
       <div class="overseer-pop-status">
         <span class="svc-dot ${data.ready ? 'svc-connected' : isEnabled ? 'svc-blocked' : 'svc-muted'}" aria-hidden="true"></span>
@@ -2789,10 +2845,20 @@ function renderOverseerEdge() {
       <label class="overseer-pop-field"><span>Primary Overseer</span><select id="overseer-pop-primary" ${overseerBusy ? 'disabled' : ''}>${primaryOpts}</select></label>
       <label class="overseer-pop-field"><span>Backup Failover</span><select id="overseer-pop-backup" ${overseerBusy || !s.providerId ? 'disabled' : ''}>${backupOpts}</select></label>
     </div>
-    <div class="overseer-pop-checks">
-      <label class="check-setting"><input type="checkbox" id="overseer-pop-judge" ${s.autoJudgeAmbiguous !== false ? 'checked' : ''} ${overseerBusy || !s.providerId ? 'disabled' : ''}> Judge ambiguous refusals</label>
-      <label class="check-setting"><input type="checkbox" id="overseer-pop-unblock" ${s.autoUnblockStuck !== false ? 'checked' : ''} ${overseerBusy || !s.providerId ? 'disabled' : ''}> Unblock loops &amp; plateaus</label>
+    <div class="overseer-posture-wrap">
+      <span class="overseer-posture-label">Supervision Mode</span>
+      <div class="overseer-posture-row" role="group" aria-label="Overseer supervision mode">
+        ${postures.map(p => `<button type="button" class="overseer-posture-btn ${p.id === curPosture ? 'active' : ''}" data-overseer-posture="${escapeHTML(p.id)}" aria-pressed="${p.id === curPosture ? 'true' : 'false'}" ${overseerBusy || !s.providerId ? 'disabled' : ''}>${escapeHTML(p.label)}</button>`).join('')}
+      </div>
+      <p class="field-help overseer-posture-help">${escapeHTML(curPostureDesc)}</p>
     </div>
+    <div class="overseer-pop-checks">
+      <label class="check-setting"><input type="checkbox" id="overseer-pop-judge" ${s.autoJudgeAmbiguous !== false ? 'checked' : ''} ${overseerBusy || !s.providerId ? 'disabled' : ''}> Judge ambiguous soft refusals</label>
+      <label class="check-setting"><input type="checkbox" id="overseer-pop-unblock" ${s.autoUnblockStuck !== false ? 'checked' : ''} ${overseerBusy || !s.providerId ? 'disabled' : ''}> Unblock loops &amp; check plateaus</label>
+      <label class="check-setting"><input type="checkbox" id="overseer-pop-audit" ${s.autoAuditCompletion ? 'checked' : ''} ${overseerBusy || !s.providerId ? 'disabled' : ''}> Pre-finish stub &amp; completeness audit</label>
+      <label class="check-setting"><input type="checkbox" id="overseer-pop-coach" ${s.autoCoachLongRuns ? 'checked' : ''} ${overseerBusy || !s.providerId ? 'disabled' : ''}> Mid-run long-task trajectory coaching</label>
+    </div>
+    ${canConsult ? '<button type="button" class="button button-secondary overseer-consult-btn" data-overseer-consult-now>✦ Consult Overseer on Current Task</button>' : ''}
     <div class="overseer-pop-foot">
       <span class="field-help">${patternCount} learned 0ms ${patternCount === 1 ? 'pattern' : 'patterns'} · ${stratCount} ${stratCount === 1 ? 'bandit' : 'bandits'}</span>
       <div class="overseer-pop-foot-actions">
@@ -2800,6 +2866,15 @@ function renderOverseerEdge() {
         <button type="button" class="button button-quiet" data-overseer-pop-settings>Full settings →</button>
       </div>
     </div>`;
+  if (body.dataset.lastHtml === nextHtml) return;
+  const focusedEl = document.activeElement;
+  if (!overseerBusy && focusedEl && body.contains(focusedEl) && ['SELECT', 'TEXTAREA', 'INPUT'].includes(focusedEl.tagName)) {
+    body.dataset.pendingHtml = nextHtml;
+    return;
+  }
+  delete body.dataset.pendingHtml;
+  body.dataset.lastHtml = nextHtml;
+  body.innerHTML = nextHtml;
 }
 
 function toggleOverseerPopover(force) {
@@ -2857,13 +2932,20 @@ function renderOverseerSection() {
     ? `<div class="overseer-learned"><div class="overseer-patterns-head"><span class="service-group-label">Learned Soft-Refusal Signatures (0ms Local Detector)</span><button type="button" class="button button-quiet svc-action-btn" data-clear-refusal-patterns>Clear all</button></div><div class="strategy-chips">${patternRows.map(p => `<span class="meta-chip pattern-chip" title="${escapeHTML(`Caught ${p.hits || 1}x via ${p.source || 'local'}`)}">“${escapeHTML(p.signature.slice(0, 48))}${p.signature.length > 48 ? '…' : ''}” <button type="button" class="pattern-del-btn" data-delete-refusal-pattern="${escapeHTML(p.signature)}" aria-label="Remove learned refusal signature">×</button></span>`).join('')}</div></div>`
     : '';
   const agencyTip = !hasHighAgency
-    ? '<p class="field-help">Tip: Connect a high-agency/uncensored model (Nous Portal Hermes-4-405B, Venice Uncensored, neon-4, or local Ollama) so the Overseer itself never balks when unblocking tough tasks.</p>'
+    ? '<p class="field-help">Tip: Connect a high-agency/uncensored model (Gemini 4 Neon, Hermes-4-405B, Venice Uncensored, or local Ollama) so the Overseer itself never balks when unblocking tough tasks.</p>'
     : '';
-  container.innerHTML = `
+  const postures = Array.isArray(data.postures) && data.postures.length ? data.postures : [
+    { id: 'reactive', label: 'Unblock Only', description: 'Zero overhead on normal turns — steps in only on soft refusals, doom loops, check plateaus, or Auto permissions.' },
+    { id: 'active', label: 'Quality Guard', description: 'Adds a pre-finish completeness & stub audit before workers finalize code or multi-step deliverables.' },
+    { id: 'proactive', label: 'Full Co-Pilot', description: 'Adds periodic mid-run trajectory coaching on long 6+ turn tasks alongside unblocking and quality audits.' },
+  ];
+  const curPosture = s.posture || (s.autoCoachLongRuns ? 'proactive' : s.autoAuditCompletion ? 'active' : 'reactive');
+  const curPostureDesc = postures.find(p => p.id === curPosture)?.description || '';
+  const nextSectionHtml = `
     <div class="overseer-head">
       <div>
-        <h3>Overseer &amp; Self-Optimization Agent</h3>
-        <p class="field-help">Pin a high-agency/uncensored overseer (e.g. neon-4, Hermes 4 405B, Venice Uncensored, or local Ollama) with an automatic backup if the primary overseer declines or times out. Idle at zero cost during normal turns.</p>
+        <h3>Overseer &amp; Supervisory Meta-Controller</h3>
+        <p class="field-help">Read-only architectural supervisor with automatic backup failover. Diagnoses soft refusals, unblocks loops &amp; check plateaus using live tool traces, audits completeness before finishing, and coaches long multi-turn runs.</p>
       </div>
       <div class="overseer-head-actions">${quickEnableBtn}${statusPill}</div>
     </div>
@@ -2879,12 +2961,37 @@ function renderOverseerSection() {
         </label>
       </div>
       ${agencyTip}
+      <div class="overseer-posture-wrap">
+        <span class="overseer-posture-label">Supervision Mode</span>
+        <div class="overseer-posture-row" role="group" aria-label="Overseer supervision mode">
+          ${postures.map(p => `<button type="button" class="overseer-posture-btn ${p.id === curPosture ? 'active' : ''}" data-overseer-posture="${escapeHTML(p.id)}" aria-pressed="${p.id === curPosture ? 'true' : 'false'}" ${overseerBusy || !s.providerId ? 'disabled' : ''}>${escapeHTML(p.label)}</button>`).join('')}
+        </div>
+        <p class="field-help overseer-posture-help">${escapeHTML(curPostureDesc)}</p>
+      </div>
       <div class="overseer-toggles">
-        <label class="check-setting"><input type="checkbox" id="overseer-judge-toggle" ${s.autoJudgeAmbiguous !== false ? 'checked' : ''} ${overseerBusy || !s.providerId ? 'disabled' : ''}> Judge ambiguous soft refusals</label>
-        <label class="check-setting"><input type="checkbox" id="overseer-unblock-toggle" ${s.autoUnblockStuck !== false ? 'checked' : ''} ${overseerBusy || !s.providerId ? 'disabled' : ''}> Unblock refusals, doom loops &amp; plateaus</label>
+        <label class="check-setting"><input type="checkbox" id="overseer-judge-toggle" ${s.autoJudgeAmbiguous !== false ? 'checked' : ''} ${overseerBusy || !s.providerId ? 'disabled' : ''}> Judge ambiguous soft refusals (+ learn 0ms signatures)</label>
+        <label class="check-setting"><input type="checkbox" id="overseer-unblock-toggle" ${s.autoUnblockStuck !== false ? 'checked' : ''} ${overseerBusy || !s.providerId ? 'disabled' : ''}> Unblock refusals, doom loops &amp; check plateaus with root-cause plans</label>
+        <label class="check-setting"><input type="checkbox" id="overseer-audit-toggle" ${s.autoAuditCompletion ? 'checked' : ''} ${overseerBusy || !s.providerId ? 'disabled' : ''}> Pre-finish completeness &amp; stub quality audit (blocks half-done work)</label>
+        <label class="check-setting"><input type="checkbox" id="overseer-coach-toggle" ${s.autoCoachLongRuns ? 'checked' : ''} ${overseerBusy || !s.providerId ? 'disabled' : ''}> Mid-run trajectory coaching every 6 turns on long tasks</label>
+      </div>
+      <div class="overseer-directives-field">
+        <label for="overseer-custom-instructions">Custom Overseer Directives <span class="field-help">(optional — injected into every Overseer audit, unblock &amp; coaching prompt)</span></label>
+        <textarea id="overseer-custom-instructions" rows="2" maxlength="1200" placeholder="e.g. Reject TODO stubs or mock implementations, prefer minimal surgical patches, and require passing unit tests before finishing." ${overseerBusy ? 'disabled' : ''}>${escapeHTML(s.customInstructions || '')}</textarea>
+        <div class="overseer-directives-actions">
+          <button type="button" class="button button-secondary svc-action-btn" data-save-overseer-directives ${overseerBusy ? 'disabled' : ''}>Save directives</button>
+        </div>
       </div>
     </div>
     ${learnedHtml}${patternsHtml}`;
+  if (container.dataset.lastHtml === nextSectionHtml) return;
+  const focusedEl = document.activeElement;
+  if (!overseerBusy && focusedEl && container.contains(focusedEl) && ['SELECT', 'TEXTAREA', 'INPUT'].includes(focusedEl.tagName)) {
+    container.dataset.pendingHtml = nextSectionHtml;
+    return;
+  }
+  delete container.dataset.pendingHtml;
+  container.dataset.lastHtml = nextSectionHtml;
+  container.innerHTML = nextSectionHtml;
 }
 
 let ultraRouterData = null;
@@ -3661,8 +3768,10 @@ function eventDescription(event) {
     'recovery.attempt': ['Recovery attempt', '↻', 'warning', data.strategy ?? data.reason ?? ''],
     'providers.updated': ['Route saved', '⇄', '', 'Next request · ' + (providerById(data.providerId)?.label || data.providerId || '')],
     'model.switched': [data.reason === 'VENICE_SERVICE_OUTAGE' ? 'Venice outage · model switched' : data.reason === 'RACE_GODMODE_RECOVERY' ? 'G0DM0D3 recovered Ultra-Plinian' : 'Model switched', '⇄', '', `${String(data.from || '').split(/,\s*/).filter(Boolean).map(pid => providerById(pid)?.label || pid).join(' + ') || 'Previous model'} → ${providerById(data.to)?.label || data.to || data.providerId || 'Next model'}`],
-    'overseer.advised': ['Overseer unblocked', '✦', '', `${providerById(data.overseerId)?.label || data.overseerId || 'Overseer'} (${data.strategy || 'advice'}): ${data.reason || ''}`],
+    'overseer.advised': ['Overseer unblocked', '✦', '', `${providerById(data.overseerId)?.label || data.overseerId || 'Overseer'} (${data.strategy || 'advice'}): ${data.rootCause || data.reason || ''}`],
     'overseer.judged': ['Overseer classified reply', '✦', '', `${data.classification || 'checked'} — ${data.reason || ''}`],
+    'overseer.audited': [data.verdict === 'needs_work' ? 'Overseer caught gaps before finish' : 'Overseer verified completion', '✦', data.verdict === 'needs_work' ? 'warning' : 'success', `${Number.isFinite(data.completenessScore) ? `${data.completenessScore}% · ` : ''}${data.reason || ''}`],
+    'overseer.coached': [data.manual ? 'Overseer consulted' : 'Overseer trajectory check', '✦', data.status === 'stuck' ? 'warning' : 'info', `${data.status || 'checked'} — ${data.diagnosis || data.reason || ''}`],
     'owner.refusal_reported': ['Refusal flagged by you', '↻', '', data.reason || 'Retrying with recovery / fallback.'],
     'routing.reframe_retry': ['G0DM0D3 reframed retry', '↻', '', `${providerById(data.providerId)?.label || data.providerId || 'Model'} (pass ${data.pass || 1} · ${data.level || 'reframe'})`],
     'evaluation.completed': ['Evaluation recorded', '◎', (data.status ?? data.result?.status) === 'pass' ? 'success' : 'warning', data.status ? humanize(data.status) : data.result?.status ? humanize(data.result.status) : 'Inspect the check results for this snapshot.'],
@@ -3858,7 +3967,7 @@ function renderTimeline(events, total, task) {
       const sa = event.data;
       const key = `subagent-${event.id ?? event.seq}`;
       messages.push(`<details class="subagent-card" data-disclosure="${escapeHTML(key)}" ${openDetails.has(key) ? 'open' : ''}><summary class="subagent-card-summary"><span class="subagent-badge">${escapeHTML(sa.role || 'explore')}</span><span class="subagent-provider">${escapeHTML(providerById(sa.providerId)?.label || sa.providerId || 'model')}</span><span class="subagent-meta">${escapeHTML(`${sa.calls || 1} call${sa.calls === 1 ? '' : 's'} · ${duration(sa.durationMs || 0)}`)}</span></summary><div class="subagent-card-body">${formatMessageBody(sa.summary, true)}</div></details>`);
-    } else if (['model.switched', 'providers.updated', 'routing.retry_scheduled', 'routing.strategy_changed', 'routing.profile_changed', 'routing.reframe_retry', 'overseer.advised', 'overseer.judged', 'owner.refusal_reported', 'permission.auto_approved', 'hook.blocked'].includes(event.type)) {
+    } else if (['model.switched', 'providers.updated', 'routing.retry_scheduled', 'routing.strategy_changed', 'routing.profile_changed', 'routing.reframe_retry', 'overseer.advised', 'overseer.judged', 'overseer.audited', 'overseer.coached', 'owner.refusal_reported', 'permission.auto_approved', 'hook.blocked'].includes(event.type)) {
       flush();
       const description = eventDescription(event);
       messages.push(`<div class="recovery-event"><span aria-hidden="true">↻</span><span><strong>${escapeHTML(description[0])}</strong> ${escapeHTML(description[3])}</span></div>`);
@@ -5877,12 +5986,20 @@ function renderStreamTextMarkup(text) {
   return `<div class="message-body"><p class="stream-text">${escapeHTML(text)}<span class="stream-cursor" aria-hidden="true"></span></p></div>`;
 }
 
+function formatLiveThinkingMeta(thinkingText, isActivelyThinking, isOpen) {
+  const len = String(thinkingText || '').length;
+  const size = len >= 1000 ? `${(len / 1000).toFixed(1)}k chars` : `${len} chars`;
+  if (isActivelyThinking) return isOpen ? `${size} · live` : `${size} · click to view`;
+  return size;
+}
+
 function buildStreamPreviewHtml(openDetails = null) {
   if (!streamText && !streamThinking) return '';
   const liveKey = `thinking-live-${streamTaskId || 'active'}`;
-  const isOpen = openDetails ? (openDetails.has(liveKey) || !$('.thinking-block.thinking-live')) : true;
+  const isOpen = openDetails ? openDetails.has(liveKey) : streamThinkingExpanded;
+  const isActivelyThinking = Boolean(streamThinking && !streamText);
   const thinkingPart = streamThinking
-    ? `<details class="thinking-block thinking-live" data-disclosure="${escapeHTML(liveKey)}" ${isOpen ? 'open' : ''}><summary class="thinking-summary"><span class="thinking-icon" aria-hidden="true">◇</span><span>Thinking</span><span class="thinking-meta">live</span></summary><pre class="thinking-body stream-thinking-body" tabindex="0" role="region" aria-label="Live model reasoning">${escapeHTML(streamThinking)}</pre></details>`
+    ? `<details class="thinking-block thinking-live${isActivelyThinking ? ' is-streaming' : ''}" data-disclosure="${escapeHTML(liveKey)}" ${isOpen ? 'open' : ''}><summary class="thinking-summary"><span class="thinking-icon" aria-hidden="true">◇</span><span class="thinking-label">${isActivelyThinking ? 'Reasoning' : 'Thought'}</span>${isActivelyThinking ? '<span class="thinking-dots" aria-hidden="true"><span></span><span></span><span></span></span>' : ''}<span class="thinking-meta">${escapeHTML(formatLiveThinkingMeta(streamThinking, isActivelyThinking, isOpen))}</span></summary><pre class="thinking-body stream-thinking-body" tabindex="0" role="region" aria-label="Live model reasoning">${escapeHTML(streamThinking)}</pre></details>`
     : '';
   const textPart = streamText ? renderStreamTextMarkup(streamText) : '';
   return `<div class="stream-preview"><div class="message message-assistant"><div class="message-avatar" aria-hidden="true"></div><div class="message-main">${thinkingPart}${textPart}</div></div></div>`;
@@ -5901,12 +6018,25 @@ function updateLiveStreamSlot() {
     || (wantsCodeCard !== Boolean(existingCode));
   if (needsStructure) {
     const liveDetails = $('.thinking-block.thinking-live', slot);
-    const keepOpen = liveDetails ? liveDetails.open : true;
+    const keepOpen = liveDetails ? liveDetails.open : streamThinkingExpanded;
+    streamThinkingExpanded = keepOpen;
     slot.innerHTML = buildStreamPreviewHtml();
     const nextDetails = $('.thinking-block.thinking-live', slot);
     if (nextDetails) nextDetails.open = keepOpen;
   } else {
-    if (existingThinking) existingThinking.textContent = streamThinking;
+    if (existingThinking) {
+      const liveDetails = $('.thinking-block.thinking-live', slot);
+      const isActivelyThinking = Boolean(streamThinking && !streamText);
+      const isOpen = Boolean(liveDetails?.open);
+      const nearInnerThink = !isOpen || (existingThinking.scrollHeight - existingThinking.scrollTop - existingThinking.clientHeight < 60);
+      existingThinking.textContent = streamThinking;
+      if (isOpen && nearInnerThink) existingThinking.scrollTop = existingThinking.scrollHeight;
+      if (liveDetails) {
+        liveDetails.classList.toggle('is-streaming', isActivelyThinking);
+        const metaEl = $('.thinking-meta', liveDetails);
+        if (metaEl) metaEl.textContent = formatLiveThinkingMeta(streamThinking, isActivelyThinking, isOpen);
+      }
+    }
     if (existingCode) {
       const fenceMatch = /```([a-zA-Z0-9_.-]*)\r?\n/.exec(streamText);
       const codeBody = fenceMatch ? streamText.slice(fenceMatch.index + fenceMatch[0].length).replace(/\r?\n```\s*$/, '') : streamText;
@@ -5949,6 +6079,7 @@ function manageStream(task) {
     streamTaskId = task.id;
     streamText = '';
     streamThinking = '';
+    streamThinkingExpanded = false;
     try {
       const source = new EventSource(`/api/tasks/${encodeURIComponent(task.id)}/stream`);
       streamSource = source;
@@ -5959,6 +6090,7 @@ function manageStream(task) {
           if (delta.type === 'turn_start') {
             streamText = '';
             streamThinking = '';
+            streamThinkingExpanded = false;
             streamToolName = '';
             updateLiveStreamSlot();
           } else if (delta.type === 'thinking' && delta.text) {
@@ -6043,6 +6175,7 @@ function disconnectStream() {
   streamTaskId = null;
   streamText = '';
   streamThinking = '';
+  streamThinkingExpanded = false;
   streamToolName = '';
   const slot = $('#stream-slot');
   if (slot) slot.innerHTML = '';
@@ -7617,9 +7750,24 @@ $('#overseer-section')?.addEventListener('change', event => {
   }
   if (event.target?.id === 'overseer-unblock-toggle') {
     updateOverseerSettings({ autoUnblockStuck: event.target.checked });
+    return;
+  }
+  if (event.target?.id === 'overseer-audit-toggle') {
+    updateOverseerSettings({ autoAuditCompletion: event.target.checked });
+    return;
+  }
+  if (event.target?.id === 'overseer-coach-toggle') {
+    updateOverseerSettings({ autoCoachLongRuns: event.target.checked });
   }
 });
 $('#overseer-section')?.addEventListener('click', event => {
+  const postureBtn = event.target.closest('[data-overseer-posture]');
+  if (postureBtn) { updateOverseerSettings({ posture: postureBtn.dataset.overseerPosture }); return; }
+  if (event.target.closest('[data-save-overseer-directives]')) {
+    const val = $('#overseer-custom-instructions')?.value || '';
+    updateOverseerSettings({ customInstructions: val });
+    return;
+  }
   const enableRec = event.target.closest('[data-enable-recommended-overseer]');
   if (enableRec) { updateOverseerSettings({ providerId: enableRec.dataset.enableRecommendedOverseer, enabled: true }); return; }
   if (event.target.closest('[data-clear-refusal-patterns]')) { deleteLearnedPattern(null); return; }
@@ -8341,6 +8489,27 @@ $('#overseer-popover')?.addEventListener('click', async event => {
     else if (val) await updateOverseerSettings({ enabled: true, providerId: val });
     return;
   }
+  const postureBtn = event.target.closest('[data-overseer-posture]');
+  if (postureBtn) {
+    await updateOverseerSettings({ posture: postureBtn.dataset.overseerPosture });
+    return;
+  }
+  if (event.target.closest('[data-overseer-consult-now]')) {
+    if (!selectedId || overseerBusy) return;
+    overseerBusy = true;
+    renderOverseerEdge();
+    try {
+      const res = await api(`/api/tasks/${encodeURIComponent(selectedId)}/overseer-consult`, { method: 'POST', body: JSON.stringify({}) });
+      toast(`✦ Overseer (${res.advice?.status || 'reviewed'}): ${res.advice?.diagnosis || 'Guidance injected for next turn.'}`);
+      await refresh();
+    } catch (error) {
+      toast(error.message || 'Overseer consultation failed.');
+    } finally {
+      overseerBusy = false;
+      renderOverseerEdge();
+    }
+    return;
+  }
   if (event.target.closest('[data-overseer-pop-clear]')) {
     try {
       const res = await api('/api/learning/patterns', { method: 'DELETE', body: '{}' });
@@ -8367,8 +8536,36 @@ $('#overseer-popover')?.addEventListener('change', event => {
     updateOverseerSettings({ autoJudgeAmbiguous: t.checked });
   } else if (t.id === 'overseer-pop-unblock') {
     updateOverseerSettings({ autoUnblockStuck: t.checked });
+  } else if (t.id === 'overseer-pop-audit') {
+    updateOverseerSettings({ autoAuditCompletion: t.checked });
+  } else if (t.id === 'overseer-pop-coach') {
+    updateOverseerSettings({ autoCoachLongRuns: t.checked });
   }
 });
+const flushPendingOverseerHtml = (el) => {
+  if (!el?.dataset?.pendingHtml || overseerBusy) return;
+  const focusedEl = document.activeElement;
+  if (focusedEl && el.contains(focusedEl) && ['SELECT', 'TEXTAREA', 'INPUT'].includes(focusedEl.tagName)) return;
+  const next = el.dataset.pendingHtml;
+  delete el.dataset.pendingHtml;
+  el.dataset.lastHtml = next;
+  el.innerHTML = next;
+};
+$('#overseer-popover')?.addEventListener('focusout', () => setTimeout(() => flushPendingOverseerHtml($('#overseer-popover-body')), 0));
+$('#overseer-section')?.addEventListener('focusout', () => setTimeout(() => flushPendingOverseerHtml($('#overseer-section')), 0));
+document.addEventListener('toggle', event => {
+  const el = event.target;
+  if (el?.matches?.('.thinking-block.thinking-live')) {
+    streamThinkingExpanded = el.open;
+    const isActivelyThinking = Boolean(streamThinking && !streamText);
+    const metaEl = $('.thinking-meta', el);
+    if (metaEl) metaEl.textContent = formatLiveThinkingMeta(streamThinking, isActivelyThinking, el.open);
+    if (el.open) {
+      const body = $('.stream-thinking-body', el);
+      if (body) body.scrollTop = body.scrollHeight;
+    }
+  }
+}, true);
 document.addEventListener('click', event => {
   const pop = $('#overseer-popover');
   if (pop && !pop.classList.contains('hidden') && event.target?.isConnected && !pop.contains(event.target) && !event.target.closest('#overseer-toggle')) {
@@ -8464,7 +8661,7 @@ window.toast = toast;
     { cmd: '/settings', hint: 'Open settings' },
     { cmd: '/forge', hint: 'Forge a task-specific Megaprompt & rubric into the composer (/forge <prompt>)' },
     { cmd: '/browser', hint: 'Open Live Browser mirror (/browser window | headless | close)' },
-    { cmd: '/conclave', hint: 'Open The Conclave live multi-agent council & arena stage' },
+    { cmd: '/conclave', hint: 'Open The Conclave or launch directly (/conclave <mission> | roster | demo | forge)' },
     { cmd: '/swarm', hint: 'Open The Conclave multi-agent swarm visualizer' },
     { cmd: '/benchmark', hint: 'Run offline harness diagnostics' },
     { cmd: '/clear', hint: 'Start a new conversation' },
