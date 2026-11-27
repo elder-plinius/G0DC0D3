@@ -361,53 +361,99 @@ export function buildStarterRoster(candidates = [], harnesses = []) {
   };
   const topSwe = pickBest('swe_coding');
   const topUi = pickBest('frontend_ui');
-  const topSec = pickBest('security_research', true);
-  const connectedHarness = harnesses.find(h => h.status === 'connected' || h.status === 'installed') || harnesses[0];
+  const topLong = pickBest('long_context');
+  const topMath = pickBest('math_reasoning');
+  const topWriting = pickBest('creative_writing');
 
   return [
     {
       slug: 'explore',
-      name: 'Atlas · Code Explorer',
+      name: 'Research Analyst',
       sigil: '◈',
+      engineType: 'api',
+      providerId: topLong?.id || topSwe?.id || null,
+      harnessId: null,
+      primarySpecialty: 'long_context',
+      secondarySpecialty: 'creative_writing',
+      autonomy: 'read_only',
+      effort: 'medium',
+      description: 'Synthesizes large codebases, docs, and multi-source notes into structured briefs with exact citations.',
+      instructions: 'Research thoroughly across files and context, synthesize key findings clearly, and anchor every claim to concrete sources or file:line references.',
+      builtin: true
+    },
+    {
+      slug: 'builder',
+      name: 'Full-Stack Builder',
+      sigil: '⌘',
       engineType: 'api',
       providerId: topSwe?.id || null,
       harnessId: null,
-      primarySpecialty: 'long_context',
-      secondarySpecialty: 'swe_coding',
-      autonomy: 'read_only',
-      effort: 'medium',
-      description: 'Fast read-only codebase cartographer citing exact file:line findings.',
-      instructions: 'Map architecture, trace call paths, and return high-signal file:line briefs.',
+      primarySpecialty: 'swe_coding',
+      secondarySpecialty: 'frontend_ui',
+      autonomy: 'workspace_builder',
+      effort: 'high',
+      description: 'Designs and implements end-to-end features, APIs, and automated tests with clean, surgical diffs.',
+      instructions: 'Inspect existing architecture before editing, implement complete working code without stubs, and verify behavior with real checks.',
+      builtin: true
+    },
+    {
+      slug: 'designer',
+      name: 'UI & Design Engineer',
+      sigil: '✦',
+      engineType: 'api',
+      providerId: topUi?.id || topSwe?.id || null,
+      harnessId: null,
+      primarySpecialty: 'frontend_ui',
+      secondarySpecialty: 'vision_multimodal',
+      autonomy: 'workspace_builder',
+      effort: 'high',
+      description: 'Crafts responsive layouts, interactive components, visualizations, and accessible dark/light interfaces.',
+      instructions: 'Prioritize visual hierarchy, crisp typography, responsive layout ergonomics, accessible contrast, and clean self-contained UI implementations.',
       builtin: true
     },
     {
       slug: 'reviewer',
-      name: 'Athena · Adversarial Reviewer',
-      sigil: '⌘',
+      name: 'Code & QA Reviewer',
+      sigil: '⚡',
       engineType: 'api',
-      providerId: topUi?.id || topSwe?.id || null,
+      providerId: topSwe?.id || topMath?.id || null,
       harnessId: null,
       primarySpecialty: 'swe_coding',
-      secondarySpecialty: 'frontend_ui',
-      autonomy: 'read_only',
-      effort: 'high',
-      description: 'Audits diffs for subtle bugs, race conditions, CSP violations, and regressions.',
-      instructions: 'Inspect diffs critically and report concrete bugs with file:line fixes.',
-      builtin: true
-    },
-    {
-      slug: 'uncensored',
-      name: 'Hermes · Red-Team Oracle',
-      sigil: '⛨',
-      engineType: topSec ? 'api' : 'harness',
-      providerId: topSec?.id || null,
-      harnessId: topSec ? null : (connectedHarness?.id || 'hermes'),
-      primarySpecialty: 'security_research',
       secondarySpecialty: 'math_reasoning',
       autonomy: 'read_only',
       effort: 'high',
-      description: 'High-agency technical & security research specialist with zero hedging.',
-      instructions: 'Provide direct, objective, deeply technical analysis inside authorized local workspaces.',
+      description: 'Audits diffs for subtle logic bugs, edge cases, race conditions, performance bottlenecks, and regressions.',
+      instructions: 'Inspect diffs critically and report concrete bugs, regressions, or missing edge-case coverage with exact file:line fixes.',
+      builtin: true
+    },
+    {
+      slug: 'analyst',
+      name: 'Data & Math Reasoner',
+      sigil: 'λ',
+      engineType: 'api',
+      providerId: topMath?.id || topSwe?.id || null,
+      harnessId: null,
+      primarySpecialty: 'math_reasoning',
+      secondarySpecialty: 'long_context',
+      autonomy: 'read_only',
+      effort: 'high',
+      description: 'Tackles quantitative modeling, algorithmic complexity, statistical analysis, and formal verification.',
+      instructions: 'Verify every calculation, invariant, and assumption step by step; surface edge cases and counterexamples explicitly.',
+      builtin: true
+    },
+    {
+      slug: 'strategist',
+      name: 'Writer & Strategist',
+      sigil: 'Δ',
+      engineType: 'api',
+      providerId: topWriting?.id || topLong?.id || topSwe?.id || null,
+      harnessId: null,
+      primarySpecialty: 'creative_writing',
+      secondarySpecialty: 'long_context',
+      autonomy: 'read_only',
+      effort: 'medium',
+      description: 'Drafts crisp product specs, technical documentation, launch plans, and executive summaries.',
+      instructions: 'Write clear, structured, audience-aware prose and actionable plans with zero fluff or filler.',
       builtin: true
     }
   ];
@@ -417,18 +463,18 @@ export function buildStarterRoster(candidates = [], harnesses = []) {
 export const STARTER_FORMATIONS = Object.freeze([
   {
     id: 'pr-gauntlet',
-    name: 'PR Gauntlet',
+    name: 'PR Review Squad',
     sigil: '⚔',
-    agents: ['explore', 'reviewer', 'uncensored'],
-    goal: 'Audit the current codebase & diffs for bugs, security risks, and missing edge cases before merge.',
+    agents: ['explore', 'reviewer', 'analyst'],
+    goal: 'Audit the current codebase & diffs for bugs, edge cases, and correctness before merge.',
     builtin: true
   },
   {
     id: 'deep-audit',
-    name: 'Deep Architecture Audit',
+    name: 'Research & Build Pod',
     sigil: '✦',
-    agents: ['explore', 'reviewer'],
-    goal: 'Map repository architecture, trace critical call paths, and report structural risks with file:line citations.',
+    agents: ['explore', 'builder', 'designer'],
+    goal: 'Map the workspace, design the solution architecture, and deliver a polished end-to-end implementation.',
     builtin: true
   }
 ]);

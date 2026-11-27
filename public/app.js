@@ -27,6 +27,7 @@ let streamSource = null;
 let streamTaskId = null;
 let streamText = '';
 let streamThinking = '';
+let streamThinkingExpanded = false;
 let streamToolName = '';
 let routeBusy = false;
 let detailSignature = '';
@@ -1768,12 +1769,19 @@ async function executeSlashCommand(raw) {
     return { handled: true };
   }
   if (cmd === '/conclave' || cmd === '/swarm') {
-    clearInput();
-    if (arg && /^(demo|preview)$/i.test(arg.trim())) window.G0DConclave?.open({ demo: true });
-    else if (arg && /^(cards|timeline|stage|roster)$/i.test(arg.trim())) window.G0DConclave?.open({ lens: arg.trim().toLowerCase() });
-    else if (arg && /^(builder|forge)$/i.test(arg.trim())) { window.G0DConclave?.open({ lens: 'roster' }); window.G0DConclave?.openBuilder(null); }
-    else window.G0DConclave?.toggle();
-    return { handled: true };
+    const sub = arg.trim();
+    if (!sub) {
+      clearInput();
+      window.G0DConclave?.toggle();
+      return { handled: true };
+    }
+    if (/^(demo|preview)$/i.test(sub)) { clearInput(); window.G0DConclave?.open({ demo: true }); return { handled: true }; }
+    if (/^(cards|timeline|stage|roster)$/i.test(sub)) { clearInput(); window.G0DConclave?.open({ lens: sub.toLowerCase() }); return { handled: true }; }
+    if (/^(builder|forge)$/i.test(sub)) { clearInput(); window.G0DConclave?.open({ lens: 'roster' }); window.G0DConclave?.openBuilder(null); return { handled: true }; }
+    // Direct 1-command launch: `/conclave <any long-form mission>` auto-picks specialists and runs immediately!
+    window.G0DConclave?.open({ lens: 'stage' });
+    const built = window.G0DConclave?.buildMissionPrompt ? window.G0DConclave.buildMissionPrompt(sub) : sub;
+    return { handled: false, overrideMessage: built };
   }
   if (cmd === '/benchmark') {
     clearInput();
@@ -1809,6 +1817,45 @@ function closeAllRightDocks({ except = null } = {}) {
   }
 }
 window.closeAllRightDocks = closeAllRightDocks;
+window.submitConclaveMission = function submitConclaveMission(promptText) {
+  const input = $('#composer-input');
+  const form = $('#composer-form');
+  const sendBtn = $('#composer-send');
+  if (!input || !promptText) return false;
+  if ($('#connection') && !$('#connection').classList.contains('online')) {
+    toast('Server is offline — reconnect before launching a Conclave.');
+    return false;
+  }
+  const key = selectedId || 'welcome';
+  if (!selectedId) {
+    const avail = typeof newConversationProviders === 'function' ? newConversationProviders() : [];
+    if (!avail.length) {
+      toast('Connect at least one AI provider in Settings → Models before launching a Conclave.');
+      return false;
+    }
+  } else {
+    const task = selectedData?.task;
+    if (!task || task.id !== selectedId || task.status === 'cancelled' || task.draining || task.sourceBusy || sourceActionBusy || isCrewBusy(task) || messageBusyTasks.has(key) || actionBusy) {
+      toast('Current task is busy or unavailable — start a new chat or wait a moment.');
+      return false;
+    }
+  }
+  const prevValue = input.value;
+  input.value = String(promptText);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  if (sendBtn?.disabled) {
+    input.value = prevValue;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    toast('Composer is currently unavailable to send — check your connected model or task state.');
+    return false;
+  }
+  if (form?.requestSubmit) {
+    form.requestSubmit();
+    return true;
+  }
+  input.focus();
+  return false;
+};
 
 function dismissDrawers() {
   let changed = false;
@@ -1909,6 +1956,7 @@ function newConversation() {
   chooseTab('timeline');
   renderTasks(true);
   renderEmpty();
+  window.G0DConclave?.syncTask(null);
   loadSkills(null);
   if (narrowLayout.matches) setSidebar(false);
   $('#composer-input')?.focus();
@@ -2777,7 +2825,7 @@ function renderOverseerEdge() {
   ].join('');
   const patternCount = (data.refusalPatterns || []).length;
   const stratCount = (data.strategyStats || []).length;
-  body.innerHTML = `
+  const nextHtml = `
     <div class="overseer-pop-row">
       <div class="overseer-pop-status">
         <span class="svc-dot ${data.ready ? 'svc-connected' : isEnabled ? 'svc-blocked' : 'svc-muted'}" aria-hidden="true"></span>
@@ -2800,6 +2848,15 @@ function renderOverseerEdge() {
         <button type="button" class="button button-quiet" data-overseer-pop-settings>Full settings →</button>
       </div>
     </div>`;
+  if (body.dataset.lastHtml === nextHtml) return;
+  const focusedEl = document.activeElement;
+  if (!overseerBusy && focusedEl && body.contains(focusedEl) && focusedEl.tagName === 'SELECT') {
+    body.dataset.pendingHtml = nextHtml;
+    return;
+  }
+  delete body.dataset.pendingHtml;
+  body.dataset.lastHtml = nextHtml;
+  body.innerHTML = nextHtml;
 }
 
 function toggleOverseerPopover(force) {
@@ -2859,7 +2916,7 @@ function renderOverseerSection() {
   const agencyTip = !hasHighAgency
     ? '<p class="field-help">Tip: Connect a high-agency/uncensored model (Nous Portal Hermes-4-405B, Venice Uncensored, neon-4, or local Ollama) so the Overseer itself never balks when unblocking tough tasks.</p>'
     : '';
-  container.innerHTML = `
+  const nextSectionHtml = `
     <div class="overseer-head">
       <div>
         <h3>Overseer &amp; Self-Optimization Agent</h3>
@@ -2885,6 +2942,15 @@ function renderOverseerSection() {
       </div>
     </div>
     ${learnedHtml}${patternsHtml}`;
+  if (container.dataset.lastHtml === nextSectionHtml) return;
+  const focusedEl = document.activeElement;
+  if (!overseerBusy && focusedEl && container.contains(focusedEl) && focusedEl.tagName === 'SELECT') {
+    container.dataset.pendingHtml = nextSectionHtml;
+    return;
+  }
+  delete container.dataset.pendingHtml;
+  container.dataset.lastHtml = nextSectionHtml;
+  container.innerHTML = nextSectionHtml;
 }
 
 let ultraRouterData = null;
@@ -5877,12 +5943,20 @@ function renderStreamTextMarkup(text) {
   return `<div class="message-body"><p class="stream-text">${escapeHTML(text)}<span class="stream-cursor" aria-hidden="true"></span></p></div>`;
 }
 
+function formatLiveThinkingMeta(thinkingText, isActivelyThinking, isOpen) {
+  const len = String(thinkingText || '').length;
+  const size = len >= 1000 ? `${(len / 1000).toFixed(1)}k chars` : `${len} chars`;
+  if (isActivelyThinking) return isOpen ? `${size} · live` : `${size} · click to view`;
+  return size;
+}
+
 function buildStreamPreviewHtml(openDetails = null) {
   if (!streamText && !streamThinking) return '';
   const liveKey = `thinking-live-${streamTaskId || 'active'}`;
-  const isOpen = openDetails ? (openDetails.has(liveKey) || !$('.thinking-block.thinking-live')) : true;
+  const isOpen = openDetails ? openDetails.has(liveKey) : streamThinkingExpanded;
+  const isActivelyThinking = Boolean(streamThinking && !streamText);
   const thinkingPart = streamThinking
-    ? `<details class="thinking-block thinking-live" data-disclosure="${escapeHTML(liveKey)}" ${isOpen ? 'open' : ''}><summary class="thinking-summary"><span class="thinking-icon" aria-hidden="true">◇</span><span>Thinking</span><span class="thinking-meta">live</span></summary><pre class="thinking-body stream-thinking-body" tabindex="0" role="region" aria-label="Live model reasoning">${escapeHTML(streamThinking)}</pre></details>`
+    ? `<details class="thinking-block thinking-live${isActivelyThinking ? ' is-streaming' : ''}" data-disclosure="${escapeHTML(liveKey)}" ${isOpen ? 'open' : ''}><summary class="thinking-summary"><span class="thinking-icon" aria-hidden="true">◇</span><span class="thinking-label">${isActivelyThinking ? 'Reasoning' : 'Thought'}</span>${isActivelyThinking ? '<span class="thinking-dots" aria-hidden="true"><span></span><span></span><span></span></span>' : ''}<span class="thinking-meta">${escapeHTML(formatLiveThinkingMeta(streamThinking, isActivelyThinking, isOpen))}</span></summary><pre class="thinking-body stream-thinking-body" tabindex="0" role="region" aria-label="Live model reasoning">${escapeHTML(streamThinking)}</pre></details>`
     : '';
   const textPart = streamText ? renderStreamTextMarkup(streamText) : '';
   return `<div class="stream-preview"><div class="message message-assistant"><div class="message-avatar" aria-hidden="true"></div><div class="message-main">${thinkingPart}${textPart}</div></div></div>`;
@@ -5901,12 +5975,25 @@ function updateLiveStreamSlot() {
     || (wantsCodeCard !== Boolean(existingCode));
   if (needsStructure) {
     const liveDetails = $('.thinking-block.thinking-live', slot);
-    const keepOpen = liveDetails ? liveDetails.open : true;
+    const keepOpen = liveDetails ? liveDetails.open : streamThinkingExpanded;
+    streamThinkingExpanded = keepOpen;
     slot.innerHTML = buildStreamPreviewHtml();
     const nextDetails = $('.thinking-block.thinking-live', slot);
     if (nextDetails) nextDetails.open = keepOpen;
   } else {
-    if (existingThinking) existingThinking.textContent = streamThinking;
+    if (existingThinking) {
+      const liveDetails = $('.thinking-block.thinking-live', slot);
+      const isActivelyThinking = Boolean(streamThinking && !streamText);
+      const isOpen = Boolean(liveDetails?.open);
+      const nearInnerThink = !isOpen || (existingThinking.scrollHeight - existingThinking.scrollTop - existingThinking.clientHeight < 60);
+      existingThinking.textContent = streamThinking;
+      if (isOpen && nearInnerThink) existingThinking.scrollTop = existingThinking.scrollHeight;
+      if (liveDetails) {
+        liveDetails.classList.toggle('is-streaming', isActivelyThinking);
+        const metaEl = $('.thinking-meta', liveDetails);
+        if (metaEl) metaEl.textContent = formatLiveThinkingMeta(streamThinking, isActivelyThinking, isOpen);
+      }
+    }
     if (existingCode) {
       const fenceMatch = /```([a-zA-Z0-9_.-]*)\r?\n/.exec(streamText);
       const codeBody = fenceMatch ? streamText.slice(fenceMatch.index + fenceMatch[0].length).replace(/\r?\n```\s*$/, '') : streamText;
@@ -5949,6 +6036,7 @@ function manageStream(task) {
     streamTaskId = task.id;
     streamText = '';
     streamThinking = '';
+    streamThinkingExpanded = false;
     try {
       const source = new EventSource(`/api/tasks/${encodeURIComponent(task.id)}/stream`);
       streamSource = source;
@@ -5959,6 +6047,7 @@ function manageStream(task) {
           if (delta.type === 'turn_start') {
             streamText = '';
             streamThinking = '';
+            streamThinkingExpanded = false;
             streamToolName = '';
             updateLiveStreamSlot();
           } else if (delta.type === 'thinking' && delta.text) {
@@ -6043,6 +6132,7 @@ function disconnectStream() {
   streamTaskId = null;
   streamText = '';
   streamThinking = '';
+  streamThinkingExpanded = false;
   streamToolName = '';
   const slot = $('#stream-slot');
   if (slot) slot.innerHTML = '';
@@ -8369,6 +8459,30 @@ $('#overseer-popover')?.addEventListener('change', event => {
     updateOverseerSettings({ autoUnblockStuck: t.checked });
   }
 });
+const flushPendingOverseerHtml = (el) => {
+  if (!el?.dataset?.pendingHtml || overseerBusy) return;
+  const focusedEl = document.activeElement;
+  if (focusedEl && el.contains(focusedEl) && focusedEl.tagName === 'SELECT') return;
+  const next = el.dataset.pendingHtml;
+  delete el.dataset.pendingHtml;
+  el.dataset.lastHtml = next;
+  el.innerHTML = next;
+};
+$('#overseer-popover')?.addEventListener('focusout', () => setTimeout(() => flushPendingOverseerHtml($('#overseer-popover-body')), 0));
+$('#overseer-section')?.addEventListener('focusout', () => setTimeout(() => flushPendingOverseerHtml($('#overseer-section')), 0));
+document.addEventListener('toggle', event => {
+  const el = event.target;
+  if (el?.matches?.('.thinking-block.thinking-live')) {
+    streamThinkingExpanded = el.open;
+    const isActivelyThinking = Boolean(streamThinking && !streamText);
+    const metaEl = $('.thinking-meta', el);
+    if (metaEl) metaEl.textContent = formatLiveThinkingMeta(streamThinking, isActivelyThinking, el.open);
+    if (el.open) {
+      const body = $('.stream-thinking-body', el);
+      if (body) body.scrollTop = body.scrollHeight;
+    }
+  }
+}, true);
 document.addEventListener('click', event => {
   const pop = $('#overseer-popover');
   if (pop && !pop.classList.contains('hidden') && event.target?.isConnected && !pop.contains(event.target) && !event.target.closest('#overseer-toggle')) {
@@ -8464,7 +8578,7 @@ window.toast = toast;
     { cmd: '/settings', hint: 'Open settings' },
     { cmd: '/forge', hint: 'Forge a task-specific Megaprompt & rubric into the composer (/forge <prompt>)' },
     { cmd: '/browser', hint: 'Open Live Browser mirror (/browser window | headless | close)' },
-    { cmd: '/conclave', hint: 'Open The Conclave live multi-agent council & arena stage' },
+    { cmd: '/conclave', hint: 'Open The Conclave or launch directly (/conclave <mission> | roster | demo | forge)' },
     { cmd: '/swarm', hint: 'Open The Conclave multi-agent swarm visualizer' },
     { cmd: '/benchmark', hint: 'Run offline harness diagnostics' },
     { cmd: '/clear', hint: 'Start a new conversation' },

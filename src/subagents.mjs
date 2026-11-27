@@ -4,7 +4,7 @@ import path from 'node:path';
 import { checkProviderPrivacyAllowed, DEFAULT_PRIVACY_SETTINGS } from './privacy.mjs';
 import { evaluatePermission } from './permissions.mjs';
 import { scoreOverseerSuitability } from './overseer.mjs';
-import { runExternalHarnessSubagent } from './conclave-roster.mjs';
+import { buildStarterRoster, runExternalHarnessSubagent } from './conclave-roster.mjs';
 import { TOOLS, validateTool } from './tool-schema.mjs';
 
 const SUBAGENT_TOOLS = new Set(['repo.list', 'repo.read', 'repo.search', 'repo.glob', 'git.diff', 'git.log', 'memory.search']);
@@ -67,7 +67,63 @@ async function resolveNoSymlinkDir(rootDir, segments) {
 
 export async function discoverSubagents(task, runtime = null) {
   const agents = new Map(Object.entries(BUILTIN_SUBAGENTS));
-  // Hydrate custom Conclave Roster agents so agent.spawn(role: '<slug>') works seamlessly!
+  const starterSlugs = new Set();
+  // Hydrate built-in generalized Conclave starter agents so Spawn / Deploy Squad works immediately for all 6 examples.
+  for (const ag of buildStarterRoster()) {
+    const slug = ag.slug.toLowerCase();
+    starterSlugs.add(slug);
+    if (agents.has(slug)) continue;
+    agents.set(slug, {
+      name: slug,
+      displayName: ag.name || slug,
+      description: ag.description || `Conclave specialist (${ag.name || slug})`,
+      model: ag.providerId || ag.harnessId || null,
+      engineType: ag.engineType || 'api',
+      harnessId: ag.harnessId || null,
+      autonomy: ag.autonomy || 'read_only',
+      instructions: ag.instructions || `You are ${ag.name || slug}, a specialist subagent.`,
+      source: 'conclave_starter'
+    });
+  }
+  const dirSpecs = [
+    { root: os.homedir(), segments: ['.g0dc0d3', 'agents'], trusted: true },
+    ...(task?.sourcePath ? [
+      { root: task.sourcePath, segments: ['.g0dc0d3', 'agents'], trusted: false },
+      { root: task.sourcePath, segments: ['.claude', 'agents'], trusted: false }
+    ] : []),
+    ...(task?.workspace ? [
+      { root: task.workspace, segments: ['.g0dc0d3', 'agents'], trusted: false },
+      { root: task.workspace, segments: ['.claude', 'agents'], trusted: false }
+    ] : [])
+  ];
+  const seen = new Set();
+  for (const { root, segments, trusted } of dirSpecs) {
+    const resolved = await resolveNoSymlinkDir(root, segments);
+    if (!resolved || seen.has(resolved)) continue;
+    seen.add(resolved);
+    let entries = [];
+    try { entries = await fs.readdir(resolved, { withFileTypes: true }); } catch { continue; }
+    for (const entry of entries) {
+      if (entry.isSymbolicLink() || !entry.isFile() || !entry.name.endsWith('.md')) continue;
+      const fullPath = path.join(resolved, entry.name);
+      let handle;
+      try {
+        handle = await fs.open(fullPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0));
+        const st = await handle.stat();
+        if (!st.isFile() || st.size > 64 * 1024) continue;
+        const raw = await handle.readFile('utf8');
+        if (raw.length > 64 * 1024) continue;
+        const parsed = parseFrontmatter(raw, entry.name.replace(/\.md$/i, ''));
+        if (Object.hasOwn(BUILTIN_SUBAGENTS, parsed.name)) continue;
+        // Untrusted repo-local agent files must never hijack built-in Conclave starter roles.
+        if (!trusted && starterSlugs.has(parsed.name)) continue;
+        agents.set(parsed.name, { ...parsed, source: fullPath });
+      } catch {} finally {
+        await handle?.close().catch(() => {});
+      }
+    }
+  }
+  // Hydrate owner's Conclave Roster agents LAST so explicit user roster configuration always overrides repo-local files.
   try {
     const rosterRaw = runtime?.store?.getLocalState?.('conclave_roster', []);
     if (Array.isArray(rosterRaw)) {
@@ -88,42 +144,6 @@ export async function discoverSubagents(task, runtime = null) {
       }
     }
   } catch {}
-  const dirSpecs = [
-    { root: os.homedir(), segments: ['.g0dc0d3', 'agents'] },
-    ...(task?.sourcePath ? [
-      { root: task.sourcePath, segments: ['.g0dc0d3', 'agents'] },
-      { root: task.sourcePath, segments: ['.claude', 'agents'] }
-    ] : []),
-    ...(task?.workspace ? [
-      { root: task.workspace, segments: ['.g0dc0d3', 'agents'] },
-      { root: task.workspace, segments: ['.claude', 'agents'] }
-    ] : [])
-  ];
-  const seen = new Set();
-  for (const { root, segments } of dirSpecs) {
-    const resolved = await resolveNoSymlinkDir(root, segments);
-    if (!resolved || seen.has(resolved)) continue;
-    seen.add(resolved);
-    let entries = [];
-    try { entries = await fs.readdir(resolved, { withFileTypes: true }); } catch { continue; }
-    for (const entry of entries) {
-      if (entry.isSymbolicLink() || !entry.isFile() || !entry.name.endsWith('.md')) continue;
-      const fullPath = path.join(resolved, entry.name);
-      let handle;
-      try {
-        handle = await fs.open(fullPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0));
-        const st = await handle.stat();
-        if (!st.isFile() || st.size > 64 * 1024) continue;
-        const raw = await handle.readFile('utf8');
-        if (raw.length > 64 * 1024) continue;
-        const parsed = parseFrontmatter(raw, entry.name.replace(/\.md$/i, ''));
-        if (Object.hasOwn(BUILTIN_SUBAGENTS, parsed.name)) continue;
-        agents.set(parsed.name, { ...parsed, source: fullPath });
-      } catch {} finally {
-        await handle?.close().catch(() => {});
-      }
-    }
-  }
   return agents;
 }
 
@@ -338,6 +358,9 @@ export async function runSpecialistSubagent({ runtime, parentTask, role = 'explo
     const subPrompt = [
       `Specialist role: ${spec.name}`,
       `Instructions: ${spec.instructions}`,
+      spec.autonomy === 'workspace_builder'
+        ? 'Execution boundary: you are running as a read-only specialist subagent. Do NOT attempt file writes or shell commands; instead return exact file paths, concrete implementation blueprints/patches, and verification steps for the parent orchestrator to apply.'
+        : '',
       `Task: ${String(prompt || '').slice(0, 4000)}`,
       steerNotes.length ? `Live operator steering notes:\n- ${steerNotes.join('\n- ')}` : '',
       transcript.length ? `Previous read-only tool observations:\n${transcript.join('\n---\n').slice(-10000)}` : '',
@@ -348,7 +371,7 @@ export async function runSpecialistSubagent({ runtime, parentTask, role = 'explo
 
     const context = {
       task: {
-        id: parentTask.id,
+        id: `${parentTask.id}:subagent:${wId}`,
         workspace: parentTask.workspace,
         sourcePath: parentTask.sourcePath,
         workspaceKind: 'project',

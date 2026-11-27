@@ -3,7 +3,11 @@
 (function initG0DConclave() {
   const ROLE_COLORS = {
     explore: '#60a5fa',
+    builder: '#34d399',
+    designer: '#f472b6',
     reviewer: '#a78bfa',
+    analyst: '#38bdf8',
+    strategist: '#fbbf24',
     uncensored: '#f472b6',
     solver: '#34d399',
     challenger: '#fbbf24',
@@ -11,6 +15,43 @@
     judge: '#f59e0b',
     default: '#c084fc',
   };
+
+  const CONCLAVE_MODES = [
+    { id: 'parallel', label: 'Parallel Squad', hint: 'Specialists tackle distinct angles concurrently, then the lead synthesizes one cohesive deliverable.' },
+    { id: 'critique', label: 'Draft & Critique', hint: 'Lead specialist builds or drafts while reviewers stress-test edge cases, logic, and polish.' },
+    { id: 'debate',   label: 'Council Debate',  hint: 'Specialists argue competing options and tradeoffs before converging on a verified recommendation.' },
+  ];
+
+  const LONG_FORM_TEMPLATES = [
+    { id: 'fullstack',   icon: '⌘', label: 'Full-Stack Build',   mode: 'critique', agents: ['builder', 'designer', 'reviewer'],    prompt: 'Design and build a complete end-to-end feature with clean API contracts, responsive UI, and automated tests for: ' },
+    { id: 'audit',       icon: '◈', label: 'Codebase Audit',     mode: 'parallel', agents: ['explore', 'reviewer', 'builder'],     prompt: 'Map this codebase architecture, audit for subtle bugs and technical debt, and produce a safe step-by-step refactor plan for: ' },
+    { id: 'research',    icon: '◎', label: 'Deep Research',      mode: 'parallel', agents: ['explore', 'analyst', 'strategist'],   prompt: 'Conduct a thorough multi-source research report with comparison tables, key tradeoffs, and concrete recommendations on: ' },
+    { id: 'design',      icon: '✦', label: 'UI & Design System', mode: 'critique', agents: ['designer', 'builder', 'reviewer'],    prompt: 'Create a cohesive UI design system, interactive layout prototype, and accessibility review for: ' },
+    { id: 'quant',       icon: 'λ', label: 'Data & Quant Model', mode: 'critique', agents: ['analyst', 'explore', 'strategist'],   prompt: 'Build a rigorous quantitative analysis with explicit assumptions, sensitivity scenarios, and an executive summary for: ' },
+    { id: 'rfc',         icon: '▤', label: 'Architecture RFC',   mode: 'debate',   agents: ['explore', 'analyst', 'strategist'],   prompt: 'Author a complete technical RFC comparing competing architectures, failure modes, scaling limits, and migration phases for: ' },
+    { id: 'gtm',         icon: 'Δ', label: 'Launch & GTM Plan',  mode: 'parallel', agents: ['strategist', 'explore', 'designer'],  prompt: 'Develop a full go-to-market strategy covering positioning, audience segments, launch assets, and rollout milestones for: ' },
+    { id: 'incident',    icon: '⚡', label: 'Root-Cause Triage',  mode: 'parallel', agents: ['explore', 'reviewer', 'analyst'],     prompt: 'Investigate the root cause across code paths and logs, verify reproduction steps, and propose a hardened permanent fix for: ' },
+    { id: 'migration',   icon: '⇄', label: 'Migration Roadmap',  mode: 'debate',   agents: ['explore', 'builder', 'analyst'],      prompt: 'Design a zero-downtime multi-phase migration plan with rollback gates, data validation checks, and risk mitigation for: ' },
+    { id: 'decision',    icon: '⚖', label: 'Decision Council',   mode: 'debate',   agents: ['explore', 'analyst', 'strategist'],   prompt: 'Run a devil’s-advocate debate weighing competing options, hidden risks, and second-order effects to reach a clear verdict on: ' },
+  ];
+
+  const DEFAULT_STARTER_AGENTS = [
+    { slug: 'explore',    name: 'Research Analyst',     sigil: '◈', primarySpecialty: 'long_context' },
+    { slug: 'builder',    name: 'Full-Stack Builder',   sigil: '⌘', primarySpecialty: 'swe_coding' },
+    { slug: 'designer',   name: 'UI & Design Engineer', sigil: '✦', primarySpecialty: 'frontend_ui' },
+    { slug: 'reviewer',   name: 'Code & QA Reviewer',   sigil: '⚡', primarySpecialty: 'swe_coding' },
+    { slug: 'analyst',    name: 'Data & Math Reasoner', sigil: 'λ', primarySpecialty: 'math_reasoning' },
+    { slug: 'strategist', name: 'Writer & Strategist',  sigil: 'Δ', primarySpecialty: 'creative_writing' },
+  ];
+
+  let launchMission = '';
+  let launchMode = 'parallel'; // 'parallel' | 'critique' | 'debate'
+  let launchManualTeam = false;
+  let launchManualMode = false;
+  let launchReasonLabel = '';
+  let launchTeam = new Set(['explore', 'builder', 'reviewer']);
+  let activeTemplateId = null;
+  let forceShowLaunchpad = false;
 
   const STATUS_META = {
     thinking:   { label: 'Thinking',   tone: 'violet', active: true },
@@ -144,6 +185,7 @@
         <div class="conclave-stat"><span class="conclave-stat-label">Overlaps</span><strong id="conclave-stat-conflicts">0</strong></div>
         <div class="conclave-stat hidden" id="conclave-stat-cost-wrap"><span class="conclave-stat-label">Cost</span><strong id="conclave-stat-cost">$0.000</strong></div>
         <div class="conclave-telemetry-actions">
+          <button type="button" class="button button-quiet hidden" id="conclave-new-mission-btn" title="Configure and launch another Conclave mission">+ New Mission</button>
           <button type="button" class="button button-quiet conclave-demo-toggle" id="conclave-demo-btn" title="Preview an interactive multi-agent constellation">Preview Swarm</button>
         </div>
       </div>
@@ -167,11 +209,36 @@
         <section class="conclave-view conclave-stage-view" id="conclave-view-stage" role="tabpanel">
           <canvas id="conclave-canvas" class="conclave-canvas" aria-label="Interactive multi-agent constellation stage"></canvas>
           <div class="conclave-standby-bar hidden" id="conclave-standby-bar">
-            <p class="conclave-standby-copy">Launch a parallel specialist squad, forge custom benchmarked agents, or race frontier models head-to-head.</p>
-            <div class="conclave-presets">
-              <button type="button" class="button button-primary" data-conclave-preset="research">✦ Parallel Research Squad</button>
-              <button type="button" class="button button-secondary" data-conclave-preset="roster">⛨ Agent Builder &amp; Roster</button>
-              <button type="button" class="button button-secondary" data-conclave-preset="arena">⚡ Head-to-Head Arena</button>
+            <div class="clp-head">
+              <div>
+                <h3 class="clp-title">Start a Conclave</h3>
+                <p class="conclave-standby-copy">Describe any long-form goal — Conclave auto-picks the right specialists and runs them together live.</p>
+              </div>
+              <button type="button" class="button button-quiet clp-auto-btn" id="conclave-auto-pick" title="Auto-select best specialists for your mission">✦ Auto-Pick</button>
+            </div>
+            <div class="clp-templates" id="conclave-templates" aria-label="Long-form task starters">
+              ${LONG_FORM_TEMPLATES.map(t => `<button type="button" class="clp-tpl-chip" data-conclave-template="${esc(t.id)}" aria-pressed="false" title="${esc(t.prompt)}"><span>${esc(t.icon)}</span>${esc(t.label)}</button>`).join('')}
+            </div>
+            <textarea id="conclave-mission-input" class="clp-mission-input" rows="3" maxlength="4000" placeholder="What long-form mission should your team tackle? (e.g. Audit our auth flow and write a refactor plan, or draft a Q3 GTM launch brief…)" aria-label="Conclave mission goal"></textarea>
+            <div class="clp-row">
+              <div class="clp-section-label"><span>Team</span><span class="clp-team-meta" id="conclave-team-meta">Auto-matched</span></div>
+              <div class="clp-team-pills" id="conclave-team-pills" role="group" aria-label="Select specialists"></div>
+            </div>
+            <div class="clp-row">
+              <div class="clp-section-label"><span>How they work</span></div>
+              <div class="clp-mode-tabs" role="group" aria-label="Conclave workflow mode">
+                ${CONCLAVE_MODES.map(m => `<button type="button" class="clp-mode-btn ${m.id === launchMode ? 'active' : ''}" data-conclave-mode="${esc(m.id)}" aria-pressed="${m.id === launchMode ? 'true' : 'false'}">${esc(m.label)}</button>`).join('')}
+              </div>
+              <p class="clp-mode-hint" id="conclave-mode-hint"></p>
+            </div>
+            <div class="clp-actions">
+              <button type="button" class="button button-primary clp-launch-btn" id="conclave-launch-btn">✦ Launch Conclave →</button>
+              <button type="button" class="button button-secondary" id="conclave-stage-to-composer" title="Load orchestrated brief into chat composer to review first">Edit in Chat</button>
+              <div class="clp-links">
+                <button type="button" class="button button-quiet" data-conclave-preset="roster">⛨ Roster</button>
+                <button type="button" class="button button-quiet" data-conclave-preset="forge">⚒ Forge</button>
+                <button type="button" class="button button-quiet" data-conclave-preset="arena">⚡ Arena</button>
+              </div>
             </div>
             <div class="conclave-standby-formations hidden" id="conclave-standby-formations"></div>
           </div>
@@ -217,10 +284,27 @@
       if (e.target.closest('#conclave-close')) { close(); return; }
       if (e.target.closest('#conclave-expand')) { toggleExpand(); return; }
       if (e.target.closest('#pi-close')) { selectWorker(null); return; }
-      if (e.target.closest('#conclave-demo-btn')) { toggleDemo(); return; }
+      if (e.target.closest('#conclave-demo-btn')) { forceShowLaunchpad = false; toggleDemo(); return; }
+      if (e.target.closest('#conclave-new-mission-btn')) { forceShowLaunchpad = !forceShowLaunchpad; setLens('stage'); renderAll(); if (forceShowLaunchpad) document.getElementById('conclave-mission-input')?.focus(); return; }
       if (e.target.closest('#conclave-replay-toggle')) { toggleReplay(); return; }
       const preset = e.target.closest('[data-conclave-preset]');
       if (preset) { triggerPreset(preset.dataset.conclavePreset); return; }
+      const tplBtn = e.target.closest('[data-conclave-template]');
+      if (tplBtn) { applyLaunchTemplate(tplBtn.dataset.conclaveTemplate); return; }
+      const teamChip = e.target.closest('[data-launch-agent]');
+      if (teamChip) { toggleLaunchAgent(teamChip.dataset.launchAgent); return; }
+      const modeBtn = e.target.closest('[data-conclave-mode]');
+      if (modeBtn) { setLaunchMode(modeBtn.dataset.conclaveMode); return; }
+      if (e.target.closest('#conclave-auto-pick')) {
+        activeTemplateId = null;
+        launchManualTeam = false;
+        launchManualMode = false;
+        applyAutoRecommendation(launchMission || document.getElementById('conclave-mission-input')?.value || '');
+        if (typeof window.toast === 'function') window.toast('✦ Auto-matched specialists to your mission.');
+        return;
+      }
+      if (e.target.closest('#conclave-launch-btn')) { launchConclaveFromPad({ autoSend: true }); return; }
+      if (e.target.closest('#conclave-stage-to-composer')) { launchConclaveFromPad({ autoSend: false }); return; }
       const formLaunch = e.target.closest('[data-formation-launch]');
       if (formLaunch) { deployFormation(formLaunch.dataset.formationLaunch); return; }
       const formDel = e.target.closest('[data-formation-delete]');
@@ -286,6 +370,27 @@
     });
 
     dock.addEventListener('input', (e) => {
+      if (e.target.id === 'conclave-mission-input') {
+        launchMission = e.target.value;
+        if (!launchMission.trim()) {
+          activeTemplateId = null;
+          launchManualTeam = false;
+          launchManualMode = false;
+          applyAutoRecommendation('');
+          return;
+        }
+        if (activeTemplateId) {
+          const tpl = LONG_FORM_TEMPLATES.find(t => t.id === activeTemplateId);
+          if (!tpl || !launchMission.startsWith(tpl.prompt.trim())) {
+            activeTemplateId = null;
+          } else {
+            return;
+          }
+        }
+        if (!launchManualTeam) applyAutoRecommendation(launchMission);
+        else renderLaunchpadControls();
+        return;
+      }
       if (e.target.id === 'conclave-replay-scrub') {
         replayPlaying = false;
         replayProgress = Math.max(0, Math.min(100, Number(e.target.value) || 0));
@@ -293,6 +398,35 @@
         renderLiveTicker();
         if (activeLens === 'stage') drawStage();
         if (activeLens === 'timeline') drawTimeline();
+      }
+    });
+
+    dock.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        if (forceShowLaunchpad) {
+          e.preventDefault();
+          e.stopPropagation();
+          forceShowLaunchpad = false;
+          renderAll();
+          return;
+        }
+        if (builderOpen) {
+          e.preventDefault();
+          e.stopPropagation();
+          builderOpen = false;
+          renderRosterView();
+          return;
+        }
+        if (selectedWorkerId) {
+          e.preventDefault();
+          e.stopPropagation();
+          selectWorker(null);
+          return;
+        }
+      }
+      if (e.target.id === 'conclave-mission-input' && !e.isComposing && (e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+        e.preventDefault();
+        launchConclaveFromPad({ autoSend: true });
       }
     });
 
@@ -400,6 +534,10 @@
 
   function triggerPreset(preset) {
     if (preset === 'roster') {
+      setLens('roster');
+      return;
+    }
+    if (preset === 'forge') {
       setLens('roster');
       openBuilder(null);
       return;
@@ -774,6 +912,7 @@
       window.closeChatCode?.();
     }
     isOpenState = true;
+    if (!options.launchpad) forceShowLaunchpad = false;
     dock.classList.remove('hidden');
     document.body.classList.add('conclave-open');
     if (options.lens) setLens(options.lens);
@@ -786,6 +925,7 @@
 
   function close() {
     isOpenState = false;
+    forceShowLaunchpad = false;
     replayPlaying = false;
     stopDemo();
     stopLoop();
@@ -825,13 +965,218 @@
     }
   }
 
+  function recommendTeam(rawMission = '') {
+    const text = String(rawMission || '').toLowerCase();
+    if (!text.trim()) {
+      return { agents: ['explore', 'builder', 'reviewer'], mode: 'parallel', reason: 'Balanced default squad' };
+    }
+    const rules = [
+      { re: /\b(ui|ux|design|css|layout|dashboard|landing page|theme|prototype|figma|components?|visual|frontend|accessibility|tokens?)\b/g, agents: ['designer', 'builder', 'reviewer'], mode: 'critique', reason: 'Design & UI build' },
+      { re: /\b(financial|revenue|forecast|quant|quantitative|statistics?|statistical|metrics?|sql|datasets?|benchmarks?|algorithms?|math|proof|simulations?|unit economics|sensitivity)\b/g, agents: ['analyst', 'explore', 'strategist'], mode: 'critique', reason: 'Quantitative & analytical' },
+      { re: /\b(gtm|go-to-market|marketing|launch|positioning|pitch|memo|blog|whitepaper|essay|documentation|copy|strategy|proposal|narrative|rollout)\b/g, agents: ['strategist', 'explore', 'designer'], mode: 'parallel', reason: 'Strategy & writing' },
+      { re: /\b(outage|incident|postmortem|crash|memory leak|race condition|deadlock|stack traces?|debug|root cause|bugs?)\b/g, agents: ['explore', 'reviewer', 'analyst'], mode: 'parallel', reason: 'Incident & root-cause triage' },
+      { re: /\b(migrat\w*|upgrade|re-architect|rewrite|cutover|zero-downtime|postgres|kubernetes|cloud|monolith|microservices|rollback)\b/g, agents: ['explore', 'builder', 'analyst'], mode: 'debate', reason: 'Migration & architecture' },
+      { re: /\b(rfc|tradeoffs?|should we|decide|decision|pros and cons|debate|devil|red-team|adversarial|legal|compliance|verdict|open-source)\b/g, agents: ['explore', 'analyst', 'strategist'], mode: 'debate', reason: 'Multi-perspective decision' },
+      { re: /\b(research|competitors?|market|landscape|literature|survey|synthesize|investigate|deep dive|report|teardown)\b/g, agents: ['explore', 'analyst', 'strategist'], mode: 'parallel', reason: 'Deep research & synthesis' },
+      { re: /\b(audit|review|refactor|cleanup|security|hardening|tech debt|test coverage|regressions?)\b/g, agents: ['explore', 'reviewer', 'builder'], mode: 'parallel', reason: 'Audit & refactor' },
+      { re: /\b(build|implement|feature|apis?|backend|endpoints?|full-stack|fullstack|app|service|cli|plugin|webhooks?)\b/g, agents: ['builder', 'designer', 'reviewer'], mode: 'critique', reason: 'End-to-end engineering' },
+    ];
+    let best = null;
+    let bestScore = 0;
+    for (const r of rules) {
+      const matches = text.match(r.re);
+      const score = matches ? new Set(matches).size : 0;
+      if (score > bestScore) {
+        bestScore = score;
+        best = r;
+      }
+    }
+    if (best) return { agents: best.agents, mode: best.mode, reason: best.reason };
+    return { agents: ['explore', 'analyst', 'strategist'], mode: 'parallel', reason: 'General long-form synthesis' };
+  }
+
+  function applyAutoRecommendation(text) {
+    const rec = recommendTeam(text);
+    const available = new Set((rosterData?.agents || []).map(a => a.slug));
+    const filtered = available.size ? rec.agents.filter(s => available.has(s)) : rec.agents;
+    launchTeam = new Set(filtered.length ? filtered : ['explore', 'reviewer']);
+    if (!launchManualMode) launchMode = rec.mode;
+    launchReasonLabel = rec.reason;
+    renderLaunchpadControls(rec.reason);
+  }
+
+  function applyLaunchTemplate(templateId) {
+    const tpl = LONG_FORM_TEMPLATES.find(t => t.id === templateId);
+    if (!tpl) return;
+    activeTemplateId = tpl.id;
+    launchManualTeam = false;
+    launchManualMode = false;
+    launchMode = tpl.mode;
+    launchReasonLabel = tpl.label;
+    const available = new Set((rosterData?.agents || []).map(a => a.slug));
+    const picked = available.size ? tpl.agents.filter(s => available.has(s)) : tpl.agents;
+    launchTeam = new Set(picked.length ? picked : tpl.agents);
+    launchMission = tpl.prompt;
+    const input = document.getElementById('conclave-mission-input');
+    if (input) {
+      input.value = tpl.prompt;
+      input.focus();
+      input.setSelectionRange(tpl.prompt.length, tpl.prompt.length);
+    }
+    renderLaunchpadControls(tpl.label);
+  }
+
+  function toggleLaunchAgent(slug) {
+    if (!slug) return;
+    launchManualTeam = true;
+    launchReasonLabel = 'Custom squad';
+    if (launchTeam.has(slug)) {
+      if (launchTeam.size <= 1) {
+        if (typeof window.toast === 'function') window.toast('Keep at least 1 specialist in the Conclave.');
+        return;
+      }
+      launchTeam.delete(slug);
+    } else {
+      if (launchTeam.size >= 4) {
+        if (typeof window.toast === 'function') window.toast('Up to 4 specialists per Conclave run.');
+        return;
+      }
+      launchTeam.add(slug);
+    }
+    renderLaunchpadControls('Custom squad');
+  }
+
+  function setLaunchMode(mode) {
+    if (!CONCLAVE_MODES.some(m => m.id === mode)) return;
+    launchManualMode = true;
+    launchMode = mode;
+    renderLaunchpadControls();
+  }
+
+  function buildMissionPrompt(missionText, { slugs = null, mode = null, formationName = null } = {}) {
+    const cleanMission = String(missionText || '').trim();
+    const rec = recommendTeam(cleanMission);
+    const chosenMode = mode || rec.mode || 'parallel';
+    const chosenSlugs = Array.isArray(slugs) && slugs.length ? slugs : rec.agents;
+    const allAgents = rosterData?.agents?.length ? rosterData.agents : DEFAULT_STARTER_AGENTS;
+    const resolved = chosenSlugs.map(slug => {
+      const found = allAgents.find(a => a.slug === slug);
+      return found || { slug, name: slug, primarySpecialty: 'general', resolvedProviderId: null, engineLabel: 'Auto' };
+    });
+    const rosterLines = resolved.map(a =>
+      `- agent.spawn(role: "${a.slug}"${a.resolvedProviderId ? `, model: "${a.resolvedProviderId}"` : ''}) — ${a.name} (${String(a.primarySpecialty || 'general').replace(/_/g, ' ')})`
+    );
+    const modeProtocol = chosenMode === 'critique'
+      ? 'Workflow (Draft & Critique): Spawn the lead specialist(s) to draft/build the core solution while the reviewer/analyst specialists independently stress-test edge cases, assumptions, and quality. Resolve every valid critique before delivering the final output.'
+      : chosenMode === 'debate'
+        ? 'Workflow (Council Debate): Have each specialist independently argue a distinct perspective, competing option, or risk profile in parallel via agent.spawn. Explicitly compare tradeoffs, resolve disagreements, and deliver a unified, evidence-backed recommendation.'
+        : 'Workflow (Parallel Squad): Dispatch all listed specialists concurrently via agent.spawn on non-overlapping slices of the mission, then synthesize their findings into one complete, actionable final deliverable.';
+    const heading = formationName
+      ? `Convene Conclave Formation "${formationName}" (${resolved.length} specialist${resolved.length === 1 ? '' : 's'})`
+      : `Convene a Conclave (${resolved.length} specialist${resolved.length === 1 ? '' : 's'})`;
+    return `${heading}:\n${rosterLines.join('\n')}\n\n${modeProtocol}\n\nMission:\n${cleanMission || '[Describe your goal here]'}`;
+  }
+
+  function launchConclaveFromPad({ autoSend = true } = {}) {
+    const input = document.getElementById('conclave-mission-input');
+    const mission = (input?.value ?? launchMission ?? '').trim();
+    if (!mission) {
+      if (typeof window.toast === 'function') window.toast('Describe your mission first (or click any starter chip above).');
+      input?.focus();
+      return;
+    }
+    const slugs = [...launchTeam];
+    const prompt = buildMissionPrompt(mission, { slugs, mode: launchMode });
+    if (autoSend && typeof window.submitConclaveMission === 'function') {
+      const sent = window.submitConclaveMission(prompt);
+      if (!sent) return;
+      if (isExpanded) toggleExpand();
+      forceShowLaunchpad = false;
+      activeTemplateId = null;
+      launchManualTeam = false;
+      launchManualMode = false;
+      launchReasonLabel = '';
+      if (input) input.value = '';
+      launchMission = '';
+      const btn = document.getElementById('conclave-launch-btn');
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = '✦ Convening team…';
+        setTimeout(() => {
+          btn.disabled = false;
+          btn.textContent = '✦ Launch Conclave →';
+        }, 2200);
+      }
+      renderAll();
+      if (typeof window.toast === 'function') window.toast(`✦ Conclave launched (${slugs.length} specialists · ${launchMode})!`);
+      return;
+    }
+    const composer = document.getElementById('composer-input');
+    if (composer) {
+      if (isExpanded) toggleExpand();
+      composer.value = prompt;
+      composer.dispatchEvent(new Event('input', { bubbles: true }));
+      composer.focus();
+      composer.setSelectionRange(prompt.length, prompt.length);
+      if (autoSend) {
+        const form = document.getElementById('composer-form');
+        if (form?.requestSubmit) form.requestSubmit();
+      } else if (typeof window.toast === 'function') {
+        window.toast(`✦ Loaded ${slugs.length}-specialist brief into chat — review and press Enter.`);
+      }
+    }
+  }
+
+  function renderLaunchpadControls(reasonLabel = null) {
+    if (reasonLabel !== null) launchReasonLabel = reasonLabel;
+    const pillsWrap = document.getElementById('conclave-team-pills');
+    const metaEl = document.getElementById('conclave-team-meta');
+    const modeHintEl = document.getElementById('conclave-mode-hint');
+    const agents = rosterData?.agents?.length ? rosterData.agents : DEFAULT_STARTER_AGENTS;
+    if (pillsWrap) {
+      const pillsHtml = agents.map(a => {
+        const active = launchTeam.has(a.slug);
+        return `<button type="button" class="clp-agent-pill ${active ? 'active' : ''}" data-launch-agent="${esc(a.slug)}" aria-pressed="${active ? 'true' : 'false'}" title="${esc(`${a.name}${a.engineLabel ? ` · ${a.engineLabel}` : ''}`)}"><span>${esc(a.sigil || '✦')}</span>${esc(a.name)}</button>`;
+      }).join('');
+      if (pillsWrap.dataset.lastHtml !== pillsHtml) {
+        pillsWrap.dataset.lastHtml = pillsHtml;
+        pillsWrap.innerHTML = pillsHtml;
+      }
+    }
+    if (metaEl) {
+      const tag = launchReasonLabel || (launchManualTeam ? 'Custom' : 'Auto-matched');
+      metaEl.textContent = `${launchTeam.size} selected · ${tag}`;
+    }
+    const modeObj = CONCLAVE_MODES.find(m => m.id === launchMode) || CONCLAVE_MODES[0];
+    if (modeHintEl) modeHintEl.textContent = modeObj.hint;
+    const dock = dockEl();
+    dock?.querySelectorAll('[data-conclave-mode]').forEach(btn => {
+      const on = btn.dataset.conclaveMode === launchMode;
+      btn.classList.toggle('active', on);
+      btn.setAttribute('aria-pressed', String(on));
+    });
+    dock?.querySelectorAll('[data-conclave-template]').forEach(btn => {
+      const on = btn.dataset.conclaveTemplate === activeTemplateId;
+      btn.classList.toggle('active', on);
+      btn.setAttribute('aria-pressed', String(on));
+    });
+  }
+
   function renderStandbyFormations() {
+    renderLaunchpadControls();
     const wrap = document.getElementById('conclave-standby-formations');
     if (!wrap) return;
     const formations = rosterData?.formations || [];
     wrap.classList.toggle('hidden', !formations.length);
-    if (!formations.length) return;
-    wrap.innerHTML = `<span class="conclave-sf-label">Formations</span>${formations.slice(0, 4).map(f => `<button type="button" class="conclave-formation-chip" data-formation-launch="${esc(f.id)}" title="${esc(`${f.name}: ${f.agents.join(', ')}`)}">${esc(f.sigil || '✦')} ${esc(f.name)} <small>${esc(f.agents.length)}</small></button>`).join('')}`;
+    if (!formations.length) {
+      wrap.dataset.lastHtml = '';
+      return;
+    }
+    const html = `<span class="conclave-sf-label">Saved Presets</span>${formations.slice(0, 4).map(f => `<button type="button" class="conclave-formation-chip" data-formation-launch="${esc(f.id)}" title="${esc(`${f.name}: ${f.agents.join(', ')}`)}">${esc(f.sigil || '✦')} ${esc(f.name)} <small>${esc(f.agents.length)}</small></button>`).join('')}`;
+    if (wrap.dataset.lastHtml !== html) {
+      wrap.dataset.lastHtml = html;
+      wrap.innerHTML = html;
+    }
   }
 
   function renderLiveTicker() {
@@ -839,7 +1184,7 @@
     if (!el) return;
     const viewData = getEffectiveData();
     const workers = viewData?.workers || [];
-    const show = activeLens === 'stage' && (viewData?.mode === 'swarm' || viewData?.mode === 'crew') && workers.length > 0;
+    const show = activeLens === 'stage' && !forceShowLaunchpad && (viewData?.mode === 'swarm' || viewData?.mode === 'crew') && workers.length > 0;
     el.classList.toggle('hidden', !show);
     if (!show) {
       el.dataset.lastHtml = '';
@@ -873,7 +1218,7 @@
     const bar = document.getElementById('conclave-diff-actions');
     if (!bar) return;
     const race = data?.worktreeRace;
-    const show = Boolean(race?.candidates?.length) && activeLens === 'stage';
+    const show = Boolean(race?.candidates?.length) && activeLens === 'stage' && !forceShowLaunchpad;
     bar.classList.toggle('hidden', !show);
     if (!show) return;
     const applied = race.appliedCandidateId;
@@ -934,7 +1279,7 @@
       }
     }
     const legendEl = document.getElementById('conclave-legend');
-    if (legendEl) legendEl.classList.toggle('hidden', mode === 'diff_race');
+    if (legendEl) legendEl.classList.toggle('hidden', mode === 'diff_race' || mode === 'standby' || forceShowLaunchpad);
 
     // Polish trim: only show Preview Swarm in Standby or while Demo is active
     const demoBtn = document.getElementById('conclave-demo-btn');
@@ -951,10 +1296,19 @@
       }
     }
 
+    const newMissionBtn = document.getElementById('conclave-new-mission-btn');
+    if (newMissionBtn) {
+      const showNewBtn = mode !== 'standby' && !demoMode;
+      newMissionBtn.classList.toggle('hidden', !showNewBtn);
+      newMissionBtn.textContent = forceShowLaunchpad ? '← Live Stage' : '+ New Mission';
+      newMissionBtn.setAttribute('aria-pressed', String(forceShowLaunchpad));
+    }
+
     const standbyBar = document.getElementById('conclave-standby-bar');
     if (standbyBar) {
-      standbyBar.classList.toggle('hidden', mode !== 'standby');
-      if (mode === 'standby') {
+      const showPad = mode === 'standby' || forceShowLaunchpad;
+      standbyBar.classList.toggle('hidden', !showPad);
+      if (showPad) {
         if (!rosterData) loadRoster(false).then(renderStandbyFormations);
         else renderStandbyFormations();
       }
@@ -1849,6 +2203,7 @@
     if (nextId !== currentTaskId) {
       currentTaskId = nextId;
       selectedWorkerId = null;
+      forceShowLaunchpad = false;
       replayPlaying = false;
       replayProgress = 100;
       if (demoMode && nextId) {
@@ -1859,6 +2214,7 @@
     if (nextId && !demoMode) {
       loadSnapshot(nextId);
     } else {
+      renderAll();
       updateHeaderBadge();
     }
   }
@@ -1871,6 +2227,7 @@
     }
     if (demoMode) return;
     if (delta.type === 'subagent.started' || delta.type === 'subagent.progress' || delta.type === 'subagent.completed') {
+      if (delta.type === 'subagent.started') forceShowLaunchpad = false;
       const wk = delta.worker;
       if (!wk?.workerId) return;
       if (!data) {
@@ -2213,6 +2570,20 @@
   }
 
   function deploySingleAgent(slug) {
+    const ag = (rosterData?.agents || DEFAULT_STARTER_AGENTS).find(a => a.slug === slug);
+    stopDemo();
+    launchManualTeam = true;
+    launchTeam = new Set([slug]);
+    forceShowLaunchpad = true;
+    setLens('stage');
+    renderAll();
+    renderLaunchpadControls(ag?.name || slug);
+    const padInput = document.getElementById('conclave-mission-input');
+    if (padInput) {
+      padInput.focus();
+      if (typeof window.toast === 'function') window.toast(`✦ Selected ${ag?.name || slug} — describe your mission and click Launch Conclave.`);
+      return;
+    }
     deploySquadSlugs([slug]);
   }
 
@@ -2264,22 +2635,40 @@
   function deployFormation(id) {
     const f = (rosterData?.formations || []).find(x => x.id === id);
     if (!f) return;
-    const agents = (rosterData?.agents || []).filter(a => f.agents.includes(a.slug));
-    const lines = agents.length
-      ? agents.map(a => `- agent.spawn(role: "${a.slug}"${a.resolvedProviderId ? `, model: "${a.resolvedProviderId}"` : ''}) — ${a.name} [${a.engineLabel}, OVR ${a.stats?.overall || 85}]`)
-      : f.agents.map(slug => `- agent.spawn(role: "${slug}")`);
-    const prompt = `Convene Conclave Formation "${f.name}" (${lines.length} specialist${lines.length === 1 ? '' : 's'}) concurrently via agent.spawn:\n${lines.join('\n')}\n\nGoal: ${f.goal || ''}`;
+    const mission = f.goal || launchMission || '';
+    const prompt = buildMissionPrompt(mission, { slugs: f.agents, mode: 'parallel', formationName: f.name });
+    if (f.goal && typeof window.submitConclaveMission === 'function') {
+      const sent = window.submitConclaveMission(prompt);
+      if (!sent) return;
+      if (isExpanded) toggleExpand();
+      forceShowLaunchpad = false;
+      setLens('stage');
+      renderAll();
+      if (typeof window.toast === 'function') window.toast(`${f.sigil || '✦'} Launched "${f.name}" (${f.agents.length} specialists)!`);
+      return;
+    }
+    // No preset goal yet — bring them cleanly into the Stage Launchpad with these exact agents pre-selected!
+    stopDemo();
+    launchManualTeam = true;
+    launchTeam = new Set(f.agents);
+    forceShowLaunchpad = true;
+    setLens('stage');
+    renderAll();
+    renderLaunchpadControls(f.name);
+    const padInput = document.getElementById('conclave-mission-input');
+    if (padInput) {
+      padInput.focus();
+      if (typeof window.toast === 'function') window.toast(`${f.sigil || '✦'} Selected "${f.name}" — type your mission and click Launch Conclave.`);
+      return;
+    }
     const input = document.getElementById('composer-input');
     if (input) {
       if (isExpanded) toggleExpand();
-      const existing = input.value.trim();
-      const nextVal = existing ? `${prompt}${existing}` : prompt;
-      input.value = nextVal;
+      input.value = prompt;
       input.dispatchEvent(new Event('input', { bubbles: true }));
       input.focus();
-      input.setSelectionRange(nextVal.length, nextVal.length);
+      input.setSelectionRange(prompt.length, prompt.length);
     }
-    if (typeof window.toast === 'function') window.toast(`${f.sigil || '✦'} Loaded formation "${f.name}" into composer — press Enter to launch!`);
   }
 
   const fmtCtx = (n) => {
@@ -2349,7 +2738,7 @@
         </div>
         <form id="pb-form" class="pb-form" autocomplete="off">
           <div class="pb-row-two">
-            <label>Agent Name<input type="text" id="pb-name" value="${esc(builderDraft.name || '')}" placeholder="e.g. Hermes Red-Team Oracle" maxlength="64" required></label>
+            <label>Agent Name<input type="text" id="pb-name" value="${esc(builderDraft.name || '')}" placeholder="e.g. Product Strategist" maxlength="64" required></label>
             <div class="pb-sigil-field">
               <span>Sigil</span>
               <div class="pb-sigil-row">${SIGILS.map(s => `<button type="button" class="pb-sigil-btn ${builderDraft.sigil === s ? 'active' : ''}" data-pb-sigil="${esc(s)}">${esc(s)}</button>`).join('')}</div>
@@ -2500,6 +2889,11 @@
     openBuilder,
     startDemo,
     stopDemo,
+    recommendTeam,
+    buildMissionPrompt,
+    launchConclaveFromPad,
+    templates: LONG_FORM_TEMPLATES,
+    modes: CONCLAVE_MODES,
     isOpen: () => isOpenState,
     getState: () => data,
   };

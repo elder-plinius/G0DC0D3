@@ -1219,15 +1219,16 @@ export class Runtime {
     });
   }
   _recordInterceptedToolError(taskId, call, epoch, code, message) {
-    const id = `${taskId}:${call.id}`;
-    const argsHash = sha256(stableJson(call.args || {}));
+    const safeCallId = typeof call?.id === 'string' && call.id && call.id.length <= 240 ? call.id : `invalid_${randomUUID()}`;
+    const id = `${taskId}:${safeCallId}`;
+    const argsHash = sha256(stableJson(call?.args || {}));
     const result = { ok: false, error: { code, message } };
     const operation = {
-      id, taskId, callId: call.id, name: call.name, args: call.args || {}, argsHash, epoch,
+      id, taskId, callId: safeCallId, name: call?.name || 'unknown', args: call?.args || {}, argsHash, epoch,
       status: 'failed', result, createdAt: new Date().toISOString(), finishedAt: new Date().toISOString()
     };
-    this.store.putOperation(operation, 'tool.completed', { operationId: id, name: call.name, status: 'failed', result });
-    this._emitStream(taskId, { type: 'tool.completed', name: call.name, callId: call.id, ok: false, errorCode: code });
+    this.store.putOperation(operation, 'tool.completed', { operationId: id, name: operation.name, status: 'failed', result });
+    this._emitStream(taskId, { type: 'tool.completed', name: operation.name, callId: safeCallId, ok: false, errorCode: code });
     return result;
   }
   async contextForTask(id) {
@@ -1574,6 +1575,9 @@ export class Runtime {
         let failure;
         let writes = false;
         let deniedInTurn = false;
+        let softBatchErrorsOnly = true;
+        const RECOVERABLE_BATCH_ERRORS = new Set(['INVALID_TOOL', 'PREIMAGE_MISMATCH', 'PATCH_AMBIGUOUS', 'PATCH_TARGET_INVALID', 'ENOENT']);
+        const failedPaths = new Set();
         const observedHashes = new Map(snapshot.files.map(file => [file.path, file.sha256]));
         const streamArgsFor = call => call.name === 'repo.read' || call.name === 'repo.write' || call.name === 'repo.patch' || call.name === 'repo.delete' ? { path: call.args?.path }
           : call.name === 'repo.move' ? { from: call.args?.from, to: call.args?.to }
@@ -1631,17 +1635,29 @@ export class Runtime {
             try {
               for (const call of batch) this._emitStream(id, { type: 'tool.start', name: call.name, callId: call.id, args: streamArgsFor(call) });
               const results = await this.broker.executeReadBatch(id, batch, { epoch, signal: controller.signal, outbound: this.outboundOptions() });
+              let batchFatal = null;
               for (let j = 0; j < batch.length; j++) {
                 const call = batch[j], result = results[j];
                 this._emitStream(id, { type: 'tool.completed', name: call.name, callId: call.id, ok: result?.ok ?? false, path: result?.path });
                 this._recordToolCallSig(id, call, sha256(stableJson([call.name, call.args || {}])), false);
-                if (result?.ok === false && !failure) failure = result.error;
-                else trackResult(call, result);
+                if (result?.ok === false) {
+                  const errCode = result.error?.code || 'TOOL_ERROR';
+                  if (response.calls.length > 1 && RECOVERABLE_BATCH_ERRORS.has(errCode)) {
+                    if (!failure) failure = result.error;
+                  } else {
+                    failure = result.error;
+                    softBatchErrorsOnly = false;
+                    batchFatal = result.error;
+                  }
+                } else {
+                  trackResult(call, result);
+                }
               }
-              if (failure) break;
+              if (batchFatal) break;
             } catch (cause) {
               if (!this._current(id, epoch, controller.signal)) break;
               failure = { code: cause.code || 'TOOL_ERROR', message: cause.message };
+              softBatchErrorsOnly = false;
               if (this.getOperations(id).some(operation => operation.status === 'outcome_unknown')) {
                 return this._status(id, epoch, 'blocked', { code: 'OUTCOME_UNKNOWN', message: cause.message });
               }
@@ -1667,17 +1683,29 @@ export class Runtime {
               try {
                 for (const call of spawnBatch) this._emitStream(id, { type: 'tool.start', name: call.name, callId: call.id, args: streamArgsFor(call) });
                 const results = await Promise.all(spawnBatch.map(call => this._executeAgentSpawn(id, epoch, call, controller.signal)));
+                let spawnFatal = null;
                 for (let j = 0; j < spawnBatch.length; j++) {
                   const call = spawnBatch[j], result = results[j];
                   this._emitStream(id, { type: 'tool.completed', name: call.name, callId: call.id, ok: result?.ok ?? false });
                   this._recordToolCallSig(id, call, sha256(stableJson([call.name, call.args || {}])), false);
-                  if (result?.ok === false && !failure) failure = result.error;
-                  else trackResult(call, result);
+                  if (result?.ok === false) {
+                    const errCode = result.error?.code || 'TOOL_ERROR';
+                    if (response.calls.length > 1 && RECOVERABLE_BATCH_ERRORS.has(errCode)) {
+                      if (!failure) failure = result.error;
+                    } else {
+                      failure = result.error;
+                      softBatchErrorsOnly = false;
+                      spawnFatal = result.error;
+                    }
+                  } else {
+                    trackResult(call, result);
+                  }
                 }
-                if (failure) break;
+                if (spawnFatal) break;
               } catch (cause) {
                 if (!this._current(id, epoch, controller.signal)) break;
                 failure = { code: cause.code || 'TOOL_ERROR', message: cause.message };
+                softBatchErrorsOnly = false;
                 break;
               }
               idx = spawnEnd;
@@ -1777,7 +1805,17 @@ export class Runtime {
             failure = { code: 'DOOM_LOOP_DETECTED', message: doomMsg };
             break;
           }
+          let startedToolStream = false;
           try {
+            const targetPath = typeof call.args?.path === 'string' ? call.args.path : (typeof call.args?.from === 'string' ? call.args.from : null);
+            const isMutatingFileTool = ['repo.write', 'repo.patch', 'repo.delete', 'repo.move'].includes(call.name);
+            if (isMutatingFileTool && targetPath && failedPaths.has(targetPath)) {
+              const staleMsg = `Skipped ${call.name} on ${targetPath} because an earlier edit on the same file failed in this batch.`;
+              this._recordInterceptedToolError(id, call, epoch, 'PREIMAGE_MISMATCH', staleMsg);
+              this._recordToolCallSig(id, call, doom.sig, false);
+              if (!failure) failure = { code: 'PREIMAGE_MISMATCH', message: staleMsg };
+              continue;
+            }
             const preHook = await runLifecycleHooks('PreToolUse', this.getTask(id), call.name, call.args || {}, { signal: controller.signal });
             if (preHook.blocked) {
               const hookMsg = preHook.reason || `PreToolUse hook blocked ${call.name}.`;
@@ -1788,6 +1826,7 @@ export class Runtime {
               break;
             }
             this._emitStream(id, { type: 'tool.start', name: call.name, callId: call.id, args: streamArgsFor(call) });
+            startedToolStream = true;
             let result;
             if (call.name === 'agent.spawn') {
               result = await this._executeAgentSpawn(id, epoch, call, controller.signal);
@@ -1798,34 +1837,69 @@ export class Runtime {
               result = await this.broker.execute(id, call, { epoch, signal: controller.signal, expectedHash: call.name === 'repo.write' ? (observedHashes.get(call.args?.path) ?? null) : undefined, onOutput, outbound: this.outboundOptions() });
             }
             this._emitStream(id, { type: 'tool.completed', name: call.name, callId: call.id, ok: result?.ok ?? false, path: result?.path });
-            const mutatingEditOk = result?.ok === true && ['repo.write', 'repo.patch', 'repo.delete', 'repo.move'].includes(call.name);
-            this._recordToolCallSig(id, call, doom.sig, mutatingEditOk);
-            if (result?.ok === false) { failure = result.error; break; }
+            startedToolStream = false;
+            const priorHash = targetPath ? observedHashes.get(targetPath) : undefined;
+            const changedFile = result?.ok === true && (
+              call.name === 'repo.delete' || call.name === 'repo.move'
+              || (['repo.write', 'repo.patch'].includes(call.name) && (priorHash === undefined || result.sha256 !== priorHash))
+            );
+            this._recordToolCallSig(id, call, doom.sig, changedFile);
+            if (result?.ok === false) {
+              const errCode = result.error?.code || 'TOOL_ERROR';
+              if (isMutatingFileTool && targetPath) failedPaths.add(targetPath);
+              if (response.calls.length > 1 && RECOVERABLE_BATCH_ERRORS.has(errCode)) {
+                if (!failure) failure = result.error;
+                continue;
+              }
+              failure = result.error;
+              softBatchErrorsOnly = false;
+              break;
+            }
             trackResult(call, result);
-            const postHook = await runLifecycleHooks('PostToolUse', this.getTask(id), call.name, call.args || {}, { signal: controller.signal });
-            if (postHook.results?.length) {
-              this.store.appendEvent(id, 'hook.post_tool', { callId: call.id, tool: call.name, results: postHook.results });
+            try {
+              const postHook = await runLifecycleHooks('PostToolUse', this.getTask(id), call.name, call.args || {}, { signal: controller.signal });
+              if (postHook.results?.length) {
+                this.store.appendEvent(id, 'hook.post_tool', { callId: call.id, tool: call.name, results: postHook.results });
+              }
+            } catch (hookCause) {
+              if (!this._current(id, epoch, controller.signal)) break;
+              failure = { code: hookCause.code || 'HOOK_ERROR', message: hookCause.message };
+              softBatchErrorsOnly = false;
+              break;
             }
           } catch (cause) {
             if (!this._current(id, epoch, controller.signal)) break;
-            failure = { code: cause.code || 'TOOL_ERROR', message: cause.message };
+            const errCode = cause.code || 'TOOL_ERROR';
+            const existingOp = typeof call?.id === 'string' && call.id ? this.store.getOperation(`${id}:${call.id}`) : null;
+            if (!existingOp) {
+              this._recordInterceptedToolError(id, call, epoch, errCode, cause.message);
+            } else if (startedToolStream) {
+              this._emitStream(id, { type: 'tool.completed', name: call.name, callId: call.id, ok: false, errorCode: errCode });
+            }
+            this._recordToolCallSig(id, call, doom.sig, false);
             if (this.getOperations(id).some(operation => operation.status === 'outcome_unknown')) {
               return this._status(id, epoch, 'blocked', { code: 'OUTCOME_UNKNOWN', message: cause.message });
             }
+            const targetPath = typeof call.args?.path === 'string' ? call.args.path : (typeof call.args?.from === 'string' ? call.args.from : null);
+            if (['repo.write', 'repo.patch', 'repo.delete', 'repo.move'].includes(call.name) && targetPath) failedPaths.add(targetPath);
+            if (response.calls.length > 1 && RECOVERABLE_BATCH_ERRORS.has(errCode)) {
+              if (!failure) failure = { code: errCode, message: cause.message };
+              continue;
+            }
+            failure = { code: errCode, message: cause.message };
+            softBatchErrorsOnly = false;
             break;
           }
         }
         if (!this._current(id, epoch, controller.signal)) break;
         if (writes) this.store.updateTask(id, current => { current.verification = null; return current; }, 'workspace.changed');
-        if (failure) {
-          const softToolRecovery = [
-            'BROWSER_EVAL_ERROR', 'BROWSER_ELEMENT_NOT_FOUND', 'BROWSER_ELEMENT_DISABLED',
-            'BROWSER_NAV_FAILED', 'BROWSER_TIMEOUT', 'BROWSER_NOT_OPEN', 'BROWSER_TARGET_REQUIRED',
-            'BROWSER_URL_DENIED', 'WEB_FETCH_ERROR', 'WEB_SEARCH_ERROR'
-          ].includes(failure.code);
-          if (!softToolRecovery) {
-            await this._recover(id, epoch, { ...failure, fromTool: true });
-          }
+        const softToolRecovery = Boolean(failure) && ([
+          'BROWSER_EVAL_ERROR', 'BROWSER_ELEMENT_NOT_FOUND', 'BROWSER_ELEMENT_DISABLED',
+          'BROWSER_NAV_FAILED', 'BROWSER_TIMEOUT', 'BROWSER_NOT_OPEN', 'BROWSER_TARGET_REQUIRED',
+          'BROWSER_URL_DENIED', 'WEB_FETCH_ERROR', 'WEB_SEARCH_ERROR'
+        ].includes(failure.code) || (writes && softBatchErrorsOnly && RECOVERABLE_BATCH_ERRORS.has(failure.code)));
+        if (failure && !softToolRecovery) {
+          await this._recover(id, epoch, { ...failure, fromTool: true });
         }
         else if (deniedInTurn) continue;
         else if (this.getTask(id).pendingMessages?.length) continue;
