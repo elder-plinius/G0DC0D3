@@ -14,15 +14,18 @@ import { Broker, snapshotWorkspace, sha256, taskTools, conversationWithoutChecks
 import { BrowserPool, DEFAULT_BROWSER_SETTINGS, normalizeBrowserSettings, findChromiumBinary } from './browser-env.mjs';
 import { validateTool } from './tool-schema.mjs';
 import { diagnoseIncident, detectRefusal, rankCandidates, providerIdentity, candidateEligibility, requestProfile, providerTier } from './routing.mjs';
-import { learningContext, inferModelFamily, bestStrategyForFamily, extractDeclineSignature } from './learning.mjs';
+import { learningContext, inferModelFamily, bestStrategyForFamily, extractDeclineSignature, providerObservedStats } from './learning.mjs';
 import {
   DEFAULT_OVERSEER_SETTINGS,
+  OVERSEER_POSTURES,
   normalizeOverseerSettings,
   scoreOverseerSuitability,
   looksAmbiguousEvasion,
   judgeAmbiguousReply,
   judgePermissionRisk,
-  adviseUnblock
+  adviseUnblock,
+  auditCompletion,
+  coachTrajectory
 } from './overseer.mjs';
 import { runSpecialistSubagent } from './subagents.mjs';
 import {
@@ -1738,6 +1741,7 @@ export class Runtime {
                   args: call.args || {},
                   target: perm.target,
                   objective: permTask.objective,
+                  customInstructions: overseer.settings.customInstructions,
                   ...this.outboundOptions(),
                   signal: controller.signal
                 });
@@ -1951,6 +1955,42 @@ export class Runtime {
                 failingChecks: ws.latestFailingChecks?.length || 0,
                 source: 'controller',
               });
+            }
+          }
+          // Proactive Overseer mid-run trajectory coaching every 6 turns on long non-fixture runs
+          if (!stalled.fixtureId && stalled.calls >= 6 && stalled.calls % 6 === 0 && (stalled.routing?.lastOverseerCoachCall || 0) < stalled.calls) {
+            const overseer = this._resolveOverseer();
+            if (overseer && overseer.settings.autoCoachLongRuns && overseer.provider.id !== stalled.providerId) {
+              const ev = this._overseerEvidence(id, stalled);
+              const coach = await coachTrajectory({
+                provider: overseer.provider,
+                backupProviders: overseer.backupProviders,
+                task: stalled,
+                candidates: this._overseerCandidateBriefs(stalled),
+                failingChecks: (stalled.routing?.probeProgress?.failing || []).slice(0, 6),
+                recentToolTrace: ev.recentToolTrace,
+                modifiedFiles: ev.modifiedFiles,
+                customInstructions: overseer.settings.customInstructions,
+                signal: controller.signal,
+                ...this.outboundOptions()
+              });
+              if (this._current(id, epoch, controller.signal) && coach.ok) {
+                this.store.updateTask(id, current => {
+                  current.routing ||= {};
+                  current.routing.lastOverseerCoachCall = stalled.calls;
+                  if (coach.guidance && coach.status !== 'on_track') current.routing.overseerGuidance = coach.guidance;
+                  return current;
+                }, 'overseer.coached', {
+                  overseerId: coach.providerId || overseer.provider.id,
+                  ...(coach.failoverFrom ? { failoverFrom: coach.failoverFrom } : {}),
+                  status: coach.status,
+                  diagnosis: coach.diagnosis,
+                  reason: coach.reason,
+                  nextActions: coach.nextActions,
+                  hasGuidance: Boolean(coach.guidance && coach.status !== 'on_track'),
+                  calls: stalled.calls
+                });
+              }
             }
           }
           if (snapshot.snapshotHash !== after.snapshotHash) {
@@ -2208,6 +2248,7 @@ export class Runtime {
             backupProviders: overseer.backupProviders,
             objective: task.routing?.originalObjective || task.objective,
             replyText: response.text,
+            customInstructions: overseer.settings.customInstructions,
             ...this.outboundOptions(),
             signal: controller.signal
           });
@@ -2218,12 +2259,13 @@ export class Runtime {
               ...(verdict.failoverFrom ? { failoverFrom: verdict.failoverFrom } : {}),
               providerId: task.providerId,
               classification: verdict.classification,
+              confidence: verdict.confidence,
               isRefusal: verdict.isRefusal,
               reason: verdict.reason
             });
             if (verdict.isRefusal) {
               if (task.policy?.learning !== false && !this.getPrivacy().settings.ephemeralSession) {
-                const sig = extractDeclineSignature(response.text);
+                const sig = verdict.extractedSignature || extractDeclineSignature(response.text);
                 if (sig) this.store.recordRefusalPattern({ signature: sig, source: 'overseer_judge', providerId: task.providerId });
               }
               await this._recover(id, epoch, {
@@ -2234,6 +2276,51 @@ export class Runtime {
                 retryable: true
               });
               continue;
+            }
+          }
+        }
+      }
+      // Pre-finish Quality & Completeness Audit (when Quality Guard or Full Co-Pilot posture is active)
+      if (!task.fixtureId && !task.planMode && task.crewMember?.role !== 'challenger' && response.finish === 'done'
+        && typeof response.text === 'string' && response.text.trim()
+        && task.calls < (task.policy?.maxCalls || 0)
+        && (task.routing?.overseerAuditedContract || 0) !== (task.contractVersion || 1)) {
+        const overseer = this._resolveOverseer();
+        if (overseer && overseer.settings.autoAuditCompletion && overseer.provider.id !== task.providerId) {
+          const ev = this._overseerEvidence(id, task);
+          const hasSubstance = ev.modifiedFiles.length > 0 || ev.recentToolTrace.length > 0 || String(task.objective || '').length >= 80;
+          if (hasSubstance) {
+            const audit = await auditCompletion({
+              provider: overseer.provider,
+              backupProviders: overseer.backupProviders,
+              task,
+              replyText: response.text,
+              modifiedFiles: ev.modifiedFiles,
+              recentToolTrace: ev.recentToolTrace,
+              customInstructions: overseer.settings.customInstructions,
+              ...this.outboundOptions(),
+              signal: controller.signal
+            });
+            if (!this._current(id, epoch, controller.signal)) break;
+            if (audit.ok) {
+              this.store.updateTask(id, current => {
+                current.routing ||= {};
+                current.routing.overseerAuditedContract = current.contractVersion || 1;
+                if (audit.verdict === 'needs_work' && audit.guidance) {
+                  current.routing.overseerGuidance = audit.guidance;
+                }
+                return current;
+              }, 'overseer.audited', {
+                overseerId: audit.providerId || overseer.provider.id,
+                ...(audit.failoverFrom ? { failoverFrom: audit.failoverFrom } : {}),
+                verdict: audit.verdict,
+                completenessScore: audit.completenessScore,
+                gaps: audit.gaps,
+                reason: audit.reason
+              });
+              if (audit.verdict === 'needs_work' && audit.guidance) {
+                continue;
+              }
             }
           }
         }
@@ -2747,14 +2834,24 @@ export class Runtime {
         const consultKey = `${fingerprint}:${diagnosis.category}`;
         if (overseer && overseer.settings.autoUnblockStuck && !task.routing?.overseerConsulted?.[consultKey]) {
           const previewRankings = rankCandidates({ task, providers: this._privacyFilteredProviders(), learning: task.policy.learning !== false ? this.getLearning() : null, diagnosis, requiredTools: this._requiredTools(task), fingerprint });
-          const failingChecks = (task.routing?.probeProgress?.failing || incident.checks || []).slice(0, 6);
+          const enrichedCandidates = previewRankings.map(c => {
+            const p = this.providers.get(c.id);
+            const obs = task.policy.learning !== false ? providerObservedStats(this.getLearning(), c.id, providerIdentity(c.id, p || {})) : null;
+            return { ...c, label: p?.label || c.id, tier: p?.tier || 'standard', ...(obs ? { observed: obs } : {}) };
+          });
+          const failingChecks = (task.routing?.probeProgress?.failing || incident.checks || []).slice(0, 8);
+          const ev = this._overseerEvidence(id, task);
           const advice = await adviseUnblock({
             provider: overseer.provider,
             backupProviders: overseer.backupProviders,
             task,
             incident,
-            candidates: previewRankings,
+            candidates: enrichedCandidates,
             failingChecks,
+            recentToolTrace: ev.recentToolTrace,
+            modifiedFiles: ev.modifiedFiles,
+            priorStrategies: ev.priorStrategies,
+            customInstructions: overseer.settings.customInstructions,
             signal,
             ...this.outboundOptions()
           });
@@ -2769,14 +2866,18 @@ export class Runtime {
               if (!current.routing.originalObjective) current.routing.originalObjective = current.objective;
               if (advice.reframedObjective) current.objective = advice.reframedObjective;
               if (advice.guidance) current.routing.overseerGuidance = advice.guidance;
+              if (advice.recommendedEffort) current.effort = normalizeEffort(advice.recommendedEffort);
               current.routing.lastRecoveryStrategy = { modelFamily: inferModelFamily(current.providerId), strategy: advice.strategy };
               return current;
             }, 'overseer.advised', {
               overseerId: advice.providerId || overseer.provider.id,
               ...(advice.failoverFrom ? { failoverFrom: advice.failoverFrom } : {}),
               strategy: advice.strategy,
+              rootCause: advice.rootCause,
               reason: advice.reason,
+              nextActions: advice.nextActions,
               recommendedProviderId: advice.recommendedProviderId,
+              recommendedEffort: advice.recommendedEffort,
               hasReframe: Boolean(advice.reframedObjective),
               hasGuidance: Boolean(advice.guidance)
             });
@@ -3074,6 +3175,7 @@ export class Runtime {
     const learning = this.getLearning();
     return {
       settings,
+      postures: OVERSEER_POSTURES,
       ready: Boolean(settings.enabled && ((selected && selected.allowedByPolicy) || (backup && backup.allowedByPolicy))),
       selectedProvider: selected,
       backupProvider: backup,
@@ -3396,6 +3498,83 @@ export class Runtime {
   deleteRefusalPattern(signature = null) {
     const learning = this.store.deleteRefusalPattern(signature);
     return { refusalPatterns: learning.refusalPatterns || [] };
+  }
+  _overseerEvidence(id, task) {
+    const events = this.getRecentEvents(id, 80);
+    const toolTrace = [];
+    const modifiedSet = new Set();
+    for (const ev of events) {
+      if (ev.type === 'tool.completed') {
+        const res = ev.data?.result || {};
+        const ok = ev.data?.status !== 'failed' && res.ok !== false;
+        const p = res.path || res.to || null;
+        if (ok && p && ['repo.write', 'repo.patch', 'repo.move', 'repo.delete'].includes(ev.data?.name)) {
+          modifiedSet.add(p);
+        }
+        toolTrace.push({
+          tool: ev.data?.name || 'tool',
+          ok,
+          ...(p ? { path: p } : {}),
+          ...(res.error?.code ? { errorCode: res.error.code, error: String(res.error.message || '').slice(0, 140) } : {})
+        });
+      }
+    }
+    const priorStrategies = [...new Set((task?.routing?.attempts || []).map(a => a?.strategy).filter(Boolean))];
+    return {
+      recentToolTrace: toolTrace.slice(-10),
+      modifiedFiles: [...modifiedSet].slice(0, 20),
+      priorStrategies
+    };
+  }
+  _overseerCandidateBriefs(task) {
+    const ids = Array.isArray(task?.providers) ? task.providers : [];
+    return ids.map(pid => {
+      const p = this.providers.get(pid);
+      return { id: pid, label: p?.label || pid, excluded: !p || p.available === false || p.closed ? 'unavailable' : null };
+    });
+  }
+  async consultOverseer(id, { question = '' } = {}) {
+    if (this.closed) throw fault('RUNTIME_CLOSED', 'Runtime is closed.');
+    const task = this.getTask(id);
+    const overseer = this._resolveOverseer();
+    if (!overseer) {
+      throw Object.assign(new Error('Overseer is not enabled or no privacy-allowed Overseer model is available.'), { code: 'OVERSEER_UNAVAILABLE', status: 400 });
+    }
+    const ev = this._overseerEvidence(id, task);
+    const advice = await coachTrajectory({
+      provider: overseer.provider,
+      backupProviders: overseer.backupProviders,
+      task,
+      question: String(question || '').slice(0, 600),
+      candidates: this._overseerCandidateBriefs(task),
+      failingChecks: (task.routing?.probeProgress?.failing || task.verification?.checks?.filter(c => c.status !== 'pass') || []).slice(0, 8),
+      recentToolTrace: ev.recentToolTrace,
+      modifiedFiles: ev.modifiedFiles,
+      customInstructions: overseer.settings.customInstructions,
+      ...this.outboundOptions()
+    });
+    if (!advice.ok) {
+      throw Object.assign(new Error(advice.error || 'Overseer consultation failed.'), { code: advice.blocked ? 'PRIVACY_BLOCKED' : 'OVERSEER_FAILED', status: advice.blocked ? 403 : 502 });
+    }
+    const updated = this.store.updateTask(id, current => {
+      current.routing ||= {};
+      if (advice.guidance) current.routing.overseerGuidance = advice.guidance;
+      if (advice.recommendedEffort) current.effort = normalizeEffort(advice.recommendedEffort);
+      current.routing.lastOverseerCoachCall = current.calls || 0;
+      return current;
+    }, 'overseer.coached', {
+      overseerId: advice.providerId || overseer.provider.id,
+      ...(advice.failoverFrom ? { failoverFrom: advice.failoverFrom } : {}),
+      manual: true,
+      status: advice.status,
+      diagnosis: advice.diagnosis,
+      reason: advice.reason,
+      nextActions: advice.nextActions,
+      recommendedProviderId: advice.recommendedProviderId,
+      recommendedEffort: advice.recommendedEffort,
+      hasGuidance: Boolean(advice.guidance)
+    });
+    return { ok: true, advice, task: updated };
   }
   updateOverseer(patch = {}) {
     const current = this.getOverseer().settings;

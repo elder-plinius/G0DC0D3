@@ -4,7 +4,7 @@ import { promises as fs } from 'node:fs';
 import { Readable } from 'node:stream';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { looksAmbiguousEvasion, judgeAmbiguousReply, adviseUnblock } from '../src/overseer.mjs';
+import { looksAmbiguousEvasion, judgeAmbiguousReply, adviseUnblock, auditCompletion, coachTrajectory, normalizeOverseerSettings } from '../src/overseer.mjs';
 import { emptyLearning, applyStrategyObservation, bestStrategyForFamily, applyObservations, providerObservedStats } from '../src/learning.mjs';
 import { buildModelGroups } from '../src/model-groups.mjs';
 import { detectRefusal, providerIdentity } from '../src/routing.mjs';
@@ -318,6 +318,119 @@ test('HTTP Pin/Demote feedback, learned 0ms refusal signatures, and 10/10 self-o
     await app.close();
     p1.close();
     p2.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('Overseer 2.0: supervision postures, custom directives, pre-finish completeness audit, and on-demand /overseer-consult', async () => {
+  // 1. Posture preset normalization & customInstructions sanitization
+  const active = normalizeOverseerSettings({ enabled: true, providerId: 'ollama:neon-4', posture: 'active', customInstructions: 'Reject TODO stubs.\x00' });
+  assert.equal(active.posture, 'active');
+  assert.equal(active.autoAuditCompletion, true);
+  assert.equal(active.autoCoachLongRuns, false);
+  assert.equal(active.customInstructions, 'Reject TODO stubs.');
+
+  const proactive = normalizeOverseerSettings({ posture: 'proactive' }, active);
+  assert.equal(proactive.posture, 'proactive');
+  assert.equal(proactive.autoAuditCompletion, true);
+  assert.equal(proactive.autoCoachLongRuns, true);
+
+  // 2. Pre-finish completeness audit catches stub output and triggers a 1-shot finishing pass
+  const dir = await fs.mkdtemp(path.join(tmpdir(), 'g0d-overseer-v2-'));
+  const workDir = path.join(dir, 'work');
+  await fs.mkdir(workDir, { recursive: true });
+
+  let workerCalls = 0;
+  let sawAuditGuidance = '';
+  const worker = makeStub('worker:coder', [
+    () => {
+      workerCalls++;
+      return { type: 'message', text: 'Here is a stub: // TODO: implement the rest of the parser.', finish: 'done' };
+    },
+    ctx => {
+      workerCalls++;
+      sawAuditGuidance = String(ctx.task.overseerGuidance || '');
+      return { type: 'message', text: 'Implemented full parser with zero TODOs and verified edge cases.', finish: 'done' };
+    }
+  ]);
+
+  let sawCustomDirective = false;
+  const overseerModel = makeStub('ollama:neon-4', [
+    // Call 1: pre-finish auditCompletion -> catches TODO stub!
+    ctx => {
+      sawCustomDirective = String(ctx.task.objective || '').includes('Reject TODO stubs');
+      return {
+        type: 'message',
+        text: JSON.stringify({
+          verdict: 'needs_work',
+          completenessScore: 35,
+          gaps: ['Left a // TODO placeholder instead of implementing the parser.'],
+          guidance: 'Replace the TODO stub with the complete working parser before finishing.',
+          reason: 'Worker stopped with a TODO placeholder.'
+        }),
+        finish: 'done'
+      };
+    },
+    // Call 2: on-demand POST /api/tasks/:id/overseer-consult -> coachTrajectory
+    () => ({
+      type: 'message',
+      text: JSON.stringify({
+        status: 'on_track',
+        diagnosis: 'Parser implementation is complete and verified.',
+        guidance: 'Add boundary fuzz tests for empty frames if expanding scope.',
+        nextActions: ['Add empty-frame test', 'Run full test suite'],
+        reason: 'Clean completion with clear follow-up suggestion.'
+      }),
+      finish: 'done'
+    })
+  ]);
+
+  const app = await createApp({
+    dataDir: dir,
+    providers: new Map([['worker:coder', worker], ['ollama:neon-4', overseerModel]]),
+    auth: false,
+    startScheduler: false
+  });
+  try {
+    const patchRes = await dispatch(app, {
+      method: 'PATCH',
+      url: '/api/overseer',
+      body: { enabled: true, providerId: 'ollama:neon-4', posture: 'active', customInstructions: 'Reject TODO stubs.' }
+    });
+    assert.equal(patchRes.status, 200);
+    assert.equal(patchRes.json.settings.autoAuditCompletion, true);
+    assert.ok(Array.isArray(patchRes.json.postures) && patchRes.json.postures.length === 3);
+
+    const task = await app.runtime.createTask({
+      title: 'Overseer Completeness Gate Test',
+      objective: 'Implement the complete binary frame parser module with zero placeholders and full edge-case handling.',
+      workspace: workDir,
+      workspaceKind: 'conversation',
+      providers: ['worker:coder'],
+      acceptance: { mode: 'owner' },
+      policy: { mode: 'adaptive', maxAttempts: 4, maxCalls: 8 }
+    });
+    const finished = await app.runtime.run(task.id);
+    assert.equal(finished.status, 'completed');
+    assert.equal(workerCalls, 2);
+    assert.equal(sawCustomDirective, true);
+    assert.match(sawAuditGuidance, /Replace the TODO stub/);
+    const evs = app.runtime.getEvents(task.id);
+    assert.ok(evs.some(e => e.type === 'overseer.audited' && e.data.verdict === 'needs_work' && e.data.completenessScore === 35));
+
+    // 3. On-demand POST /api/tasks/:id/overseer-consult
+    const consult = await dispatch(app, {
+      method: 'POST',
+      url: `/api/tasks/${task.id}/overseer-consult`,
+      body: { question: 'What should we verify next?' }
+    });
+    assert.equal(consult.status, 200);
+    assert.equal(consult.json.ok, true);
+    assert.equal(consult.json.advice.status, 'on_track');
+    assert.equal(consult.json.advice.nextActions.length, 2);
+    assert.ok(app.runtime.getEvents(task.id).some(e => e.type === 'overseer.coached' && e.data.manual === true));
+  } finally {
+    await app.close();
     await fs.rm(dir, { recursive: true, force: true });
   }
 });

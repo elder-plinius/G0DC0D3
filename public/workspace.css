@@ -8239,6 +8239,47 @@ body.browser-open.sidebar-collapsed .browser-dock { grid-column: 2; }
   color: #b91c1c;
 }
 
+/* Overseer 2.0 Posture selector, Custom Directives & Consult button */
+.overseer-posture-wrap { display: grid; gap: 5px; margin: 6px 0; }
+.overseer-posture-label { font: 600 .66rem/1.2 var(--mono); text-transform: uppercase; letter-spacing: .06em; color: var(--text-muted); }
+.overseer-posture-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+.overseer-posture-btn {
+  padding: 5px 6px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel-soft);
+  color: var(--text-secondary);
+  font-size: .72rem;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: center;
+  transition: border-color .15s ease, background .15s ease, color .15s ease;
+}
+.overseer-posture-btn:hover:not(:disabled) { color: var(--text); }
+.overseer-posture-btn.active {
+  border-color: var(--violet, #a78bfa);
+  background: color-mix(in srgb, var(--violet, #a78bfa) 16%, var(--panel));
+  color: var(--text);
+  font-weight: 600;
+}
+.overseer-posture-btn:disabled { opacity: .5; cursor: not-allowed; }
+.overseer-posture-help { margin: 0; font-size: .71rem; line-height: 1.35; }
+.overseer-consult-btn { width: 100%; justify-content: center; font-size: .75rem; padding: 6px 10px; margin-top: 4px; }
+.overseer-directives-field { display: grid; gap: 6px; margin-top: 8px; }
+.overseer-directives-field label { font-size: .78rem; font-weight: 600; color: var(--text); }
+.overseer-directives-field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+  font: 400 .78rem/1.45 var(--font);
+}
+.overseer-directives-actions { display: flex; justify-content: flex-end; }
+
 /* Sounds & Notifications Settings */
 .alerts-pack-row {
   flex-direction: column;

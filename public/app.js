@@ -2825,6 +2825,14 @@ function renderOverseerEdge() {
   ].join('');
   const patternCount = (data.refusalPatterns || []).length;
   const stratCount = (data.strategyStats || []).length;
+  const postures = Array.isArray(data.postures) && data.postures.length ? data.postures : [
+    { id: 'reactive', label: 'Unblock Only', description: 'Zero idle cost — steps in on soft refusals, loops & check plateaus.' },
+    { id: 'active', label: 'Quality Guard', description: 'Adds pre-finish stub & completeness audit before workers finish.' },
+    { id: 'proactive', label: 'Full Co-Pilot', description: 'Adds mid-run trajectory coaching on long 6+ turn runs.' },
+  ];
+  const curPosture = s.posture || (s.autoCoachLongRuns ? 'proactive' : s.autoAuditCompletion ? 'active' : 'reactive');
+  const curPostureDesc = postures.find(p => p.id === curPosture)?.description || '';
+  const canConsult = Boolean(data.ready && selectedId && !overseerBusy);
   const nextHtml = `
     <div class="overseer-pop-row">
       <div class="overseer-pop-status">
@@ -2837,10 +2845,20 @@ function renderOverseerEdge() {
       <label class="overseer-pop-field"><span>Primary Overseer</span><select id="overseer-pop-primary" ${overseerBusy ? 'disabled' : ''}>${primaryOpts}</select></label>
       <label class="overseer-pop-field"><span>Backup Failover</span><select id="overseer-pop-backup" ${overseerBusy || !s.providerId ? 'disabled' : ''}>${backupOpts}</select></label>
     </div>
-    <div class="overseer-pop-checks">
-      <label class="check-setting"><input type="checkbox" id="overseer-pop-judge" ${s.autoJudgeAmbiguous !== false ? 'checked' : ''} ${overseerBusy || !s.providerId ? 'disabled' : ''}> Judge ambiguous refusals</label>
-      <label class="check-setting"><input type="checkbox" id="overseer-pop-unblock" ${s.autoUnblockStuck !== false ? 'checked' : ''} ${overseerBusy || !s.providerId ? 'disabled' : ''}> Unblock loops &amp; plateaus</label>
+    <div class="overseer-posture-wrap">
+      <span class="overseer-posture-label">Supervision Mode</span>
+      <div class="overseer-posture-row" role="group" aria-label="Overseer supervision mode">
+        ${postures.map(p => `<button type="button" class="overseer-posture-btn ${p.id === curPosture ? 'active' : ''}" data-overseer-posture="${escapeHTML(p.id)}" aria-pressed="${p.id === curPosture ? 'true' : 'false'}" ${overseerBusy || !s.providerId ? 'disabled' : ''}>${escapeHTML(p.label)}</button>`).join('')}
+      </div>
+      <p class="field-help overseer-posture-help">${escapeHTML(curPostureDesc)}</p>
     </div>
+    <div class="overseer-pop-checks">
+      <label class="check-setting"><input type="checkbox" id="overseer-pop-judge" ${s.autoJudgeAmbiguous !== false ? 'checked' : ''} ${overseerBusy || !s.providerId ? 'disabled' : ''}> Judge ambiguous soft refusals</label>
+      <label class="check-setting"><input type="checkbox" id="overseer-pop-unblock" ${s.autoUnblockStuck !== false ? 'checked' : ''} ${overseerBusy || !s.providerId ? 'disabled' : ''}> Unblock loops &amp; check plateaus</label>
+      <label class="check-setting"><input type="checkbox" id="overseer-pop-audit" ${s.autoAuditCompletion ? 'checked' : ''} ${overseerBusy || !s.providerId ? 'disabled' : ''}> Pre-finish stub &amp; completeness audit</label>
+      <label class="check-setting"><input type="checkbox" id="overseer-pop-coach" ${s.autoCoachLongRuns ? 'checked' : ''} ${overseerBusy || !s.providerId ? 'disabled' : ''}> Mid-run long-task trajectory coaching</label>
+    </div>
+    ${canConsult ? '<button type="button" class="button button-secondary overseer-consult-btn" data-overseer-consult-now>✦ Consult Overseer on Current Task</button>' : ''}
     <div class="overseer-pop-foot">
       <span class="field-help">${patternCount} learned 0ms ${patternCount === 1 ? 'pattern' : 'patterns'} · ${stratCount} ${stratCount === 1 ? 'bandit' : 'bandits'}</span>
       <div class="overseer-pop-foot-actions">
@@ -2850,7 +2868,7 @@ function renderOverseerEdge() {
     </div>`;
   if (body.dataset.lastHtml === nextHtml) return;
   const focusedEl = document.activeElement;
-  if (!overseerBusy && focusedEl && body.contains(focusedEl) && focusedEl.tagName === 'SELECT') {
+  if (!overseerBusy && focusedEl && body.contains(focusedEl) && ['SELECT', 'TEXTAREA', 'INPUT'].includes(focusedEl.tagName)) {
     body.dataset.pendingHtml = nextHtml;
     return;
   }
@@ -2914,13 +2932,20 @@ function renderOverseerSection() {
     ? `<div class="overseer-learned"><div class="overseer-patterns-head"><span class="service-group-label">Learned Soft-Refusal Signatures (0ms Local Detector)</span><button type="button" class="button button-quiet svc-action-btn" data-clear-refusal-patterns>Clear all</button></div><div class="strategy-chips">${patternRows.map(p => `<span class="meta-chip pattern-chip" title="${escapeHTML(`Caught ${p.hits || 1}x via ${p.source || 'local'}`)}">“${escapeHTML(p.signature.slice(0, 48))}${p.signature.length > 48 ? '…' : ''}” <button type="button" class="pattern-del-btn" data-delete-refusal-pattern="${escapeHTML(p.signature)}" aria-label="Remove learned refusal signature">×</button></span>`).join('')}</div></div>`
     : '';
   const agencyTip = !hasHighAgency
-    ? '<p class="field-help">Tip: Connect a high-agency/uncensored model (Nous Portal Hermes-4-405B, Venice Uncensored, neon-4, or local Ollama) so the Overseer itself never balks when unblocking tough tasks.</p>'
+    ? '<p class="field-help">Tip: Connect a high-agency/uncensored model (Gemini 4 Neon, Hermes-4-405B, Venice Uncensored, or local Ollama) so the Overseer itself never balks when unblocking tough tasks.</p>'
     : '';
+  const postures = Array.isArray(data.postures) && data.postures.length ? data.postures : [
+    { id: 'reactive', label: 'Unblock Only', description: 'Zero overhead on normal turns — steps in only on soft refusals, doom loops, check plateaus, or Auto permissions.' },
+    { id: 'active', label: 'Quality Guard', description: 'Adds a pre-finish completeness & stub audit before workers finalize code or multi-step deliverables.' },
+    { id: 'proactive', label: 'Full Co-Pilot', description: 'Adds periodic mid-run trajectory coaching on long 6+ turn tasks alongside unblocking and quality audits.' },
+  ];
+  const curPosture = s.posture || (s.autoCoachLongRuns ? 'proactive' : s.autoAuditCompletion ? 'active' : 'reactive');
+  const curPostureDesc = postures.find(p => p.id === curPosture)?.description || '';
   const nextSectionHtml = `
     <div class="overseer-head">
       <div>
-        <h3>Overseer &amp; Self-Optimization Agent</h3>
-        <p class="field-help">Pin a high-agency/uncensored overseer (e.g. neon-4, Hermes 4 405B, Venice Uncensored, or local Ollama) with an automatic backup if the primary overseer declines or times out. Idle at zero cost during normal turns.</p>
+        <h3>Overseer &amp; Supervisory Meta-Controller</h3>
+        <p class="field-help">Read-only architectural supervisor with automatic backup failover. Diagnoses soft refusals, unblocks loops &amp; check plateaus using live tool traces, audits completeness before finishing, and coaches long multi-turn runs.</p>
       </div>
       <div class="overseer-head-actions">${quickEnableBtn}${statusPill}</div>
     </div>
@@ -2936,15 +2961,31 @@ function renderOverseerSection() {
         </label>
       </div>
       ${agencyTip}
+      <div class="overseer-posture-wrap">
+        <span class="overseer-posture-label">Supervision Mode</span>
+        <div class="overseer-posture-row" role="group" aria-label="Overseer supervision mode">
+          ${postures.map(p => `<button type="button" class="overseer-posture-btn ${p.id === curPosture ? 'active' : ''}" data-overseer-posture="${escapeHTML(p.id)}" aria-pressed="${p.id === curPosture ? 'true' : 'false'}" ${overseerBusy || !s.providerId ? 'disabled' : ''}>${escapeHTML(p.label)}</button>`).join('')}
+        </div>
+        <p class="field-help overseer-posture-help">${escapeHTML(curPostureDesc)}</p>
+      </div>
       <div class="overseer-toggles">
-        <label class="check-setting"><input type="checkbox" id="overseer-judge-toggle" ${s.autoJudgeAmbiguous !== false ? 'checked' : ''} ${overseerBusy || !s.providerId ? 'disabled' : ''}> Judge ambiguous soft refusals</label>
-        <label class="check-setting"><input type="checkbox" id="overseer-unblock-toggle" ${s.autoUnblockStuck !== false ? 'checked' : ''} ${overseerBusy || !s.providerId ? 'disabled' : ''}> Unblock refusals, doom loops &amp; plateaus</label>
+        <label class="check-setting"><input type="checkbox" id="overseer-judge-toggle" ${s.autoJudgeAmbiguous !== false ? 'checked' : ''} ${overseerBusy || !s.providerId ? 'disabled' : ''}> Judge ambiguous soft refusals (+ learn 0ms signatures)</label>
+        <label class="check-setting"><input type="checkbox" id="overseer-unblock-toggle" ${s.autoUnblockStuck !== false ? 'checked' : ''} ${overseerBusy || !s.providerId ? 'disabled' : ''}> Unblock refusals, doom loops &amp; check plateaus with root-cause plans</label>
+        <label class="check-setting"><input type="checkbox" id="overseer-audit-toggle" ${s.autoAuditCompletion ? 'checked' : ''} ${overseerBusy || !s.providerId ? 'disabled' : ''}> Pre-finish completeness &amp; stub quality audit (blocks half-done work)</label>
+        <label class="check-setting"><input type="checkbox" id="overseer-coach-toggle" ${s.autoCoachLongRuns ? 'checked' : ''} ${overseerBusy || !s.providerId ? 'disabled' : ''}> Mid-run trajectory coaching every 6 turns on long tasks</label>
+      </div>
+      <div class="overseer-directives-field">
+        <label for="overseer-custom-instructions">Custom Overseer Directives <span class="field-help">(optional — injected into every Overseer audit, unblock &amp; coaching prompt)</span></label>
+        <textarea id="overseer-custom-instructions" rows="2" maxlength="1200" placeholder="e.g. Reject TODO stubs or mock implementations, prefer minimal surgical patches, and require passing unit tests before finishing." ${overseerBusy ? 'disabled' : ''}>${escapeHTML(s.customInstructions || '')}</textarea>
+        <div class="overseer-directives-actions">
+          <button type="button" class="button button-secondary svc-action-btn" data-save-overseer-directives ${overseerBusy ? 'disabled' : ''}>Save directives</button>
+        </div>
       </div>
     </div>
     ${learnedHtml}${patternsHtml}`;
   if (container.dataset.lastHtml === nextSectionHtml) return;
   const focusedEl = document.activeElement;
-  if (!overseerBusy && focusedEl && container.contains(focusedEl) && focusedEl.tagName === 'SELECT') {
+  if (!overseerBusy && focusedEl && container.contains(focusedEl) && ['SELECT', 'TEXTAREA', 'INPUT'].includes(focusedEl.tagName)) {
     container.dataset.pendingHtml = nextSectionHtml;
     return;
   }
@@ -3727,8 +3768,10 @@ function eventDescription(event) {
     'recovery.attempt': ['Recovery attempt', '↻', 'warning', data.strategy ?? data.reason ?? ''],
     'providers.updated': ['Route saved', '⇄', '', 'Next request · ' + (providerById(data.providerId)?.label || data.providerId || '')],
     'model.switched': [data.reason === 'VENICE_SERVICE_OUTAGE' ? 'Venice outage · model switched' : data.reason === 'RACE_GODMODE_RECOVERY' ? 'G0DM0D3 recovered Ultra-Plinian' : 'Model switched', '⇄', '', `${String(data.from || '').split(/,\s*/).filter(Boolean).map(pid => providerById(pid)?.label || pid).join(' + ') || 'Previous model'} → ${providerById(data.to)?.label || data.to || data.providerId || 'Next model'}`],
-    'overseer.advised': ['Overseer unblocked', '✦', '', `${providerById(data.overseerId)?.label || data.overseerId || 'Overseer'} (${data.strategy || 'advice'}): ${data.reason || ''}`],
+    'overseer.advised': ['Overseer unblocked', '✦', '', `${providerById(data.overseerId)?.label || data.overseerId || 'Overseer'} (${data.strategy || 'advice'}): ${data.rootCause || data.reason || ''}`],
     'overseer.judged': ['Overseer classified reply', '✦', '', `${data.classification || 'checked'} — ${data.reason || ''}`],
+    'overseer.audited': [data.verdict === 'needs_work' ? 'Overseer caught gaps before finish' : 'Overseer verified completion', '✦', data.verdict === 'needs_work' ? 'warning' : 'success', `${Number.isFinite(data.completenessScore) ? `${data.completenessScore}% · ` : ''}${data.reason || ''}`],
+    'overseer.coached': [data.manual ? 'Overseer consulted' : 'Overseer trajectory check', '✦', data.status === 'stuck' ? 'warning' : 'info', `${data.status || 'checked'} — ${data.diagnosis || data.reason || ''}`],
     'owner.refusal_reported': ['Refusal flagged by you', '↻', '', data.reason || 'Retrying with recovery / fallback.'],
     'routing.reframe_retry': ['G0DM0D3 reframed retry', '↻', '', `${providerById(data.providerId)?.label || data.providerId || 'Model'} (pass ${data.pass || 1} · ${data.level || 'reframe'})`],
     'evaluation.completed': ['Evaluation recorded', '◎', (data.status ?? data.result?.status) === 'pass' ? 'success' : 'warning', data.status ? humanize(data.status) : data.result?.status ? humanize(data.result.status) : 'Inspect the check results for this snapshot.'],
@@ -3924,7 +3967,7 @@ function renderTimeline(events, total, task) {
       const sa = event.data;
       const key = `subagent-${event.id ?? event.seq}`;
       messages.push(`<details class="subagent-card" data-disclosure="${escapeHTML(key)}" ${openDetails.has(key) ? 'open' : ''}><summary class="subagent-card-summary"><span class="subagent-badge">${escapeHTML(sa.role || 'explore')}</span><span class="subagent-provider">${escapeHTML(providerById(sa.providerId)?.label || sa.providerId || 'model')}</span><span class="subagent-meta">${escapeHTML(`${sa.calls || 1} call${sa.calls === 1 ? '' : 's'} · ${duration(sa.durationMs || 0)}`)}</span></summary><div class="subagent-card-body">${formatMessageBody(sa.summary, true)}</div></details>`);
-    } else if (['model.switched', 'providers.updated', 'routing.retry_scheduled', 'routing.strategy_changed', 'routing.profile_changed', 'routing.reframe_retry', 'overseer.advised', 'overseer.judged', 'owner.refusal_reported', 'permission.auto_approved', 'hook.blocked'].includes(event.type)) {
+    } else if (['model.switched', 'providers.updated', 'routing.retry_scheduled', 'routing.strategy_changed', 'routing.profile_changed', 'routing.reframe_retry', 'overseer.advised', 'overseer.judged', 'overseer.audited', 'overseer.coached', 'owner.refusal_reported', 'permission.auto_approved', 'hook.blocked'].includes(event.type)) {
       flush();
       const description = eventDescription(event);
       messages.push(`<div class="recovery-event"><span aria-hidden="true">↻</span><span><strong>${escapeHTML(description[0])}</strong> ${escapeHTML(description[3])}</span></div>`);
@@ -7707,9 +7750,24 @@ $('#overseer-section')?.addEventListener('change', event => {
   }
   if (event.target?.id === 'overseer-unblock-toggle') {
     updateOverseerSettings({ autoUnblockStuck: event.target.checked });
+    return;
+  }
+  if (event.target?.id === 'overseer-audit-toggle') {
+    updateOverseerSettings({ autoAuditCompletion: event.target.checked });
+    return;
+  }
+  if (event.target?.id === 'overseer-coach-toggle') {
+    updateOverseerSettings({ autoCoachLongRuns: event.target.checked });
   }
 });
 $('#overseer-section')?.addEventListener('click', event => {
+  const postureBtn = event.target.closest('[data-overseer-posture]');
+  if (postureBtn) { updateOverseerSettings({ posture: postureBtn.dataset.overseerPosture }); return; }
+  if (event.target.closest('[data-save-overseer-directives]')) {
+    const val = $('#overseer-custom-instructions')?.value || '';
+    updateOverseerSettings({ customInstructions: val });
+    return;
+  }
   const enableRec = event.target.closest('[data-enable-recommended-overseer]');
   if (enableRec) { updateOverseerSettings({ providerId: enableRec.dataset.enableRecommendedOverseer, enabled: true }); return; }
   if (event.target.closest('[data-clear-refusal-patterns]')) { deleteLearnedPattern(null); return; }
@@ -8431,6 +8489,27 @@ $('#overseer-popover')?.addEventListener('click', async event => {
     else if (val) await updateOverseerSettings({ enabled: true, providerId: val });
     return;
   }
+  const postureBtn = event.target.closest('[data-overseer-posture]');
+  if (postureBtn) {
+    await updateOverseerSettings({ posture: postureBtn.dataset.overseerPosture });
+    return;
+  }
+  if (event.target.closest('[data-overseer-consult-now]')) {
+    if (!selectedId || overseerBusy) return;
+    overseerBusy = true;
+    renderOverseerEdge();
+    try {
+      const res = await api(`/api/tasks/${encodeURIComponent(selectedId)}/overseer-consult`, { method: 'POST', body: JSON.stringify({}) });
+      toast(`✦ Overseer (${res.advice?.status || 'reviewed'}): ${res.advice?.diagnosis || 'Guidance injected for next turn.'}`);
+      await refresh();
+    } catch (error) {
+      toast(error.message || 'Overseer consultation failed.');
+    } finally {
+      overseerBusy = false;
+      renderOverseerEdge();
+    }
+    return;
+  }
   if (event.target.closest('[data-overseer-pop-clear]')) {
     try {
       const res = await api('/api/learning/patterns', { method: 'DELETE', body: '{}' });
@@ -8457,12 +8536,16 @@ $('#overseer-popover')?.addEventListener('change', event => {
     updateOverseerSettings({ autoJudgeAmbiguous: t.checked });
   } else if (t.id === 'overseer-pop-unblock') {
     updateOverseerSettings({ autoUnblockStuck: t.checked });
+  } else if (t.id === 'overseer-pop-audit') {
+    updateOverseerSettings({ autoAuditCompletion: t.checked });
+  } else if (t.id === 'overseer-pop-coach') {
+    updateOverseerSettings({ autoCoachLongRuns: t.checked });
   }
 });
 const flushPendingOverseerHtml = (el) => {
   if (!el?.dataset?.pendingHtml || overseerBusy) return;
   const focusedEl = document.activeElement;
-  if (focusedEl && el.contains(focusedEl) && focusedEl.tagName === 'SELECT') return;
+  if (focusedEl && el.contains(focusedEl) && ['SELECT', 'TEXTAREA', 'INPUT'].includes(focusedEl.tagName)) return;
   const next = el.dataset.pendingHtml;
   delete el.dataset.pendingHtml;
   el.dataset.lastHtml = next;
