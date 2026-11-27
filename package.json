@@ -23,6 +23,7 @@
     "test": "node --test test/*.test.mjs",
     "bench": "node bench/run.mjs",
     "bench:self-opt": "node bench/self-opt-eval.mjs",
+    "bench:bakeoff": "node bench/harness-bakeoff.mjs",
     "smoke": "node bench/smoke-e2e.mjs",
     "cli": "node src/cli.mjs"
   }

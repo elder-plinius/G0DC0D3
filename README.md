@@ -12,7 +12,7 @@
   <img src="https://img.shields.io/badge/runtime-Node_22.13%2B-339933?style=flat-square" alt="Node.js 22.13+">
   <img src="https://img.shields.io/badge/npm_deps-0-d97706?style=flat-square" alt="Zero npm dependencies">
   <img src="https://img.shields.io/badge/telemetry-ZERO-dc2626?style=flat-square" alt="Zero Telemetry">
-  <img src="https://img.shields.io/badge/tests-334%2F334-16a34a?style=flat-square" alt="334 tests passing">
+  <img src="https://img.shields.io/badge/tests-336%2F336-16a34a?style=flat-square" alt="336 tests passing">
 </p>
 
 <p align="center">
@@ -43,7 +43,7 @@ cd G0DC0D3
 npm start
 ```
 
-CLI: `node src/cli.mjs --help` · Tests: `npm test` · Eval: `npm run bench:self-opt`
+CLI: `node src/cli.mjs --help` · Tests: `npm test` · Eval: `npm run bench:self-opt` · Bakeoff: `npm run bench:bakeoff -- --dry-run`
 
 ---
 
