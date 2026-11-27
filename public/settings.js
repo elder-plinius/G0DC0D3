@@ -886,19 +886,35 @@ const settingsTask = () => settingsTaskId && selectedData?.task?.id === settings
 function renderTaskSettings(task) {
   const commands = (selectedData?.operations || []).filter(op => op.name === 'process.run');
   const panel = $('#panel-commands');
-  if (panel) panel.innerHTML = commands.length ? `<div class="terminal-emulator" role="log" aria-label="Terminal output">${commands.map(op => {
-    const result = op.result || {};
-    const cmd = op.args?.command || 'command';
-    const exitCode = result.exitCode ?? '?';
-    const ok = exitCode === 0;
-    const stdout = result.stdout || '';
-    const stderr = result.stderr || '';
-    const errMsg = result.error?.message || '';
-    const output = [stdout, stderr, errMsg].filter(Boolean).join('\n') || (op.status === 'dispatching' ? 'Running…' : '');
-    const ansi = typeof ansiToHtml === 'function' ? ansiToHtml(output) : escapeHTML(output);
-    const copyBtn = output ? `<button type="button" class="terminal-copy-btn" data-copy-text="${escapeHTML(output)}" aria-label="Copy command output">Copy</button>` : '';
-    return `<div class="terminal-block ${ok ? '' : 'terminal-error'}"><div class="terminal-prompt"><span class="terminal-ps1">$</span><span class="terminal-cmd">${escapeHTML(cmd)}</span><span class="terminal-exit ${ok ? 'exit-ok' : 'exit-fail'}">${escapeHTML(String(exitCode))}</span>${result.durationMs != null ? `<span class="terminal-duration">${escapeHTML(duration(result.durationMs))}</span>` : ''}${copyBtn}</div>${output ? `<pre class="terminal-output">${ansi}</pre>` : ''}</div>`;
-  }).join('')}</div>` : '<div class="panel-empty"><div><h3>No commands yet.</h3><p>Shell commands executed by the agent appear here.</p><button type="button" class="button button-secondary" data-command-settings>Command settings</button></div></div>';
+  if (panel) {
+    const nextHtml = commands.length ? `<div class="terminal-emulator" role="log" aria-label="Terminal output">${commands.map(op => {
+      const result = op.result || {};
+      const cmd = op.args?.command || 'command';
+      const exitCode = result.exitCode ?? '?';
+      const ok = exitCode === 0;
+      const stdout = result.stdout || '';
+      const stderr = result.stderr || '';
+      const errMsg = result.error?.message || '';
+      const output = [stdout, stderr, errMsg].filter(Boolean).join('\n') || (op.status === 'dispatching' ? 'Running…' : '');
+      const ansi = typeof ansiToHtml === 'function' ? ansiToHtml(output) : escapeHTML(output);
+      const copyBtn = output ? `<button type="button" class="terminal-copy-btn" data-copy-text="${escapeHTML(output)}" aria-label="Copy command output">Copy</button>` : '';
+      return `<div class="terminal-block ${ok ? '' : 'terminal-error'}"><div class="terminal-prompt"><span class="terminal-ps1">$</span><span class="terminal-cmd">${escapeHTML(cmd)}</span><span class="terminal-exit ${ok ? 'exit-ok' : 'exit-fail'}">${escapeHTML(String(exitCode))}</span>${result.durationMs != null ? `<span class="terminal-duration">${escapeHTML(duration(result.durationMs))}</span>` : ''}${copyBtn}</div>${output ? `<pre class="terminal-output">${ansi}</pre>` : ''}</div>`;
+    }).join('')}</div>` : '<div class="panel-empty"><div><h3>No commands yet.</h3><p>Shell commands executed by the agent appear here.</p><button type="button" class="button button-secondary" data-command-settings>Command settings</button></div></div>';
+    if (panel.dataset.lastHtml !== nextHtml) {
+      const liveBlock = ACTIVE.has(task?.status) ? panel.querySelector('.terminal-live-block') : null;
+      if (liveBlock) liveBlock.remove();
+      panel.dataset.lastHtml = nextHtml;
+      panel.innerHTML = nextHtml;
+      if (liveBlock) {
+        let emu = panel.querySelector('.terminal-emulator');
+        if (!emu) {
+          panel.innerHTML = '<div class="terminal-emulator" role="log" aria-label="Terminal output"></div>';
+          emu = panel.querySelector('.terminal-emulator');
+        }
+        emu?.append(liveBlock);
+      }
+    }
+  }
   if ($('#command-count')) setText('#command-count', commands.length);
   if ($('#settings-dialog').open) {
     syncSettingsLocks();
@@ -965,14 +981,16 @@ function renderPermissionsSection() {
 
   const list = $('#permission-rules-list');
   if (!list) return;
-  if (!activeRules.length) {
-    list.innerHTML = '<p class="field-help permission-rules-empty">No blocking rules active — allowed tools execute automatically.</p>';
-    return;
+  const nextListHtml = !activeRules.length
+    ? '<p class="field-help permission-rules-empty">No blocking rules active — allowed tools execute automatically.</p>'
+    : `<ul class="permission-rule-items">${activeRules.map((rule, idx) => {
+        const action = String(rule.action || 'ask').toLowerCase();
+        return `<li class="permission-rule-item"><span class="perm-action-pill perm-action-${escapeHTML(action)}">${escapeHTML(action.toUpperCase())}</span><code class="perm-rule-tool">${escapeHTML(rule.tool)}</code>${rule.pattern ? `<code class="perm-rule-pattern">${escapeHTML(rule.pattern)}</code>` : ''}${rule.reason ? `<span class="perm-rule-reason">${escapeHTML(rule.reason)}</span>` : ''}<button type="button" class="icon-button perm-rule-del" data-delete-perm-rule="${idx}" aria-label="Remove rule" title="Remove rule">×</button></li>`;
+      }).join('')}</ul>`;
+  if (list.dataset.lastHtml !== nextListHtml) {
+    list.dataset.lastHtml = nextListHtml;
+    list.innerHTML = nextListHtml;
   }
-  list.innerHTML = `<ul class="permission-rule-items">${activeRules.map((rule, idx) => {
-    const action = String(rule.action || 'ask').toLowerCase();
-    return `<li class="permission-rule-item"><span class="perm-action-pill perm-action-${escapeHTML(action)}">${escapeHTML(action.toUpperCase())}</span><code class="perm-rule-tool">${escapeHTML(rule.tool)}</code>${rule.pattern ? `<code class="perm-rule-pattern">${escapeHTML(rule.pattern)}</code>` : ''}${rule.reason ? `<span class="perm-rule-reason">${escapeHTML(rule.reason)}</span>` : ''}<button type="button" class="icon-button perm-rule-del" data-delete-perm-rule="${idx}" aria-label="Remove rule" title="Remove rule">×</button></li>`;
-  }).join('')}</ul>`;
 }
 
 async function saveCustomPermissionRules(nextRules, toastMsg) {

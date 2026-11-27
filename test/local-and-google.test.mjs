@@ -5,7 +5,7 @@ import { Readable } from 'node:stream';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createCliConnections } from '../src/provider-connections.mjs';
-import { AntigravityCliProvider, antigravitySubscriptionEnvironment } from '../src/providers.mjs';
+import { AntigravityCliProvider, antigravitySubscriptionEnvironment, catalogMessages } from '../src/providers.mjs';
 import { createLocalProviderManager, normalizeHuggingFaceRef } from '../src/local-providers.mjs';
 import { createApp } from '../src/server.mjs';
 import { Runtime } from '../src/runtime.mjs';
@@ -329,8 +329,21 @@ esac
       assert.equal(tSub.text, 'Fresh turn reply');
       assert.equal(provider.sessions.get('task-kv-1')?.conversationId, 'conv-abc');
 
+      // Turn 5: appended user follow-up increments contractVersion (1 -> 2) -> MUST stay warm on --conversation!
+      const t5 = await provider.turn({
+        task: { ...baseTask, calls: 5, recoveries: 1, contractVersion: 2, followups: [{ id: 'f1', message: 'Now add edge-case tests too.' }] },
+        files,
+        history: [
+          { seq: 1, type: 'task.created', data: {} },
+          { seq: 4, type: 'recovery.started', data: {} },
+          { seq: 5, type: 'user.message', data: { id: 'f1', message: 'Now add edge-case tests too.' } },
+        ],
+        tools: [],
+      });
+      assert.equal(t5.text, 'Warm cache reply');
+
       const lines = (await fs.readFile(logFile, 'utf8')).trim().split('\n');
-      assert.equal(lines.length, 6); // T1 fresh, T2 warm, T3 warm fail + T3 fresh fallback, T4 fresh after recovery, TSub stateless
+      assert.equal(lines.length, 7); // T1 fresh, T2 warm, T3 warm fail + T3 fresh fallback, T4 fresh after recovery, TSub stateless, T5 warm follow-up
       assert.equal(lines[0].includes('--conversation'), false);
       assert.equal(lines[1].includes('--conversation conv-abc'), true);
       const len1 = Number(lines[0].match(/LEN:(\d+)/)[1]);
@@ -340,9 +353,63 @@ esac
       assert.equal(lines[3].includes('--conversation'), false);
       assert.equal(lines[4].includes('--conversation'), false);
       assert.equal(lines[5].includes('--conversation'), false);
+      assert.equal(lines[6].includes('--conversation conv-abc'), true);
     } finally {
       await provider.close();
     }
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('AntigravityCliProvider.draft returns raw JSON for Overseer and catalogMessages applies overseerGuidance & skips audited drafts', async () => {
+  const dir = await fs.mkdtemp(path.join(tmpdir(), 'g0d-agy-draft-'));
+  try {
+    const fakeAgy = path.join(dir, 'fake-agy');
+    await fs.writeFile(fakeAgy, `#!/bin/sh
+cat > /dev/null
+printf '%s\\n' '{"status":"SUCCESS","response":"{\\"verdict\\":\\"approved\\",\\"completenessScore\\":98,\\"gaps\\":[],\\"guidance\\":\\"\\",\\"reason\\":\\"Complete.\\"}","usage":{"input_tokens":120,"output_tokens":28}}'
+`);
+    await fs.chmod(fakeAgy, 0o755);
+    const provider = new AntigravityCliProvider({
+      id: 'antigravity-cli:gemini-4-neon',
+      label: 'Gemini 4 Neon',
+      model: 'gemini-4-neon',
+      binary: fakeAgy,
+    });
+    try {
+      const res = await provider.draft([
+        { role: 'system', content: 'Return JSON only.' },
+        { role: 'user', content: 'Audit this reply.' },
+      ], undefined, 256);
+      assert.equal(res.type, 'message');
+      const parsed = JSON.parse(res.text);
+      assert.equal(parsed.verdict, 'approved');
+      assert.equal(parsed.completenessScore, 98);
+    } finally {
+      await provider.close();
+    }
+
+    const msgs = catalogMessages({
+      task: {
+        id: 't-cat',
+        objective: 'Build parser',
+        workspaceKind: 'conversation',
+        overseerGuidance: 'Replace TODO placeholders with real parsing code.',
+      },
+      history: [
+        { seq: 1, type: 'model.response', data: { response: { type: 'message', text: '// TODO: stub' } } },
+        { seq: 2, type: 'overseer.audited', data: { verdict: 'needs_work', reason: 'Stub detected' } },
+        { seq: 3, type: 'model.response', data: { response: { type: 'message', text: 'Full parser implemented.' } } },
+      ],
+      tools: [],
+      files: [],
+    });
+    const sysText = msgs.filter(m => m.role === 'system').map(m => m.content).join('\n');
+    const asstTexts = msgs.filter(m => m.role === 'assistant').map(m => m.content);
+    assert.match(sysText, /Replace TODO placeholders with real parsing code/);
+    assert.equal(asstTexts.some(t => t.includes('// TODO: stub')), false);
+    assert.equal(asstTexts.some(t => t.includes('Full parser implemented.')), true);
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }

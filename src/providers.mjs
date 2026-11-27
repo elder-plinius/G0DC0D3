@@ -249,6 +249,10 @@ export function catalogMessages(context, { enableTools = false, aliases = null }
   if (typeof metaBrief === 'string' && metaBrief.trim() && !context.task?.fixtureId) {
     systemContent += `\n\n${metaBrief.trim().slice(0, 2400)}`;
   }
+  const overseerGuide = context.task?.overseerGuidance || context.task?.routing?.overseerGuidance;
+  if (typeof overseerGuide === 'string' && overseerGuide.trim()) {
+    systemContent += `\n\n[Overseer Supervisory Guidance — follow directly on this turn]\n${overseerGuide.trim().slice(0, 800)}`;
+  }
   const messages = [{ role: 'system', content: systemContent }, { role: 'user', content: context.task.objective }];
   // Persisted follow-ups survive compaction. Ledger order resolves turns
   // sharing a millisecond, including an edited message after a rewind.
@@ -270,7 +274,7 @@ export function catalogMessages(context, { enableTools = false, aliases = null }
   const overseerRefusedSeqs = new Set();
   for (let i = 0; i < context.history.length; i++) {
     const ev = context.history[i];
-    if (ev.type === 'overseer.judged' && ev.data?.isRefusal) {
+    if ((ev.type === 'overseer.judged' && ev.data?.isRefusal) || (ev.type === 'overseer.audited' && ev.data?.verdict === 'needs_work')) {
       for (let j = i - 1; j >= 0; j--) {
         if (context.history[j].type === 'model.response') {
           overseerRefusedSeqs.add(context.history[j].seq);
@@ -1936,13 +1940,26 @@ function runSubprocessPlanner(owner, { args, cwd, signal, turnTimeoutMs, timeout
       }
       outChunks.push(chunk);
     });
-    // Provider stderr can contain account data. Never forward it to a task, browser or log.
-    child.stderr.resume();
+    // Capture bounded stderr ONLY for internal error classification — never forward raw stderr to tasks/UI/logs.
+    let errSnippet = '';
+    child.stderr.on('data', chunk => {
+      if (errSnippet.length < 4096) errSnippet += chunk.toString('utf8');
+    });
     child.on('close', code => {
       closed = true; clearTimeout(killTimer); owner.children.delete(record); resolveExit();
-      code === 0
-        ? done(null, Buffer.concat(outChunks).toString('utf8'))
-        : done(Object.assign(new Error(`${label} CLI could not complete the request. Check CLI sign-in, model access and usage limits.`), { code: 'provider_configuration', retryable: false }));
+      if (code === 0) {
+        done(null, Buffer.concat(outChunks).toString('utf8'));
+        return;
+      }
+      const lowerErr = errSnippet.toLowerCase();
+      if (/429|rate[\s_-]?limit|quota|too many requests|resource_exhausted|overloaded|temporarily unavailable/i.test(lowerErr)) {
+        done(Object.assign(new Error(`${label} CLI is temporarily rate-limited or overloaded.`), { code: 'rate_limit', retryable: true }));
+      } else if (/not logged in|unauthenticated|sign[\s-]?in|login required|expired token|invalid credentials/i.test(lowerErr)) {
+        const hint = label === 'Antigravity' ? ' Run `agy login` to re-authenticate.' : '';
+        done(Object.assign(new Error(`${label} CLI authentication required.${hint}`), { code: 'provider_configuration', retryable: false }));
+      } else {
+        done(Object.assign(new Error(`${label} CLI could not complete the request. Check CLI sign-in, model access and usage limits.`), { code: 'provider_configuration', retryable: false }));
+      }
     });
     child.stdin.on('error', () => {});
     if (signal?.aborted) { abort(); return; }
@@ -2084,6 +2101,46 @@ export class AntigravityCliProvider extends CodexProvider {
     this.inFlightSessions.clear();
     return super.close();
   }
+  async draft(messages = [], signal, _maxTokens = 1000, _params = {}, { privacy = DEFAULT_PRIVACY_SETTINGS, onOutbound, extraSecrets } = {}) {
+    if (this.closed) return { type: 'error', code: 'PROVIDER_CLOSED', message: 'Antigravity CLI provider is closed.', retryable: false };
+    if (signal?.aborted) return { type: 'error', code: 'cancelled', message: 'Antigravity CLI request cancelled.', retryable: false };
+    const gate = checkProviderPrivacyAllowed(this, privacy);
+    if (!gate.allowed) {
+      onOutbound?.({ providerId: this.id, host: 'cli:antigravity', protocol: this.kind, zdrClass: gate.posture.zdrClass, zdrFlags: [], secretsRedacted: 0, blocked: true, reason: gate.message });
+      return { type: 'error', code: gate.code, message: gate.message, retryable: false };
+    }
+    const cleaned = privacy.redactOutboundSecrets === false ? { value: messages, count: 0 } : redactOutboundValue(messages, extraSecrets || environmentSecrets());
+    onOutbound?.({ providerId: this.id, host: 'cli:antigravity', protocol: this.kind, zdrClass: gate.posture.zdrClass, zdrFlags: ['cli:telemetry-disabled'], secretsRedacted: cleaned.count, blocked: false });
+    const promptText = [
+      'CRITICAL: Planner/advisory text-only call. DO NOT invoke any Antigravity CLI built-in tools.',
+      ...(Array.isArray(cleaned.value) ? cleaned.value.map(m => `${String(m?.role || 'user').toUpperCase()}:\n${String(m?.content || '')}`) : [String(cleaned.value || '')])
+    ].join('\n\n');
+    const working = await fs.mkdtemp(path.join(tmpdir(), 'g0d-agy-draft-'));
+    try {
+      const env = antigravitySubscriptionEnvironment(cliEnvironments.get(this));
+      const args = ['--output-format', 'json', '--disable-slash-commands', '--sandbox'];
+      if (this.model) args.push('--model', this.model);
+      const output = await runSubprocessPlanner(this, { args, cwd: working, signal, timeoutOverrideMs: 60000, input: promptText, env, label: 'Antigravity' });
+      let text = output.trim();
+      let parsed = null;
+      try { parsed = JSON.parse(text); } catch {
+        const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
+        if (fb >= 0 && lb > fb) { try { parsed = JSON.parse(text.slice(fb, lb + 1)); } catch {} }
+      }
+      if (parsed && typeof parsed === 'object') {
+        if (typeof parsed.status === 'string' && parsed.status && parsed.status !== 'SUCCESS') {
+          return { type: 'error', code: 'provider_configuration', message: `Antigravity CLI returned status ${String(parsed.status).slice(0, 40)}`, retryable: false };
+        }
+        if (typeof parsed.response === 'string') text = parsed.response;
+        else if (typeof parsed.text === 'string') text = parsed.text;
+      }
+      return { type: 'message', text, finish: 'done', usage: parsed?.usage || null, model: this.model || 'antigravity-cli-default' };
+    } catch (err) {
+      return { type: 'error', code: err?.code || 'provider_error', message: err?.message || 'Antigravity CLI draft failed.', retryable: Boolean(err?.retryable) };
+    } finally {
+      await fs.rm(working, { recursive: true, force: true });
+    }
+  }
   async turn(context, { signal, turnTimeoutMs, privacy = DEFAULT_PRIVACY_SETTINGS, onOutbound, extraSecrets } = {}) {
     if (this.closed) throw Object.assign(new Error('Antigravity CLI provider is closed'), { code: 'PROVIDER_CLOSED', retryable: false });
     if (signal?.aborted) throw Object.assign(new Error('Antigravity CLI bridge cancelled'), { code: 'cancelled' });
@@ -2107,18 +2164,27 @@ export class AntigravityCliProvider extends CodexProvider {
     const contractSig = antigravityContractSignature(context);
     const validConvId = id => typeof id === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(id);
 
+    const followups = Array.isArray(context.task?.followups) ? context.task.followups : [];
+    const followupsPrefixHash = count => createHash('sha256').update(JSON.stringify(followups.slice(0, count).map(f => ({ id: f?.id, message: f?.message })))).digest('hex');
+
     // Only stateful multi-turn tasks with durable event history participate in session reuse.
     // Stateless subagent/overseer/compactor turns (history: []) and overlapping calls never touch this.sessions.
     const canManageSession = Boolean(taskId && history.length > 0 && maxEventSeq > 0 && !this.inFlightSessions.has(taskId));
     if (canManageSession) this.inFlightSessions.add(taskId);
 
     const cached = canManageSession ? this.sessions.get(taskId) : null;
+    const followupsAppendOnly = Boolean(
+      cached
+      && followups.length >= (cached.followupsCount || 0)
+      && followupsPrefixHash(cached.followupsCount || 0) === cached.followupsHash
+    );
     const canReuseSession = Boolean(
       canManageSession
       && cached
       && validConvId(cached.conversationId)
       && cached.strategy === strategy
-      && cached.contractVersion === contractVersion
+      && contractVersion >= cached.contractVersion
+      && followupsAppendOnly
       && cached.recoveries === recoveries
       && cached.toolSig === toolSig
       && cached.contractSig === contractSig
@@ -2212,7 +2278,8 @@ export class AntigravityCliProvider extends CodexProvider {
           this.sessions.set(taskId, {
             conversationId: result.nextConversationId,
             lastEventSeq: maxEventSeq,
-            followupsCount: Array.isArray(context.task?.followups) ? context.task.followups.length : 0,
+            followupsCount: followups.length,
+            followupsHash: followupsPrefixHash(followups.length),
             fileSnapshots,
             strategy,
             contractVersion,

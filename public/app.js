@@ -14,6 +14,7 @@ let selectedData = null;
 let currentTab = 'timeline';
 let hasConnected = false;
 let refreshing = false;
+let refreshQueued = false;
 let selectionVersion = 0;
 let actionBusy = false;
 let createBusy = false;
@@ -29,6 +30,10 @@ let streamText = '';
 let streamThinking = '';
 let streamThinkingExpanded = false;
 let streamToolName = '';
+let streamTurnStartedAt = 0;
+let liveElapsedTimer = null;
+const tabScrollPositions = new Map();
+let overseerDirectivesDraft = null;
 let routeBusy = false;
 let detailSignature = '';
 let listSignature = '';
@@ -606,9 +611,13 @@ function renderComposer() {
     sendBtn.setAttribute('aria-label', canStop ? 'Stop generation' : busy ? 'Sending message' : queueing ? ($('#composer-delivery')?.value === 'steer' ? 'Steer current turn' : 'Queue next message') : 'Send message');
     sendBtn.title = canStop ? 'Stop current turn (Esc)' : 'Send message';
     sendBtn.setAttribute('aria-busy', String(busy));
-    sendBtn.innerHTML = canStop
-      ? '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="5" y="5" width="10" height="10" rx="2" fill="currentColor" stroke="none"/></svg>'
-      : '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 15V4M5 9l5-5 5 5"/></svg>';
+    const iconMode = canStop ? 'stop' : 'send';
+    if (sendBtn.dataset.iconMode !== iconMode) {
+      sendBtn.dataset.iconMode = iconMode;
+      sendBtn.innerHTML = canStop
+        ? '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="5" y="5" width="10" height="10" rx="2" fill="currentColor" stroke="none"/></svg>'
+        : '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 15V4M5 9l5-5 5 5"/></svg>';
+    }
   }
   $('#composer-project').disabled = loading || createBusy;
   $('#composer-model').disabled = loading || createBusy;
@@ -1857,6 +1866,29 @@ window.submitConclaveMission = function submitConclaveMission(promptText) {
   return false;
 };
 
+function closeAllPopovers(exceptId = null) {
+  if (exceptId !== 'theme-popover') {
+    $('#theme-popover')?.classList.add('hidden');
+    $('#theme-toggle')?.setAttribute('aria-expanded', 'false');
+  }
+  if (exceptId !== 'overseer-popover') {
+    $('#overseer-popover')?.classList.add('hidden');
+    $('#overseer-toggle')?.setAttribute('aria-expanded', 'false');
+  }
+  if (exceptId !== 'ultra-popover') {
+    $('#ultra-popover')?.classList.add('hidden');
+    $('#composer-race')?.setAttribute('aria-expanded', 'false');
+  }
+  if (exceptId !== 'effort-popover') {
+    $('#effort-popover')?.classList.add('hidden');
+    $('#composer-effort')?.setAttribute('aria-expanded', 'false');
+  }
+  if (exceptId !== 'composer-options') {
+    setComposerOptionsOpen(false);
+  }
+}
+window.closeAllPopovers = closeAllPopovers;
+
 function dismissDrawers() {
   let changed = false;
   if (document.body.classList.contains('sidebar-open')) {
@@ -1867,12 +1899,7 @@ function dismissDrawers() {
     document.body.classList.remove('inspector-open');
     changed = true;
   }
-  $('#theme-popover')?.classList.add('hidden');
-  $('#theme-toggle')?.setAttribute('aria-expanded', 'false');
-  $('#overseer-popover')?.classList.add('hidden');
-  $('#overseer-toggle')?.setAttribute('aria-expanded', 'false');
-  $('#ultra-popover')?.classList.add('hidden');
-  $('#effort-popover')?.classList.add('hidden');
+  closeAllPopovers();
   if (changed) syncPanels();
 }
 
@@ -1926,12 +1953,20 @@ function setInspector(open, focus = false) {
 
 function chooseTab(name) {
   if (!['timeline', 'changes', 'files', 'commands', 'activity'].includes(name)) return;
+  const scroller = $('#task-content');
+  const scopeKey = selectedId || 'welcome';
   const changed = currentTab !== name;
+  if (changed && scroller) {
+    tabScrollPositions.set(`${scopeKey}:${currentTab}`, scroller.scrollTop);
+  }
   currentTab = name;
   $$('.workspace-tab').forEach((element) => { const active = element.dataset.tab === name; element.classList.toggle('active', active); element.setAttribute('aria-selected', String(active)); element.tabIndex = active ? 0 : -1; });
   ['timeline', 'changes', 'files', 'commands', 'activity'].forEach((tab) => setVisible(`#panel-${tab}`, tab === name));
-  $('#task-content').setAttribute('aria-label', `${name === 'timeline' ? 'Conversation' : humanize(name)} content`);
-  if (changed) $('#task-content').scrollTop = 0;
+  scroller?.setAttribute('aria-label', `${name === 'timeline' ? 'Conversation' : humanize(name)} content`);
+  if (changed && scroller) {
+    const saved = tabScrollPositions.get(`${scopeKey}:${name}`);
+    scroller.scrollTop = typeof saved === 'number' ? saved : 0;
+  }
   updateLatestButton();
 }
 
@@ -2748,6 +2783,7 @@ async function updateOverseerSettings(patch) {
   try {
     overseerData = await api('/api/overseer', { method: 'PATCH', body: JSON.stringify(patch) });
     state.overseer = overseerData;
+    if (Object.hasOwn(patch, 'customInstructions')) overseerDirectivesDraft = null;
     const msg = overseerData.settings?.enabled && overseerData.selectedProvider
       ? `Overseer active: ${overseerData.selectedProvider.label}.`
       : 'Overseer settings saved.';
@@ -2832,7 +2868,7 @@ function renderOverseerEdge() {
   ];
   const curPosture = s.posture || (s.autoCoachLongRuns ? 'proactive' : s.autoAuditCompletion ? 'active' : 'reactive');
   const curPostureDesc = postures.find(p => p.id === curPosture)?.description || '';
-  const canConsult = Boolean(data.ready && selectedId && !overseerBusy);
+  const showConsult = Boolean(data.ready && selectedId);
   const nextHtml = `
     <div class="overseer-pop-row">
       <div class="overseer-pop-status">
@@ -2858,7 +2894,7 @@ function renderOverseerEdge() {
       <label class="check-setting"><input type="checkbox" id="overseer-pop-audit" ${s.autoAuditCompletion ? 'checked' : ''} ${overseerBusy || !s.providerId ? 'disabled' : ''}> Pre-finish stub &amp; completeness audit</label>
       <label class="check-setting"><input type="checkbox" id="overseer-pop-coach" ${s.autoCoachLongRuns ? 'checked' : ''} ${overseerBusy || !s.providerId ? 'disabled' : ''}> Mid-run long-task trajectory coaching</label>
     </div>
-    ${canConsult ? '<button type="button" class="button button-secondary overseer-consult-btn" data-overseer-consult-now>✦ Consult Overseer on Current Task</button>' : ''}
+    ${showConsult ? `<button type="button" class="button button-secondary overseer-consult-btn" data-overseer-consult-now ${overseerBusy ? 'disabled' : ''}>${overseerBusy ? '✦ Consulting Overseer…' : '✦ Consult Overseer on Current Task'}</button>` : ''}
     <div class="overseer-pop-foot">
       <span class="field-help">${patternCount} learned 0ms ${patternCount === 1 ? 'pattern' : 'patterns'} · ${stratCount} ${stratCount === 1 ? 'bandit' : 'bandits'}</span>
       <div class="overseer-pop-foot-actions">
@@ -2882,10 +2918,7 @@ function toggleOverseerPopover(force) {
   const btn = $('#overseer-toggle');
   if (!pop) return;
   const open = typeof force === 'boolean' ? force : pop.classList.contains('hidden');
-  if (open) {
-    $('#theme-popover')?.classList.add('hidden');
-    $('#theme-toggle')?.setAttribute('aria-expanded', 'false');
-  }
+  if (open) closeAllPopovers('overseer-popover');
   pop.classList.toggle('hidden', !open);
   btn?.setAttribute('aria-expanded', String(open));
   if (open) {
@@ -2976,9 +3009,10 @@ function renderOverseerSection() {
       </div>
       <div class="overseer-directives-field">
         <label for="overseer-custom-instructions">Custom Overseer Directives <span class="field-help">(optional — injected into every Overseer audit, unblock &amp; coaching prompt)</span></label>
-        <textarea id="overseer-custom-instructions" rows="2" maxlength="1200" placeholder="e.g. Reject TODO stubs or mock implementations, prefer minimal surgical patches, and require passing unit tests before finishing." ${overseerBusy ? 'disabled' : ''}>${escapeHTML(s.customInstructions || '')}</textarea>
+        <textarea id="overseer-custom-instructions" rows="2" maxlength="1200" placeholder="e.g. Reject TODO stubs or mock implementations, prefer minimal surgical patches, and require passing unit tests before finishing." ${overseerBusy ? 'disabled' : ''}>${escapeHTML(overseerDirectivesDraft ?? (s.customInstructions || ''))}</textarea>
         <div class="overseer-directives-actions">
           <button type="button" class="button button-secondary svc-action-btn" data-save-overseer-directives ${overseerBusy ? 'disabled' : ''}>Save directives</button>
+          ${overseerDirectivesDraft !== null && overseerDirectivesDraft !== (s.customInstructions || '') ? '<span class="overseer-directives-dirty">Unsaved changes</span>' : ''}
         </div>
       </div>
     </div>
@@ -3077,7 +3111,10 @@ function renderUltraRouterSection() {
     ['smart', 'Smart Framing (0ms)', 'Instant domain × model-family framing, 100% cache-safe (Recommended).'],
     ['auto_forge', 'Auto-Forge (LLM)', 'Smart framing + live LLM Megaprompt & Arena Judge rubric on complex Turn-1 tasks.']
   ];
-  container.innerHTML = `
+  const prevDetailsOpen = Boolean(container.querySelector('.ultra-json-details')?.open);
+  const focusedInRouter = document.activeElement && container.contains(document.activeElement)
+    && ['TEXTAREA', 'INPUT'].includes(document.activeElement.tagName);
+  const nextRouterHtml = `
     <div class="ultra-router-head">
       <div>
         <h3>Ultra-Plinian Intelligent Router</h3>
@@ -3104,12 +3141,16 @@ function renderUltraRouterSection() {
       <label class="ultra-weight-field"><span>Cost efficiency · <strong>${Math.round(w.cost * 100)}%</strong></span><input type="range" min="0" max="50" step="5" value="${Math.round(w.cost * 100)}" data-router-weight="cost"></label>
     </div>
     ${domains.length ? `<div class="ultra-domain-tabs" role="tablist" aria-label="Task domain leaderboards">${domainTabs}</div>${boardHtml}` : ''}
-    <details class="ultra-json-details">
+    <details class="ultra-json-details"${prevDetailsOpen ? ' open' : ''}>
       <summary>Customize Mega Model Strengths JSON (per-user overrides)</summary>
       <p class="field-help">Override any model's domain scores (0–100) or compliance rating locally. Example: <code>{"claude-opus-5-5":{"compliance":80,"domains":{"swe_coding":100}}}</code></p>
       <textarea id="ultra-benchmarks-json" class="ultra-json-editor" spellcheck="false" aria-label="Custom benchmark JSON overrides">${escapeHTML(customJson)}</textarea>
       <div class="ultra-json-actions"><button type="button" class="button button-secondary" data-router-save-json ${ultraRouterBusy ? 'disabled' : ''}>Save JSON overrides</button></div>
     </details>`;
+  if (focusedInRouter && !ultraRouterBusy) return;
+  if (container.dataset.lastHtml === nextRouterHtml) return;
+  container.dataset.lastHtml = nextRouterHtml;
+  container.innerHTML = nextRouterHtml;
 }
 
 async function setModelPreference(providerId, signal, domain = null) {
@@ -3931,6 +3972,19 @@ function renderTimeline(events, total, task) {
       }
     }
   }
+  const auditedDraftEvents = new Set();
+  for (let idx = 0; idx < conversationEvents.length; idx++) {
+    const ev = conversationEvents[idx];
+    if (ev.type === 'overseer.audited' && ev.data?.verdict === 'needs_work') {
+      for (let prev = idx - 1; prev >= 0; prev--) {
+        if (conversationEvents[prev].type === 'model.response' && !conversationEvents[prev].data?.superseded) {
+          auditedDraftEvents.add(conversationEvents[prev]);
+          break;
+        }
+        if (conversationEvents[prev].type === 'user.message') break;
+      }
+    }
+  }
   for (const event of conversationEvents) {
     const assistantText = event.data?.response?.text || (event.data?.response?.type === 'error' && event.data.replyOutcome ? event.data.response.message || event.data.replyOutcome.label : event.data?.text);
     if (event.type === 'user.message') {
@@ -3950,6 +4004,11 @@ function renderTimeline(events, total, task) {
       flush();
       const id = event.data.providerId;
       const provider = providerById(id);
+      if (auditedDraftEvents.has(event)) {
+        const draftKey = `audited-draft-${event.id ?? event.seq}`;
+        messages.push(`<details class="overseer-audited-draft" data-disclosure="${escapeHTML(draftKey)}" ${openDetails.has(draftKey) ? 'open' : ''}><summary>Earlier draft sent back for revision by Overseer (${escapeHTML(provider ? provider.label : id || 'worker')})</summary><div class="overseer-audited-draft-body">${formatMessageBody(assistantText, true)}</div></details>`);
+        continue;
+      }
       const rawData = event === lastAssistantEvent ? { ...event.data, __isLatestRegeneratable: true } : event.data;
       messages.push(conversationMessage({ role: 'assistant', text: assistantText, time: event.time, provider: provider ? provider.label : id, key: `assistant-${event.id ?? event.seq}`, raw: rawData, outcome: event.data.replyOutcome, thinking: event.data.response?.thinking }, openDetails));
     } else if (event.type === 'router.selected' && event.data?.selected) {
@@ -3967,7 +4026,21 @@ function renderTimeline(events, total, task) {
       const sa = event.data;
       const key = `subagent-${event.id ?? event.seq}`;
       messages.push(`<details class="subagent-card" data-disclosure="${escapeHTML(key)}" ${openDetails.has(key) ? 'open' : ''}><summary class="subagent-card-summary"><span class="subagent-badge">${escapeHTML(sa.role || 'explore')}</span><span class="subagent-provider">${escapeHTML(providerById(sa.providerId)?.label || sa.providerId || 'model')}</span><span class="subagent-meta">${escapeHTML(`${sa.calls || 1} call${sa.calls === 1 ? '' : 's'} · ${duration(sa.durationMs || 0)}`)}</span></summary><div class="subagent-card-body">${formatMessageBody(sa.summary, true)}</div></details>`);
-    } else if (['model.switched', 'providers.updated', 'routing.retry_scheduled', 'routing.strategy_changed', 'routing.profile_changed', 'routing.reframe_retry', 'overseer.advised', 'overseer.judged', 'overseer.audited', 'overseer.coached', 'owner.refusal_reported', 'permission.auto_approved', 'hook.blocked'].includes(event.type)) {
+    } else if (['overseer.advised', 'overseer.audited', 'overseer.coached'].includes(event.type)) {
+      flush();
+      const description = eventDescription(event);
+      const od = event.data || {};
+      const oKey = `overseer-${event.id ?? event.seq}`;
+      const guidance = od.guidance || '';
+      const bullets = Array.isArray(od.nextActions) && od.nextActions.length
+        ? od.nextActions
+        : (Array.isArray(od.missingItems) && od.missingItems.length ? od.missingItems : []);
+      if (guidance || bullets.length) {
+        messages.push(`<details class="overseer-receipt" data-disclosure="${escapeHTML(oKey)}" ${openDetails.has(oKey) ? 'open' : ''}><summary><span aria-hidden="true">✦</span><span class="overseer-receipt-title">${escapeHTML(description[0])}</span><span>${escapeHTML(description[3])}</span></summary><div class="overseer-receipt-body">${guidance ? `<p class="overseer-receipt-guidance">${escapeHTML(guidance)}</p>` : ''}${bullets.length ? `<ul class="overseer-receipt-list">${bullets.slice(0, 6).map(item => `<li>${escapeHTML(item)}</li>`).join('')}</ul>` : ''}</div></details>`);
+      } else {
+        messages.push(`<div class="recovery-event"><span aria-hidden="true">✦</span><span><strong>${escapeHTML(description[0])}</strong> ${escapeHTML(description[3])}</span></div>`);
+      }
+    } else if (['model.switched', 'providers.updated', 'routing.retry_scheduled', 'routing.strategy_changed', 'routing.profile_changed', 'routing.reframe_retry', 'overseer.judged', 'owner.refusal_reported', 'permission.auto_approved', 'hook.blocked'].includes(event.type)) {
       flush();
       const description = eventDescription(event);
       messages.push(`<div class="recovery-event"><span aria-hidden="true">↻</span><span><strong>${escapeHTML(description[0])}</strong> ${escapeHTML(description[3])}</span></div>`);
@@ -4021,7 +4094,10 @@ function renderTimeline(events, total, task) {
           return `<li class="live-trail-item state-${escapeHTML(evState || 'ok')}"><span class="live-trail-icon" aria-hidden="true">${icon}</span><span><strong>${escapeHTML(evTitle)}</strong>${escapeHTML(shortDetail)}</span></li>`;
         }).join('')}</ul>`
       : '';
-    messages.push(`<div class="live-work-card"><div class="live-work-head"><span class="spinner" aria-hidden="true"></span><span class="activity-label">${escapeHTML(phase)}${dots}</span></div>${planHtml}${trailHtml}</div><div id="stream-slot">${streamTaskId === task.id ? buildStreamPreviewHtml(openDetails) : ''}</div>`);
+    const turnAnchorTime = recent?.time ? Date.parse(recent.time) : (streamTurnStartedAt || Date.parse(task.updatedAt) || Date.now());
+    const elapsedSec = Math.max(0, Math.floor((Date.now() - turnAnchorTime) / 1000));
+    const elapsedLabel = elapsedSec >= 60 ? `${Math.floor(elapsedSec / 60)}m ${elapsedSec % 60}s` : `${elapsedSec}s`;
+    messages.push(`<div class="live-work-card"><div class="live-work-head"><span class="spinner" aria-hidden="true"></span><span class="activity-label"><span class="activity-phase-text">${escapeHTML(phase)}</span>${dots}</span><span class="live-work-elapsed" data-turn-started="${escapeHTML(String(turnAnchorTime))}">${escapeHTML(elapsedLabel)}</span></div>${planHtml}${trailHtml}</div><div id="stream-slot">${streamTaskId === task.id ? buildStreamPreviewHtml(openDetails) : ''}</div>`);
   } else if (task.draining) messages.push('<div class="conversation-state">Stopping the previous request…</div>');
   else if (task.status === 'waiting_input' && task.workspaceKind !== 'conversation' && task.followups?.length) messages.push('<div class="conversation-state">Ready for review · checks pending.</div>');
   const lastReplyEvent = conversationEvents.findLast(e => e.type === 'model.response' && !e.data?.superseded && typeof (e.data?.response?.text || e.data?.text) === 'string');
@@ -5897,10 +5973,10 @@ function renderSelected(data, force = false, opts = {}) {
   setVisible('#welcome-links', false);
   setVisible('#task-workspace', true);
   manageStream(task);
-  window.G0DConclave?.syncTask(task);
   window.G0DBrowserLive?.syncTask(task);
   const signature = JSON.stringify(data);
   if (!force && signature === detailSignature) return;
+  window.G0DConclave?.syncTask(task);
   const oldTaskId = $('#selected-id').dataset.fullId;
   const taskChanged = oldTaskId !== task.id;
   const scroller = $('#task-content');
@@ -6008,7 +6084,9 @@ function buildStreamPreviewHtml(openDetails = null) {
 function updateLiveStreamSlot() {
   const slot = $('#stream-slot');
   if (!slot) return;
-  if (!streamText && !streamThinking) { slot.innerHTML = ''; return; }
+  const scroller = $('#task-content');
+  const wasNearBottom = Boolean(scroller && (scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 140));
+  if (!streamText && !streamThinking) { slot.innerHTML = ''; updateLatestButton(); return; }
   const existingThinking = $('.stream-thinking-body', slot);
   const existingCode = $('.stream-code-body', slot);
   const existingText = $('.stream-text:not(.stream-prose)', slot);
@@ -6065,21 +6143,46 @@ function updateLiveStreamSlot() {
       if (streamBody && nearInnerBody) streamBody.scrollTop = streamBody.scrollHeight;
     }
   }
-  const scroller = $('#task-content');
-  if (scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 140) {
+  if (scroller && wasNearBottom) {
     scroller.scrollTop = scroller.scrollHeight;
   }
   updateLatestButton();
 }
 
+function syncLiveElapsedTimer(active) {
+  if (active && !liveElapsedTimer) {
+    liveElapsedTimer = setInterval(() => {
+      const el = $('.live-work-elapsed[data-turn-started]');
+      if (!el) return;
+      const started = Number(el.dataset.turnStarted || 0);
+      if (!started) return;
+      const sec = Math.max(0, Math.floor((Date.now() - started) / 1000));
+      el.textContent = sec >= 60 ? `${Math.floor(sec / 60)}m ${sec % 60}s` : `${sec}s`;
+    }, 1000);
+  } else if (!active && liveElapsedTimer) {
+    clearInterval(liveElapsedTimer);
+    liveElapsedTimer = null;
+  }
+}
+
 function manageStream(task) {
-  const shouldStream = task && (ACTIVE.has(task.status) || window.G0DBrowserLive?.isOpen?.());
+  const isActive = Boolean(task && ACTIVE.has(task.status));
+  syncLiveElapsedTimer(isActive);
+  const shouldStream = Boolean(task && (isActive || window.G0DBrowserLive?.isOpen?.()));
+  if (!isActive && (streamText || streamThinking || streamToolName)) {
+    streamText = '';
+    streamThinking = '';
+    streamToolName = '';
+    const slot = $('#stream-slot');
+    if (slot) slot.innerHTML = '';
+  }
   if (shouldStream && streamTaskId !== task.id) {
     disconnectStream();
     streamTaskId = task.id;
     streamText = '';
     streamThinking = '';
-    streamThinkingExpanded = false;
+    streamThinkingExpanded = Boolean(qolPrefs.expandThinking);
+    streamTurnStartedAt = Date.now();
     try {
       const source = new EventSource(`/api/tasks/${encodeURIComponent(task.id)}/stream`);
       streamSource = source;
@@ -6090,8 +6193,14 @@ function manageStream(task) {
           if (delta.type === 'turn_start') {
             streamText = '';
             streamThinking = '';
-            streamThinkingExpanded = false;
+            streamThinkingExpanded = Boolean(qolPrefs.expandThinking);
             streamToolName = '';
+            streamTurnStartedAt = Date.now();
+            const elapsedEl = $('.live-work-elapsed[data-turn-started]');
+            if (elapsedEl) {
+              elapsedEl.dataset.turnStarted = String(streamTurnStartedAt);
+              elapsedEl.textContent = '0s';
+            }
             updateLiveStreamSlot();
           } else if (delta.type === 'thinking' && delta.text) {
             streamThinking += delta.text;
@@ -6103,8 +6212,11 @@ function manageStream(task) {
             updateLiveStreamSlot();
           } else if (delta.type === 'tool.start') {
             streamToolName = delta.name || '';
-            const indicator = $('.activity-label');
-            if (indicator) indicator.textContent = toolPhaseLabel(delta.name, delta.args);
+            streamText = '';
+            streamThinking = '';
+            updateLiveStreamSlot();
+            const phaseEl = $('.activity-phase-text') || $('.activity-label');
+            if (phaseEl) phaseEl.textContent = toolPhaseLabel(delta.name, delta.args).replace(/…$/, '');
           } else if (delta.type === 'command.chunk' && delta.text) {
             const panel = $('#panel-commands');
             if (panel) {
@@ -6125,8 +6237,8 @@ function manageStream(task) {
             }
           } else if (delta.type === 'tool.completed') {
             streamToolName = '';
-            const indicator = $('.activity-label');
-            if (indicator) indicator.textContent = 'Thinking…';
+            const phaseEl = $('.activity-phase-text') || $('.activity-label');
+            if (phaseEl) phaseEl.textContent = 'Thinking';
             if (delta.ok && ['repo.write', 'repo.patch', 'repo.delete', 'repo.move', 'git.commit', 'task.todo'].includes(delta.name)) {
               setTimeout(refresh, 350);
             }
@@ -6177,6 +6289,8 @@ function disconnectStream() {
   streamThinking = '';
   streamThinkingExpanded = false;
   streamToolName = '';
+  streamTurnStartedAt = 0;
+  syncLiveElapsedTimer(false);
   const slot = $('#stream-slot');
   if (slot) slot.innerHTML = '';
 }
@@ -6251,8 +6365,12 @@ async function selectTask(id) {
 }
 
 async function refresh() {
-  if (refreshing) return;
+  if (refreshing) {
+    refreshQueued = true;
+    return;
+  }
   refreshing = true;
+  refreshQueued = false;
   let reschedule = false;
   try {
     const versionAtStart = selectionVersion;
@@ -6327,7 +6445,10 @@ async function refresh() {
     errorIn('#global-error', new Error(`Cannot reach the local runtime. ${error.message} Retrying automatically.`));
   } finally {
     refreshing = false;
-    if (reschedule) setTimeout(refresh, 150);
+    if (reschedule || refreshQueued) {
+      refreshQueued = false;
+      setTimeout(refresh, 150);
+    }
   }
 }
 
@@ -6591,10 +6712,15 @@ async function runBenchmark() {
 }
 
 function renderAbout() {
+  const el = $('#about-content');
+  if (!el) return;
   const capabilities = Array.isArray(state.capabilities) ? state.capabilities : [];
   const limitations = Array.isArray(state.limitations) ? state.limitations : [];
   const list = (items) => items.map((item) => `<li>${escapeHTML(typeof item === 'string' ? item : pretty(item))}</li>`).join('');
-  $('#about-content').innerHTML = `<p class="modal-intro"><span class="wordmark" role="img" aria-label="GodMode">GODMODƎ</span> ${escapeHTML(state.version ?? 'MVP')} · local-first experimental research demo. Provided AS IS without warranty of any kind.</p><section class="about-section"><h3>LICENSE &amp; LEGAL NOTICE</h3><ul><li><strong>License:</strong> Dual-licensed under GNU AGPL-3.0 (open source) or Commercial license. Bundles Highlight.js (BSD-3-Clause) and GodMode Display / JetBrains Mono (SIL OFL 1.1).</li><li><strong>No Warranty &amp; User Responsibility:</strong> Experimental research software provided &ldquo;AS IS&rdquo; with no warranty or author liability. You are solely responsible for complying with applicable local laws and the Terms of Service of any third-party AI providers, CLI subscriptions, or websites you access.</li><li><strong>Trademarks:</strong> Third-party names (Anthropic, Claude, OpenAI, ChatGPT, Codex, Google, Gemini, GitHub, Copilot, OpenRouter, Venice, Nous, Ollama, Apple) belong to their respective owners; this independent project is not affiliated with or endorsed by them.</li></ul></section><section class="about-section"><h3>REPORTED CAPABILITIES</h3>${capabilities.length ? `<ul>${list(capabilities)}</ul>` : '<p class="small-copy muted">The runtime has not returned a capability list.</p>'}</section><section class="about-section"><h3>REPORTED LIMITATIONS</h3>${limitations.length ? `<ul>${list(limitations)}</ul>` : '<p class="small-copy muted">The runtime has not returned a limitation list. This is an early build; do not infer production guarantees.</p>'}</section><section class="about-section"><h3>EVIDENCE LABELS</h3><ul><li>Scripted providers produce deterministic responses for testing the controller.</li><li>Live providers send requests to the configured model service. Availability is reported by the server.</li><li>Benchmark passes report scripted fault checks, not universal recovery or live coding quality.</li></ul></section>`;
+  const nextHtml = `<p class="modal-intro"><span class="wordmark" role="img" aria-label="GodMode">GODMODƎ</span> ${escapeHTML(state.version ?? 'MVP')} · local-first experimental research demo. Provided AS IS without warranty of any kind.</p><section class="about-section"><h3>LICENSE &amp; LEGAL NOTICE</h3><ul><li><strong>License:</strong> Dual-licensed under GNU AGPL-3.0 (open source) or Commercial license. Bundles Highlight.js (BSD-3-Clause) and GodMode Display / JetBrains Mono (SIL OFL 1.1).</li><li><strong>No Warranty &amp; User Responsibility:</strong> Experimental research software provided &ldquo;AS IS&rdquo; with no warranty or author liability. You are solely responsible for complying with applicable local laws and the Terms of Service of any third-party AI providers, CLI subscriptions, or websites you access.</li><li><strong>Trademarks:</strong> Third-party names (Anthropic, Claude, OpenAI, ChatGPT, Codex, Google, Gemini, GitHub, Copilot, OpenRouter, Venice, Nous, Ollama, Apple) belong to their respective owners; this independent project is not affiliated with or endorsed by them.</li></ul></section><section class="about-section"><h3>REPORTED CAPABILITIES</h3>${capabilities.length ? `<ul>${list(capabilities)}</ul>` : '<p class="small-copy muted">The runtime has not returned a capability list.</p>'}</section><section class="about-section"><h3>REPORTED LIMITATIONS</h3>${limitations.length ? `<ul>${list(limitations)}</ul>` : '<p class="small-copy muted">The runtime has not returned a limitation list. This is an early build; do not infer production guarantees.</p>'}</section><section class="about-section"><h3>EVIDENCE LABELS</h3><ul><li>Scripted providers produce deterministic responses for testing the controller.</li><li>Live providers send requests to the configured model service. Availability is reported by the server.</li><li>Benchmark passes report scripted fault checks, not universal recovery or live coding quality.</li></ul></section>`;
+  if (el.dataset.lastHtml === nextHtml) return;
+  el.dataset.lastHtml = nextHtml;
+  el.innerHTML = nextHtml;
 }
 
 document.addEventListener('click', (event) => {
@@ -7311,9 +7437,15 @@ $('#composer-input').addEventListener('keydown', (event) => {
   } else if (event.shiftKey) {
     return;
   }
-  if (composerAutocompleteState.visible && composerAutocompleteState.shouldDeferEnter()) return;
+  if (composerAutocompleteState.visible && composerAutocompleteState.shouldDeferEnter()) {
+    if (!event.metaKey && !event.ctrlKey) return;
+    composerAutocompleteState.hide?.();
+  }
   event.preventDefault();
-  if (!$('#composer-send').disabled) $('#composer-form').requestSubmit();
+  const sendBtn = $('#composer-send');
+  if (sendBtn && !sendBtn.disabled && sendBtn.dataset.composerStop !== '1') {
+    $('#composer-form').requestSubmit();
+  }
 });
 $('#composer-project').addEventListener('click', () => {
   const task = selectedData?.task;
@@ -7480,8 +7612,7 @@ async function toggleUltraPopover(force) {
   if (!pop) return;
   const open = typeof force === 'boolean' ? force : pop.classList.contains('hidden');
   if (!open) { closeUltraPopover(); return; }
-  closeEffortPopover();
-  window.G0DThemes?.togglePopover?.(false);
+  closeAllPopovers('ultra-popover');
   pop.classList.remove('hidden');
   $('#composer-race')?.setAttribute('aria-expanded', 'true');
   renderUltraPopover();
@@ -7588,8 +7719,7 @@ function toggleEffortPopover(force) {
   if (!pop) return;
   const open = typeof force === 'boolean' ? force : pop.classList.contains('hidden');
   if (!open) { closeEffortPopover(); return; }
-  closeUltraPopover();
-  window.G0DThemes?.togglePopover?.(false);
+  closeAllPopovers('effort-popover');
   pop.classList.remove('hidden');
   $('#composer-effort')?.setAttribute('aria-expanded', 'true');
   renderEffortPopover();
@@ -7760,11 +7890,16 @@ $('#overseer-section')?.addEventListener('change', event => {
     updateOverseerSettings({ autoCoachLongRuns: event.target.checked });
   }
 });
+$('#overseer-section')?.addEventListener('input', event => {
+  if (event.target?.id === 'overseer-custom-instructions') {
+    overseerDirectivesDraft = event.target.value;
+  }
+});
 $('#overseer-section')?.addEventListener('click', event => {
   const postureBtn = event.target.closest('[data-overseer-posture]');
   if (postureBtn) { updateOverseerSettings({ posture: postureBtn.dataset.overseerPosture }); return; }
   if (event.target.closest('[data-save-overseer-directives]')) {
-    const val = $('#overseer-custom-instructions')?.value || '';
+    const val = overseerDirectivesDraft ?? $('#overseer-custom-instructions')?.value ?? '';
     updateOverseerSettings({ customInstructions: val });
     return;
   }
@@ -8436,7 +8571,7 @@ latestResizeObs.observe($('#task-content'));
 if ($('#panel-timeline')) latestResizeObs.observe($('#panel-timeline'));
 $('#jump-latest').addEventListener('click', () => {
   const scroller = $('#task-content');
-  scroller.scrollTop = scroller.scrollHeight;
+  scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' });
   scroller.focus({ preventScroll: true });
   updateLatestButton();
 });
@@ -9081,9 +9216,14 @@ function renderModelPicker() {
       : query
         ? '<p class="model-picker-empty">No matching models. Try another name.</p>'
         : '<p class="model-picker-empty">Connect a provider to choose a model.</p>';
-  $('#model-picker-results').innerHTML = pickerModels.length
-    ? rowsHtml + overflowNote
-    : emptyPickerHtml;
+  const resultsEl = $('#model-picker-results');
+  const nextPickerHtml = pickerModels.length ? rowsHtml + overflowNote : emptyPickerHtml;
+  if (resultsEl && resultsEl.dataset.lastHtml !== nextPickerHtml) {
+    const prevScroll = resultsEl.scrollTop;
+    resultsEl.dataset.lastHtml = nextPickerHtml;
+    resultsEl.innerHTML = nextPickerHtml;
+    resultsEl.scrollTop = prevScroll;
+  }
   highlightPickerModel(Math.max(0, pickerModels.findIndex(p => p.id === previous)));
   positionModelPicker();
 }

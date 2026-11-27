@@ -1220,13 +1220,19 @@
     const race = data?.worktreeRace;
     const show = Boolean(race?.candidates?.length) && activeLens === 'stage' && !forceShowLaunchpad;
     bar.classList.toggle('hidden', !show);
-    if (!show) return;
+    if (!show) {
+      bar.dataset.lastHtml = '';
+      return;
+    }
     const applied = race.appliedCandidateId;
-    bar.innerHTML = `<div class="pda-head"><strong>Code Diff Race</strong><span>${esc(race.repository)} · ${esc(race.branch)}</span>${race.lastCheck ? `<span class="conclave-status-pill tone-${race.lastCheck.ok ? 'sage' : 'coral'}">${race.lastCheck.ok ? 'Checks ✓' : 'Checks ✗'}</span>` : ''}</div><div class="pda-btns">${race.candidates.map(c => {
+    const html = `<div class="pda-head"><strong>Code Diff Race</strong><span>${esc(race.repository)} · ${esc(race.branch)}</span>${race.lastCheck ? `<span class="conclave-status-pill tone-${race.lastCheck.ok ? 'sage' : 'coral'}">${race.lastCheck.ok ? 'Checks ✓' : 'Checks ✗'}</span>` : ''}</div><div class="pda-btns">${race.candidates.map(c => {
       const isApplied = applied === c.id;
       const canAdopt = c.status === 'ready' && !applied;
       return `<button type="button" class="button ${isApplied ? 'button-primary' : 'button-secondary'} pda-btn" data-diff-wt="${esc(race.worktreeId)}" data-diff-adopt="${esc(c.id)}" ${canAdopt ? '' : 'disabled'}>${isApplied ? '✓ Adopted' : c.status === 'failed' ? '✗ Failed' : `✓ Adopt ${esc(c.slot)} (+${c.additions}/-${c.deletions})`}</button>`;
     }).join('')}</div>`;
+    if (bar.dataset.lastHtml === html) return;
+    bar.dataset.lastHtml = html;
+    bar.innerHTML = html;
   }
 
   async function adoptDiffCandidate(worktreeId, candidateId) {
@@ -1327,9 +1333,14 @@
   function renderCards() {
     const el = document.getElementById('conclave-view-cards');
     if (!el) return;
+    const commitCards = (html) => {
+      if (el.dataset.lastHtml === html) return;
+      el.dataset.lastHtml = html;
+      el.innerHTML = html;
+    };
     if (data?.mode === 'arena' && data?.arena) {
       const arena = data.arena;
-      el.innerHTML = `<div class="conclave-cards-grid">${(arena.contenders || []).map(c => `
+      commitCards(`<div class="conclave-cards-grid">${(arena.contenders || []).map(c => `
         <article class="conclave-card ${c.isWinner ? 'is-winner' : ''}">
           <header class="conclave-card-head">
             <span class="conclave-role-chip">Contender ${esc(c.slot)}</span>
@@ -1346,13 +1357,13 @@
           </header>
           <strong class="conclave-card-model">${esc(arena.judge.label)}</strong>
           <p class="conclave-card-tail">${esc(arena.note || 'Evaluates drafts blindly for fidelity, completeness, and clarity.')}</p>
-        </article>` : ''}</div>`;
+        </article>` : ''}</div>`);
       return;
     }
     if (data?.mode === 'diff_race' && data?.worktreeRace?.candidates?.length) {
       const race = data.worktreeRace;
       const applied = race.appliedCandidateId;
-      el.innerHTML = `<div class="conclave-cards-grid">${race.candidates.map(c => {
+      commitCards(`<div class="conclave-cards-grid">${race.candidates.map(c => {
         const isApplied = applied === c.id;
         const canAdopt = c.status === 'ready' && !applied;
         return `<article class="conclave-card ${isApplied ? 'is-winner' : ''}">
@@ -1368,16 +1379,16 @@
             <button type="button" class="button ${isApplied ? 'button-primary' : 'button-secondary'}" data-diff-wt="${esc(race.worktreeId)}" data-diff-adopt="${esc(c.id)}" ${canAdopt ? '' : 'disabled'}>${isApplied ? '✓ Winner Adopted' : '✓ Adopt Winner Patch'}</button>
           </footer>
         </article>`;
-      }).join('')}</div>`;
+      }).join('')}</div>`);
       return;
     }
     const workers = data?.workers || [];
     if (!workers.length) {
-      el.innerHTML = '<div class="conclave-empty-cards"><p>No active or completed workers yet. Switch to <strong>✦ Stage</strong> to launch a Parallel Research Squad or click <strong>Preview Swarm</strong>.</p></div>';
+      commitCards('<div class="conclave-empty-cards"><p>No active or completed workers yet. Switch to <strong>✦ Stage</strong> to launch a Parallel Research Squad or click <strong>Preview Swarm</strong>.</p></div>');
       return;
     }
     const conflictFiles = new Set((data?.fileConflicts || []).map(c => c.file));
-    el.innerHTML = `<div class="conclave-cards-grid">${workers.map(w => {
+    commitCards(`<div class="conclave-cards-grid">${workers.map(w => {
       const st = statusInfo(w.status);
       const selected = w.workerId === selectedWorkerId;
       const files = (w.files || []).slice(0, 4);
@@ -1399,7 +1410,7 @@
           <button type="button" class="button button-secondary" data-conclave-select="${esc(w.workerId)}">${selected ? 'Inspecting' : 'Inspect & Steer'}</button>
         </footer>
       </article>`;
-    }).join('')}</div>`;
+    }).join('')}</div>`);
   }
 
   function renderInspector() {
@@ -1412,19 +1423,36 @@
     }
     panel.classList.remove('hidden');
     const st = statusInfo(worker.status);
-    const setT = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = String(v); };
+    const setT = (id, v) => {
+      const el = document.getElementById(id);
+      const next = String(v);
+      if (el && el.textContent !== next) el.textContent = next;
+    };
     setT('pi-role', worker.role || 'worker');
     setT('pi-model', worker.modelLabel || worker.providerId || 'Auto');
     const stEl = document.getElementById('pi-status');
-    if (stEl) { stEl.textContent = worker.tool && st.active ? `${st.label} · ${worker.tool}` : st.label; stEl.className = `conclave-status-pill tone-${st.tone}`; }
+    if (stEl) {
+      const nextLabel = worker.tool && st.active ? `${st.label} · ${worker.tool}` : st.label;
+      if (stEl.textContent !== nextLabel) stEl.textContent = nextLabel;
+      const nextCls = `conclave-status-pill tone-${st.tone}`;
+      if (stEl.className !== nextCls) stEl.className = nextCls;
+    }
     setT('pi-meta', `${worker.kind === 'crew' ? 'Coding Crew' : worker.viaHarness ? 'External CLI Harness' : 'Specialist Subagent'} · ${worker.calls || 0} calls · ${fmtMs(worker.durationMs)}${worker.approxTokens ? ` · ${fmtTokens(worker.approxTokens)} (${fmtCost(worker.estimatedCostUsd)})` : ''}${worker.isMvp ? ' · ★ MVP' : ''}${worker.tools?.length ? ` · Tools: ${[...new Set(worker.tools)].join(', ')}` : ''}`);
     const filesEl = document.getElementById('pi-files');
     if (filesEl) {
       const files = worker.files || [];
       filesEl.classList.toggle('hidden', files.length === 0);
-      filesEl.innerHTML = files.map(f => `<span class="conclave-file-chip">${esc(f)}</span>`).join('');
+      const filesHtml = files.map(f => `<span class="conclave-file-chip">${esc(f)}</span>`).join('');
+      if (filesEl.dataset.lastHtml !== filesHtml) {
+        filesEl.dataset.lastHtml = filesHtml;
+        filesEl.innerHTML = filesHtml;
+      }
     }
-    setT('pi-output', worker.summary || worker.streamTail || worker.prompt || 'Working…');
+    const outEl = document.getElementById('pi-output');
+    const nextOut = String(worker.summary || worker.streamTail || worker.prompt || 'Working…');
+    const sel = window.getSelection?.();
+    const selectingOutput = Boolean(outEl && sel && !sel.isCollapsed && outEl.contains(sel.anchorNode));
+    if (outEl && outEl.textContent !== nextOut && !selectingOutput) outEl.textContent = nextOut;
   }
 
   function prepCanvas(canvas) {

@@ -197,7 +197,10 @@ function withFollowups(task, followups) {
   const primaryDeclined = stickyRefusal && declinedProviders.includes(task.providers[0]);
   const cleanObjective = task.routing?.originalObjective || task.objective;
   const cleanFollowups = followups.map(f => f?.originalMessage ? { ...f, message: f.originalMessage, originalMessage: undefined } : f);
-  const proposed = { ...task, objective: cleanObjective, followups: cleanFollowups, acceptance: { mode: 'owner', reason: 'followup', contractVersion }, verification: null, completionKind: null, contractVersion, blocker: null, strategy: 'continue', stallSignature: null, stallTurns: 0, recentToolCalls: [], lastIncident: null, routing: { primaryId: task.providers[0], cooldowns: {}, primaryReturnUsed: primaryDeclined, contributions: {}, ...(primaryDeclined ? { declinedProviders } : {}) } };
+  const carryGuidance = task.routing?.overseerGuidanceStickyOnce && task.routing?.overseerGuidance
+    ? { overseerGuidance: task.routing.overseerGuidance }
+    : {};
+  const proposed = { ...task, objective: cleanObjective, followups: cleanFollowups, acceptance: { mode: 'owner', reason: 'followup', contractVersion }, verification: null, completionKind: null, contractVersion, blocker: null, strategy: 'continue', stallSignature: null, stallTurns: 0, recentToolCalls: [], lastIncident: null, routing: { primaryId: task.providers[0], cooldowns: {}, primaryReturnUsed: primaryDeclined, contributions: {}, ...(primaryDeclined ? { declinedProviders } : {}), ...carryGuidance } };
   if (isCatalogModel(task.providers[0]) && task.policy.returnToPrimary && !primaryDeclined) {
     proposed.providerId = task.providers[0];
     proposed.providerIndex = 0;
@@ -1959,8 +1962,8 @@ export class Runtime {
           }
           // Proactive Overseer mid-run trajectory coaching every 6 turns on long non-fixture runs
           if (!stalled.fixtureId && stalled.calls >= 6 && stalled.calls % 6 === 0 && (stalled.routing?.lastOverseerCoachCall || 0) < stalled.calls) {
-            const overseer = this._resolveOverseer();
-            if (overseer && overseer.settings.autoCoachLongRuns && overseer.provider.id !== stalled.providerId) {
+            const overseer = this._resolveOverseerForWorker(stalled.providerId);
+            if (overseer && overseer.settings.autoCoachLongRuns) {
               const ev = this._overseerEvidence(id, stalled);
               const coach = await coachTrajectory({
                 provider: overseer.provider,
@@ -1979,12 +1982,14 @@ export class Runtime {
                   current.routing ||= {};
                   current.routing.lastOverseerCoachCall = stalled.calls;
                   if (coach.guidance && coach.status !== 'on_track') current.routing.overseerGuidance = coach.guidance;
+                  else if (coach.status === 'on_track') delete current.routing.overseerGuidance;
                   return current;
                 }, 'overseer.coached', {
                   overseerId: coach.providerId || overseer.provider.id,
                   ...(coach.failoverFrom ? { failoverFrom: coach.failoverFrom } : {}),
                   status: coach.status,
                   diagnosis: coach.diagnosis,
+                  guidance: coach.guidance || null,
                   reason: coach.reason,
                   nextActions: coach.nextActions,
                   hasGuidance: Boolean(coach.guidance && coach.status !== 'on_track'),
@@ -2241,8 +2246,8 @@ export class Runtime {
       const refusal = (!provider.directChat || godmodeActive) && detectRefusal(response, { learnedPatterns });
       if (refusal) { await this._recover(id, epoch, refusal); continue; }
       if (godmodeActive && looksAmbiguousEvasion(response)) {
-        const overseer = this._resolveOverseer();
-        if (overseer && overseer.settings.autoJudgeAmbiguous && overseer.provider.id !== task.providerId) {
+        const overseer = this._resolveOverseerForWorker(task.providerId);
+        if (overseer && overseer.settings.autoJudgeAmbiguous) {
           const verdict = await judgeAmbiguousReply({
             provider: overseer.provider,
             backupProviders: overseer.backupProviders,
@@ -2285,8 +2290,8 @@ export class Runtime {
         && typeof response.text === 'string' && response.text.trim()
         && task.calls < (task.policy?.maxCalls || 0)
         && (task.routing?.overseerAuditedContract || 0) !== (task.contractVersion || 1)) {
-        const overseer = this._resolveOverseer();
-        if (overseer && overseer.settings.autoAuditCompletion && overseer.provider.id !== task.providerId) {
+        const overseer = this._resolveOverseerForWorker(task.providerId, { allowSameModel: true });
+        if (overseer && overseer.settings.autoAuditCompletion) {
           const ev = this._overseerEvidence(id, task);
           const hasSubstance = ev.modifiedFiles.length > 0 || ev.recentToolTrace.length > 0 || String(task.objective || '').length >= 80;
           if (hasSubstance) {
@@ -3558,7 +3563,10 @@ export class Runtime {
     }
     const updated = this.store.updateTask(id, current => {
       current.routing ||= {};
-      if (advice.guidance) current.routing.overseerGuidance = advice.guidance;
+      if (advice.guidance) {
+        current.routing.overseerGuidance = advice.guidance;
+        current.routing.overseerGuidanceStickyOnce = true;
+      }
       if (advice.recommendedEffort) current.effort = normalizeEffort(advice.recommendedEffort);
       current.routing.lastOverseerCoachCall = current.calls || 0;
       return current;
@@ -3568,6 +3576,7 @@ export class Runtime {
       manual: true,
       status: advice.status,
       diagnosis: advice.diagnosis,
+      guidance: advice.guidance || null,
       reason: advice.reason,
       nextActions: advice.nextActions,
       recommendedProviderId: advice.recommendedProviderId,
@@ -3575,6 +3584,16 @@ export class Runtime {
       hasGuidance: Boolean(advice.guidance)
     });
     return { ok: true, advice, task: updated };
+  }
+  _resolveOverseerForWorker(workerProviderId, { allowSameModel = false } = {}) {
+    const overseer = this._resolveOverseer();
+    if (!overseer) return null;
+    const all = [overseer.provider, ...(overseer.backupProviders || [])].filter(Boolean);
+    const distinct = all.filter(p => p.id !== workerProviderId);
+    if (distinct.length) {
+      return { settings: overseer.settings, provider: distinct[0], backupProviders: distinct.slice(1) };
+    }
+    return allowSameModel ? overseer : null;
   }
   updateOverseer(patch = {}) {
     const current = this.getOverseer().settings;
