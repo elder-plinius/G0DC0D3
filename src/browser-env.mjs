@@ -1254,10 +1254,23 @@ export class BrowserPool {
     };
   }
 
-  async _waitIfTakeover(taskId) {
+  async _waitIfTakeover(taskId, signal = null) {
     const gate = this.takeoverGates.get(taskId);
-    if (gate?.active && gate.promise) {
+    if (!gate?.active || !gate.promise) return;
+    if (signal?.aborted) throw fault('BROWSER_CANCELLED', 'Browser operation cancelled while paused for Human Takeover.');
+    if (!signal) {
       await gate.promise;
+      return;
+    }
+    let onAbort;
+    const aborted = new Promise((_, reject) => {
+      onAbort = () => reject(fault('BROWSER_CANCELLED', 'Browser operation cancelled while paused for Human Takeover.'));
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
+    try {
+      await Promise.race([gate.promise, aborted]);
+    } finally {
+      signal.removeEventListener('abort', onAbort);
     }
   }
 
@@ -1286,6 +1299,7 @@ export class BrowserPool {
     await this._waitTransition(taskId);
     const session = this.sessions.get(taskId);
     if (!this._isLive(session)) throw fault('BROWSER_NOT_OPEN', 'No contained browser session is open for this task.');
+    if (outboundOpts && Object.keys(outboundOpts).length) session.activeOutboundOpts = outboundOpts;
     session.touch();
     const kind = String(action.kind || '').toLowerCase();
     if (kind === 'click') {
@@ -1523,16 +1537,16 @@ export class BrowserPool {
     });
   }
 
-  async open(taskId, args, outboundOpts) {
-    await this._waitIfTakeover(taskId);
+  async open(taskId, args, outboundOpts, { signal = null } = {}) {
+    await this._waitIfTakeover(taskId, signal);
     // Validate URL before even launching a browser process!
     assertBrowserUrlAllowed(args?.url, outboundOpts);
     const session = await this._getOrCreate(taskId, args?.viewport);
     return await session.open(args, outboundOpts);
   }
 
-  async snapshot(taskId, args) {
-    await this._waitIfTakeover(taskId);
+  async snapshot(taskId, args, { signal = null } = {}) {
+    await this._waitIfTakeover(taskId, signal);
     await this._waitTransition(taskId);
     const session = this.sessions.get(taskId);
     if (!this._isLive(session)) throw fault('BROWSER_NOT_OPEN', 'No contained browser session is open for this task. Call browser.open first.');
@@ -1545,16 +1559,16 @@ export class BrowserPool {
     };
   }
 
-  async act(taskId, args, outboundOpts) {
-    await this._waitIfTakeover(taskId);
+  async act(taskId, args, outboundOpts, { signal = null } = {}) {
+    await this._waitIfTakeover(taskId, signal);
     await this._waitTransition(taskId);
     const session = this.sessions.get(taskId);
     if (!this._isLive(session)) throw fault('BROWSER_NOT_OPEN', 'No contained browser session is open for this task. Call browser.open first.');
     return await session.act(args, outboundOpts);
   }
 
-  async screenshot(taskId, args) {
-    await this._waitIfTakeover(taskId);
+  async screenshot(taskId, args, { signal = null } = {}) {
+    await this._waitIfTakeover(taskId, signal);
     await this._waitTransition(taskId);
     const session = this.sessions.get(taskId);
     if (!this._isLive(session)) throw fault('BROWSER_NOT_OPEN', 'No contained browser session is open for this task. Call browser.open first.');
@@ -1570,8 +1584,8 @@ export class BrowserPool {
     };
   }
 
-  async evaluate(taskId, args) {
-    await this._waitIfTakeover(taskId);
+  async evaluate(taskId, args, { signal = null } = {}) {
+    await this._waitIfTakeover(taskId, signal);
     await this._waitTransition(taskId);
     const session = this.sessions.get(taskId);
     if (!this._isLive(session)) throw fault('BROWSER_NOT_OPEN', 'No contained browser session is open for this task. Call browser.open first.');
@@ -1598,9 +1612,16 @@ export class BrowserPool {
     });
   }
 
+  async closeAllSessions() {
+    const all = [...new Set([...this.sessions.keys(), ...this.transitions.keys(), ...this.takeoverGates.keys()])];
+    await Promise.all(all.map(id => this.closeSession(id, { resetPreferences: true }).catch(() => {})));
+    this.sessionVisibleOverrides?.clear?.();
+    this.screencastWatchers?.clear?.();
+  }
+
   async closeAll() {
     clearInterval(this.reapTimer);
-    const all = [...new Set([...this.sessions.keys(), ...this.transitions.keys()])];
-    await Promise.all(all.map(id => this.closeSession(id, { resetPreferences: true }).catch(() => {})));
+    this.reapTimer = null;
+    await this.closeAllSessions();
   }
 }

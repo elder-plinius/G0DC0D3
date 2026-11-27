@@ -67,10 +67,21 @@ jobs:
 
       - name: Resolve release version
         id: meta
+        env:
+          RAW_INPUT_TAG: ${{ inputs.tag }}
+          RAW_REF: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
         run: |
-          raw="${{ inputs.tag || github.ref_name }}"
-          ver="${raw#v}"
-          if [ -z "$ver" ] || [ "$ver" = "main" ]; then
+          raw=""
+          if [ -n "$RAW_INPUT_TAG" ]; then
+            raw="$RAW_INPUT_TAG"
+          elif [ "$REF_TYPE" = "tag" ]; then
+            raw="$RAW_REF"
+          fi
+          if [ -n "$raw" ]; then
+            echo "$raw" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' || { echo "Invalid release tag: $raw" >&2; exit 1; }
+            ver="${raw#v}"
+          else
             ver="$(node -p "JSON.parse(require('node:fs').readFileSync('package.json','utf8')).version")"
           fi
           echo "version=$ver" >> "$GITHUB_OUTPUT"
@@ -145,10 +156,21 @@ jobs:
 
       - name: Resolve release version
         id: meta
+        env:
+          RAW_INPUT_TAG: ${{ inputs.tag }}
+          RAW_REF: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
         run: |
-          raw="${{ inputs.tag || github.ref_name }}"
-          ver="${raw#v}"
-          if [ -z "$ver" ] || [ "$ver" = "main" ]; then
+          raw=""
+          if [ -n "$RAW_INPUT_TAG" ]; then
+            raw="$RAW_INPUT_TAG"
+          elif [ "$REF_TYPE" = "tag" ]; then
+            raw="$RAW_REF"
+          fi
+          if [ -n "$raw" ]; then
+            echo "$raw" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' || { echo "Invalid release tag: $raw" >&2; exit 1; }
+            ver="${raw#v}"
+          else
             ver="$(node -p "JSON.parse(require('node:fs').readFileSync('package.json','utf8')).version")"
           fi
           echo "version=$ver" >> "$GITHUB_OUTPUT"
@@ -184,14 +206,24 @@ jobs:
 
       - name: Resolve tag & version
         id: meta
+        env:
+          RAW_INPUT_TAG: ${{ inputs.tag }}
+          RAW_REF: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
         run: |
-          raw="${{ inputs.tag || github.ref_name }}"
-          if [ -z "$raw" ] || [ "$raw" = "main" ]; then
-            ver="$(node -p "JSON.parse(require('node:fs').readFileSync('package.json','utf8')).version")"
-            tag="v$ver"
-          else
+          raw=""
+          if [ -n "$RAW_INPUT_TAG" ]; then
+            raw="$RAW_INPUT_TAG"
+          elif [ "$REF_TYPE" = "tag" ]; then
+            raw="$RAW_REF"
+          fi
+          if [ -n "$raw" ]; then
+            echo "$raw" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' || { echo "Invalid release tag: $raw" >&2; exit 1; }
             tag="$raw"
             ver="${raw#v}"
+          else
+            ver="$(node -p "JSON.parse(require('node:fs').readFileSync('package.json','utf8')).version")"
+            tag="v$ver"
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$ver" >> "$GITHUB_OUTPUT"

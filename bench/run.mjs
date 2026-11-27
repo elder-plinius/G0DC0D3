@@ -15,7 +15,10 @@ export async function implementationManifest() {
       else if(entry.isFile()&&entry.name.endsWith('.mjs'))files.push({path:name,sha256:digest(await fs.readFile(path.join(root,name)))});
     }
   };
-  for(const directory of ['src','fixtures','bench','scripts'])await visit(directory);
+  for(const directory of ['src','fixtures','bench','scripts']) {
+    try { await visit(directory); }
+    catch (err) { if (err?.code !== 'ENOENT') throw err; }
+  }
   return {sha256:digest(JSON.stringify(files)),files};
 }
 

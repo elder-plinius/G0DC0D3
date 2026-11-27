@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { constants as fsConstants, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { readBoundedFile, scopedPath, sha256 } from './broker.mjs';
+import { APP_VERSION } from './version.mjs';
 import { evaluatePermission, HARD_DENY_SHELL_RULES, STRICT_DEFAULT_PRESET } from './permissions.mjs';
 import { checkTargetScope, CLI_NO_TELEMETRY_ENV, DEFAULT_PRIVACY_SETTINGS, environmentSecrets, redactDiagnostics, redactOutboundText } from './privacy.mjs';
 import { runCommand } from './runner.mjs';
@@ -743,7 +744,7 @@ export class AcpClient {
     args = [],
     cwd = process.cwd(),
     env = null,
-    clientInfo = { name: 'g0dc0d3', version: '0.2.0' },
+    clientInfo = { name: 'g0dc0d3', version: APP_VERSION },
     capabilities = { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
     permissionHandler = null,
     sandboxHandlers = null,

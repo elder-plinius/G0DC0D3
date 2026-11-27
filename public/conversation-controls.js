@@ -116,8 +116,14 @@ function renderConversationControls(task) {
   if ($('#generation-dialog').open && generationContext?.taskId === task?.id) refreshGenerationLimits(task);
   const queued = Boolean(task && (ACTIVE.has(task.status) || task.pendingMessages?.length || task.deferredMessages?.length));
   $('#composer-delivery-label').hidden = !queued;
-  const steer = $('#composer-delivery').value === 'steer';
-  $('#composer-delivery-help').textContent = queued ? steer ? 'Applies after the current request or tool.' : 'Runs after the current turn finishes.' : '';
+  const deliveryVal = $('#composer-delivery').value;
+  $('#composer-delivery-help').textContent = queued
+    ? (deliveryVal === 'steer'
+      ? 'Preempts active thinking or applies after current tool.'
+      : deliveryVal === 'parallel'
+        ? 'Runs a concurrent sidecar worker without interrupting the main plan.'
+        : 'Runs after the current turn finishes.')
+    : '';
   $('#composer-parameters').disabled = Boolean(task && task.status === 'cancelled');
   const count = Object.keys(task?.generation || (!task ? generationDefaults() : {})).length;
   $('#composer-parameters').textContent = count ? `Model controls · ${count}` : 'Model controls';

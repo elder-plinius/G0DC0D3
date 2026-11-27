@@ -28,10 +28,11 @@ test('Conclave Power #1: Bounded non-shell external CLI harness runner + injecti
     '-c', 'approval_policy="never"', '-c', 'web_search="disabled"', '-'
   ]);
   assert.equal(inv.stdinText, 'audit auth');
-  // Positional CLI harnesses separate prompt with '--' to block flag injection
+  // Gemini CLI pipes prompt via stdin to eliminate argv flag injection & ARG_MAX truncation
   const gemInv = buildHarnessInvocation('gemini-cli', null, '--yolo');
   assert.equal(gemInv.binName, 'gemini');
-  assert.deepEqual(gemInv.args, ['-p', '--', '--yolo']);
+  assert.equal(gemInv.stdinText, '--yolo');
+  assert.ok(!gemInv.args.includes('--yolo'), 'prompt must never appear in argv');
 
   // Real bounded subprocess execution via safe node binary
   let streamed = '';
@@ -49,10 +50,19 @@ test('Conclave Power #1: Bounded non-shell external CLI harness runner + injecti
   assert.match(okRes.output, /CLI_HARNESS_BRIEF/);
   assert.match(streamed, /CLI_HARNESS_BRIEF/);
 
-  // Non-existent CLI returns HARNESS_NOT_FOUND cleanly (never throws)
-  const missRes = await runExternalHarnessSubagent({
+  // Unlisted arbitrary binary is blocked by strict allowlist (never spawned)
+  const blockedRes = await runExternalHarnessSubagent({
     harnessCommand: 'definitely-not-installed-harness-xyz-999',
     prompt: 'hello'
+  });
+  assert.equal(blockedRes.ok, false);
+  assert.equal(blockedRes.code, 'HARNESS_INVALID_CMD');
+
+  // Allowlisted CLI missing on PATH returns HARNESS_NOT_FOUND cleanly (never throws)
+  const missRes = await runExternalHarnessSubagent({
+    harnessCommand: 'opencode',
+    prompt: 'hello',
+    env: { PATH: '/nonexistent', HOME: '/nonexistent' }
   });
   assert.equal(missRes.ok, false);
   assert.equal(missRes.code, 'HARNESS_NOT_FOUND');
