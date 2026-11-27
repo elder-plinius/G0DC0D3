@@ -2258,6 +2258,15 @@ export class AntigravityCliProvider extends CodexProvider {
   acpStatus() {
     return this.acpPool.status();
   }
+  async dropTaskSession(taskId) {
+    if (!taskId) return;
+    this.sessions.delete(taskId);
+    await this.acpPool.drop(`task:${taskId}`).catch(() => {});
+  }
+  async closeAllSessions() {
+    this.sessions.clear();
+    await this.acpPool.closeAll().catch(() => {});
+  }
   async close() {
     this.closed = true;
     this.sessions.clear();
@@ -2696,6 +2705,15 @@ export class AcpHarnessProvider {
 
   acpStatus() {
     return this.acpPool.status();
+  }
+
+  async dropTaskSession(taskId) {
+    if (!taskId) return;
+    await this.acpPool.drop(`${this.id}:${taskId}`).catch(() => {});
+  }
+
+  async closeAllSessions() {
+    await this.acpPool.closeAll().catch(() => {});
   }
 
   async close() {

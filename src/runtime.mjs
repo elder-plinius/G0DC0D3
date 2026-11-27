@@ -16,6 +16,24 @@ import { validateTool } from './tool-schema.mjs';
 import { diagnoseIncident, detectRefusal, rankCandidates, providerIdentity, candidateEligibility, requestProfile, providerTier } from './routing.mjs';
 import { learningContext, inferModelFamily, bestStrategyForFamily, extractDeclineSignature, providerObservedStats } from './learning.mjs';
 import {
+  AUTOTUNE_MODES,
+  PROFILE_BY_ID,
+  defaultAutoTuneState,
+  normalizeAutoTuneState,
+  normalizeModelKey,
+  normalizeDomain,
+  selectAutoTuneParams,
+  recordAutoTuneOutcome,
+  summarizeAutoTuneState
+} from './autotune.mjs';
+import {
+  VISUALIZER_CSP,
+  buildVisualizerPayload,
+  generateTaskVisualizer,
+  readTaskVisualizerHtml,
+  deleteTaskVisualizer
+} from './visualizer.mjs';
+import {
   DEFAULT_OVERSEER_SETTINGS,
   OVERSEER_POSTURES,
   normalizeOverseerSettings,
@@ -708,6 +726,11 @@ export class Runtime {
     this._workerSteers = new Map();
     this._liveTurn = new Map();
     this._conclaveRuns = new Map();
+    this._lastAutoTune = new Map();
+    this._activeTurnAbort = new Map();
+    this._turnPreempted = new Set();
+    this._sidecars = new Map(); // taskId -> Set<{ controller, promise, workerId }>
+    this._vizAborts = new Map(); // taskId -> Set<AbortController>
     this.cron = new CronScheduler({
       store: this.store,
       tickMs: schedulerTickMs,
@@ -1414,6 +1437,201 @@ export class Runtime {
     }
     return activeSessions;
   }
+  _getAutoTuneRaw() {
+    return normalizeAutoTuneState(this.store.getLocalState('autotuneState', defaultAutoTuneState()));
+  }
+  getAutoTune() {
+    return summarizeAutoTuneState(this._getAutoTuneRaw());
+  }
+  updateAutoTune({ mode, pin, unpin } = {}) {
+    const state = this._getAutoTuneRaw();
+    if (mode !== undefined) {
+      if (!AUTOTUNE_MODES.includes(mode)) throw fault('INVALID_AUTOTUNE', `Invalid AutoTune mode "${mode}". Choose off, passive, or active.`);
+      state.mode = mode;
+    }
+    if (pin && typeof pin === 'object' && pin.modelKey && pin.domain && PROFILE_BY_ID.has(pin.profileId)) {
+      const pKey = `${normalizeModelKey(pin.modelKey)}::${normalizeDomain(pin.domain)}`;
+      if (Object.keys(state.pins).length < 250 || Object.hasOwn(state.pins, pKey)) {
+        state.pins[pKey] = pin.profileId;
+      }
+    }
+    if (unpin && typeof unpin === 'object' && unpin.modelKey && unpin.domain) {
+      delete state.pins[`${normalizeModelKey(unpin.modelKey)}::${normalizeDomain(unpin.domain)}`];
+    }
+    this.store.setLocalState('autotuneState', state);
+    return summarizeAutoTuneState(state);
+  }
+  resetAutoTune() {
+    const prev = this._getAutoTuneRaw();
+    const fresh = { ...defaultAutoTuneState(), mode: prev.mode };
+    this.store.setLocalState('autotuneState', fresh);
+    this._lastAutoTune.clear();
+    return summarizeAutoTuneState(fresh);
+  }
+  _recordAutoTuneSignal(taskId, signal) {
+    const last = this._lastAutoTune.get(taskId);
+    if (!last?.profileId) return;
+    const state = this._getAutoTuneRaw();
+    if (state.mode === 'off') return;
+    const next = recordAutoTuneOutcome(state, {
+      modelKey: last.modelKey,
+      family: last.family,
+      domain: last.domain,
+      effort: last.effort,
+      profileId: last.profileId,
+      signal,
+    });
+    this.store.setLocalState('autotuneState', next);
+  }
+  _abortTaskSidecars(id) {
+    const set = this._sidecars.get(id);
+    if (set) {
+      for (const entry of set) { try { entry.controller.abort(); } catch {} }
+    }
+    const vizSet = this._vizAborts.get(id);
+    if (vizSet) {
+      for (const ac of vizSet) { try { ac.abort(); } catch {} }
+    }
+  }
+  async generateVisualizer(id, { instruction = '' } = {}) {
+    if (this.closed) throw fault('RUNTIME_CLOSED', 'Runtime is closed.');
+    const task = this.getTask(id);
+    if (!task.visualizerActive) {
+      this.store.updateTask(id, current => { current.visualizerActive = true; return current; }, 'visualizer.enabled', { source: 'owner' });
+    }
+    const events = this.store.getRecentEvents(id, 120);
+    let files = [];
+    try {
+      const snap = await taskSnapshot(task.workspace);
+      files = snap.files || [];
+    } catch {}
+    const candidateIds = [task.providerId, ...(task.providers || []), ...this.providers.keys()].filter(Boolean);
+    let vizProvider = null;
+    for (const pid of new Set(candidateIds)) {
+      const p = this.providers.get(pid);
+      if (p && p.available !== false && typeof p.draft === 'function') { vizProvider = p; break; }
+    }
+    const ac = new AbortController();
+    let vizSet = this._vizAborts.get(id);
+    if (!vizSet) { vizSet = new Set(); this._vizAborts.set(id, vizSet); }
+    vizSet.add(ac);
+    try {
+      const result = await generateTaskVisualizer({
+        dataDir: this.store.dataDir,
+        task: this.getTask(id),
+        events,
+        files,
+        provider: vizProvider,
+        instruction,
+        outbound: this.outboundOptions(),
+        signal: ac.signal,
+      });
+      if (this.closed || ac.signal.aborted) {
+        await deleteTaskVisualizer(this.store.dataDir, id).catch(() => {});
+        throw fault('ABORTED', 'Visualizer generation cancelled.');
+      }
+      // Verify task still exists (not purged while drafting)
+      try { this.getTask(id); } catch {
+        await deleteTaskVisualizer(this.store.dataDir, id).catch(() => {});
+        throw fault('TASK_NOT_FOUND', 'Task was deleted while generating visualizer.');
+      }
+      this._emitStream(id, { type: 'visualizer.ready', url: result.url, generatedBy: result.generatedBy, bytes: result.bytes, payload: result.payload });
+      return result;
+    } finally {
+      vizSet.delete(ac);
+      if (!vizSet.size) this._vizAborts.delete(id);
+    }
+  }
+  async getVisualizerHtml(id) {
+    this.getTask(id);
+    return readTaskVisualizerHtml(this.store.dataDir, id);
+  }
+  async getVisualizerTelemetry(id) {
+    const task = this.getTask(id);
+    const events = this.store.getRecentEvents(id, 120);
+    let files = [];
+    try {
+      const snap = await taskSnapshot(task.workspace);
+      files = snap.files || [];
+    } catch {}
+    return buildVisualizerPayload(task, events, files);
+  }
+  async runParallelSidecar(id, prompt, attachments = null) {
+    if (this.closed) throw fault('RUNTIME_CLOSED', 'Runtime is closed.');
+    const parentTask = this.getTask(id);
+    let taskSidecars = this._sidecars.get(id);
+    if (!taskSidecars) { taskSidecars = new Set(); this._sidecars.set(id, taskSidecars); }
+    if (taskSidecars.size >= 3) {
+      throw fault('SIDECAR_LIMIT', 'Up to 3 parallel sidecars can run concurrently per task. Wait for one to finish.');
+    }
+    const workerId = `sidecar-${randomUUID().slice(0, 8)}`;
+    const startedAt = new Date().toISOString();
+    const controller = new AbortController();
+    let activeMap = this.activeSubagents.get(id);
+    if (!activeMap) { activeMap = new Map(); this.activeSubagents.set(id, activeMap); }
+    const initial = {
+      workerId,
+      callId: workerId,
+      kind: 'subagent',
+      role: 'sidecar',
+      prompt: String(prompt || '').slice(0, 400),
+      status: 'thinking',
+      providerId: parentTask.providerId || null,
+      modelLabel: this.providers.get(parentTask.providerId)?.label || parentTask.providerId || 'Auto',
+      tool: '',
+      target: '',
+      files: [],
+      tools: [],
+      streamTail: '',
+      calls: 0,
+      startedAt,
+      durationMs: 0,
+    };
+    activeMap.set(workerId, initial);
+    this.store.appendEvent(id, 'subagent.started', { workerId, callId: workerId, role: 'sidecar', prompt: initial.prompt, parallelInterjection: true, startedAt });
+    this._emitStream(id, { type: 'subagent.started', worker: initial });
+    const safeAppend = (type, data) => {
+      if (this.closed) return;
+      try { this.getTask(id); this.store.appendEvent(id, type, data); } catch {}
+    };
+    const entry = { controller, workerId, promise: null };
+    taskSidecars.add(entry);
+    const runPromise = (async () => {
+      try {
+        const res = await runSpecialistSubagent({
+          runtime: this,
+          parentTask: this.getTask(id),
+          role: 'explore',
+          prompt: `Parallel side-request from the user while the main agent continues working:\n\n${prompt}${attachments?.length ? `\n\n(${attachments.length} attachment(s) referenced)` : ''}`,
+          workerId,
+          signal: controller.signal,
+          onProgress: (prog) => {
+            if (this.closed || controller.signal.aborted) return;
+            const merged = { ...initial, ...prog, role: 'sidecar', callId: workerId };
+            activeMap.set(workerId, merged);
+            this._emitStream(id, { type: 'subagent.progress', worker: merged });
+          },
+        });
+        safeAppend('subagent.completed', { workerId, callId: workerId, role: 'sidecar', parallelInterjection: true, ...res });
+        if (!this.closed) this._emitStream(id, { type: 'subagent.completed', worker: { ...initial, ...res, role: 'sidecar', status: res?.ok ? 'completed' : 'failed' } });
+        return res;
+      } catch (err) {
+        const errRes = { ok: false, error: { code: err?.code || 'SIDECAR_ERROR', message: err?.message || 'Parallel sidecar failed.' }, durationMs: Date.now() - Date.parse(startedAt) };
+        safeAppend('subagent.completed', { workerId, callId: workerId, role: 'sidecar', parallelInterjection: true, ...errRes });
+        if (!this.closed) this._emitStream(id, { type: 'subagent.completed', worker: { ...initial, ...errRes, role: 'sidecar', status: 'failed' } });
+        return errRes;
+      } finally {
+        activeMap.delete(workerId);
+        if (!activeMap.size) this.activeSubagents.delete(id);
+        this._workerSteers.delete(`${id}:${workerId}`);
+        taskSidecars.delete(entry);
+        if (!taskSidecars.size) this._sidecars.delete(id);
+      }
+    })();
+    entry.promise = runPromise;
+    runPromise.catch(() => {});
+    return { workerId, promise: runPromise };
+  }
   getLearning() { return this.store.getLearning(); }
   resetLearning() { return this.store.resetLearning(); }
   run(id) {
@@ -1597,6 +1815,41 @@ export class Runtime {
           context.visualObservations = [{ dataUrl: `data:${mediaType};base64,${shot.buffer.toString('base64')}`, mediaType }];
         }
       }
+      // Apply AutoTune passive Bayesian sampling layer when enabled (never overrides manual sliders)
+      const prevAt = this._lastAutoTune.get(id);
+      const isFreshRecovery = Boolean(prevAt && Number(task.recoveries || 0) > Number(prevAt.recoveries || 0));
+      const autoTunePick = selectAutoTuneParams(this._getAutoTuneRaw(), {
+        provider,
+        objective: task.objective || '',
+        effort: task.effort || 'medium',
+        manualGeneration: task.generation || {},
+        contextKind: isFreshRecovery ? 'retry' : 'normal',
+        previousProfileId: prevAt?.profileId || null,
+      });
+      if (autoTunePick.active) {
+        context = { ...context, task: { ...context.task, generation: autoTunePick.generation } };
+        const receiptWithRec = { ...autoTunePick.receipt, recoveries: Number(task.recoveries || 0) };
+        this._lastAutoTune.set(id, receiptWithRec);
+        if (!prevAt || prevAt.profileId !== autoTunePick.receipt.profileId || prevAt.modelKey !== autoTunePick.receipt.modelKey) {
+          this.store.appendEvent(id, 'autotune.selected', autoTunePick.receipt);
+        }
+      } else if (autoTunePick.observing && autoTunePick.receipt) {
+        this._lastAutoTune.set(id, { ...autoTunePick.receipt, recoveries: Number(task.recoveries || 0) });
+      } else {
+        this._lastAutoTune.delete(id);
+      }
+      // Lightweight optional domain-metrics hint when Live Visualizer is active for this task
+      if (task.visualizerActive) {
+        const vizHint = 'Live Visualizer is open — optionally write live domain metrics JSON (charts/tables/progress) to .g0dc0d3/viz-metrics.json.';
+        context = {
+          ...context,
+          task: {
+            ...context.task,
+            overseerGuidance: context.task?.overseerGuidance ? `${context.task.overseerGuidance}\n${vizHint}` : vizHint,
+          },
+        };
+      }
+
       let response;
       this._emitStream(id, { type: 'turn_start', providerId: task.providerId, call: task.calls });
       const onDelta = delta => {
@@ -1613,12 +1866,22 @@ export class Runtime {
       const turnDeadline = Date.now() + turnTimeoutMs;
       const turnStartedAt = performance.now();
       let turnError;
+      let turnPreemptedBySteer = false;
       const started = performance.now();
       for (let attempt = 0; attempt < 3; attempt++) {
         turnError = null;
         const remainingMs = Math.max(1, turnDeadline - Date.now());
-        try { response = await this._turn(provider, context, controller.signal, remainingMs, profile, onDelta); break; }
-        catch (cause) {
+        try {
+          response = await this._turn(provider, context, controller.signal, remainingMs, profile, onDelta, id);
+          this._turnPreempted.delete(id);
+          break;
+        } catch (cause) {
+          const wasPreempted = this._turnPreempted.delete(id);
+          if ((cause?.code === 'STEER_PREEMPTED' || wasPreempted) && this._current(id, epoch, controller.signal) && this.getTask(id).pendingMessages?.length) {
+            turnPreemptedBySteer = true;
+            turnError = null;
+            break;
+          }
           turnError = cause;
           if (!this._current(id, epoch, controller.signal)) break;
           if (cause.code === 'PROVIDER_TIMEOUT') break;
@@ -1632,6 +1895,10 @@ export class Runtime {
           await delay(backoffMs, undefined, { signal: controller.signal }).catch(() => {});
           if (!this._current(id, epoch, controller.signal)) break;
         }
+      }
+      if (turnPreemptedBySteer) {
+        this.store.appendEvent(id, 'model.interrupted', { providerId: task.providerId, reason: 'steer_preempted', durationMs: Math.max(0, Math.round(performance.now() - turnStartedAt)) });
+        continue;
       }
       const turnDurationMs = Math.max(0, Math.round(performance.now() - turnStartedAt));
       const receipt = provider.directChat ? { call: task.calls, epoch, durationMs: Math.round(performance.now() - started) } : {};
@@ -2561,6 +2828,8 @@ export class Runtime {
               continue;
             }
             if (outcome?.kind !== 'declined') this._learnCompletion(id);
+            if (outcome?.kind !== 'declined') this._recordAutoTuneSignal(id, 'clean_completion');
+            else this._recordAutoTuneSignal(id, 'user_refusal');
             return this.store.updateTask(id, current => { current.status = 'completed'; current.completionKind = 'answered'; current.replyOutcome = outcome; current.verification = null; current.completedAt = new Date().toISOString(); current.blocker = null; return current; }, 'task.completed', { completionKind: 'answered', replyOutcome: outcome, independentVerification: 'not_applicable' });
           }
           await this._recover(id, epoch, { code: 'INVALID_RESPONSE', message: 'A conversation answer must contain text and a final completion marker.' });
@@ -2648,7 +2917,7 @@ export class Runtime {
     }
     return false;
   }
-  async _turn(provider, context, parentSignal, timeoutMs, profile, onDelta) {
+  async _turn(provider, context, parentSignal, timeoutMs, profile, onDelta, taskId = null) {
     const child = new AbortController();
     let timer;
     let rejectAbort;
@@ -2656,10 +2925,23 @@ export class Runtime {
     const abort = () => { child.abort(parentSignal.reason); rejectAbort(fault('ABORTED', 'Provider request cancelled.')); };
     parentSignal.addEventListener('abort', abort, { once: true });
     if (parentSignal.aborted) abort();
+    const abortFn = taskId ? () => {
+      child.abort('steer_preempt');
+      rejectAbort(fault('STEER_PREEMPTED', 'Preempted by new owner steer instruction.'));
+    } : null;
+    if (taskId && abortFn) {
+      this._activeTurnAbort.set(taskId, abortFn);
+    }
     const { privacy, onOutbound, extraSecrets } = this.outboundOptions();
     const timeout = new Promise((_, reject) => { timer = setTimeout(() => { child.abort(); reject(fault('PROVIDER_TIMEOUT', `Provider exceeded ${timeoutMs} ms.`)); }, timeoutMs); });
-    try { return await Promise.race([Promise.resolve().then(() => provider.turn(context, { signal: child.signal, turnTimeoutMs: timeoutMs, privacy, onOutbound, extraSecrets, ...(profile ? { requestProfile: profile } : {}), ...(onDelta ? { onDelta } : {}) })), stopped, timeout]); }
-    finally { clearTimeout(timer); parentSignal.removeEventListener('abort', abort); }
+    const turnPromise = Promise.resolve().then(() => provider.turn(context, { signal: child.signal, turnTimeoutMs: timeoutMs, privacy, onOutbound, extraSecrets, ...(profile ? { requestProfile: profile } : {}), ...(onDelta ? { onDelta } : {}) }));
+    turnPromise.catch(() => {});
+    try { return await Promise.race([turnPromise, stopped, timeout]); }
+    finally {
+      if (taskId && this._activeTurnAbort.get(taskId) === abortFn) this._activeTurnAbort.delete(taskId);
+      clearTimeout(timer);
+      parentSignal.removeEventListener('abort', abort);
+    }
   }
   async _verify(id, epoch, signal) {
     this._status(id, epoch, 'verifying');
@@ -2681,7 +2963,11 @@ export class Runtime {
     result = bindVerification(result, before, after);
     const currentTask = this.getTask(id);
     if (result.status === 'unknown' && !result.code && (!currentTask.fixtureId || currentTask.followups?.length) && currentTask.acceptance?.mode === 'owner') result = { ...result, code: 'UNREGISTERED_ACCEPTANCE' };
-    if (this._current(id, epoch, signal)) this.store.updateTask(id, task => { task.verification = result; return task; }, 'evaluation.completed', result);
+    if (this._current(id, epoch, signal)) {
+      this.store.updateTask(id, task => { task.verification = result; return task; }, 'evaluation.completed', result);
+      if (result.status === 'pass') this._recordAutoTuneSignal(id, 'verification_pass');
+      else if (result.status === 'fail') this._recordAutoTuneSignal(id, 'verification_fail');
+    }
     return result;
   }
   _requiredTools(task) { return taskTools(task).filter(tool => task.execution?.enabled || tool.name !== 'process.run').map(tool => tool.name); }
@@ -3277,12 +3563,16 @@ export class Runtime {
   pause(id) {
     // Crew pause fences each worker. Keep the parent's contract epoch stable so
     // resuming the same crew can continue its original budget and deadline.
+    this._turnPreempted.delete(id);
+    this._abortTaskSidecars(id);
     if (this.crew.busy(id)) { this.crew.pause(id); return this.getTask(id); }
     const task = this.getTask(id); if (terminal.has(task.status) && !this.runs.has(id)) return task;
     const changed = this.store.updateTask(id, current => { current.status = 'paused'; current.epoch += 1; return current; }, 'task.status', { status: 'paused' });
     this.runs.get(id)?.controller.abort(); return changed;
   }
   cancel(id) {
+    this._turnPreempted.delete(id);
+    this._abortTaskSidecars(id);
     this.crew.cancel(id);
     const task = this.getTask(id); if (terminal.has(task.status) && !this.runs.has(id)) return task;
     const changed = this.store.updateTask(id, current => { current.status = 'cancelled'; current.epoch += 1; return current; }, 'task.status', { status: 'cancelled' });
@@ -3829,6 +4119,7 @@ export class Runtime {
       const latestText = this.store.latestModelResponse(id)?.text;
       const sig = extractDeclineSignature(latestText);
       if (sig) this.store.recordRefusalPattern({ signature: sig, source: 'owner_reported', providerId: task.providerId });
+      this._recordAutoTuneSignal(id, 'user_refusal');
     }
     const prepared = this.store.updateTask(id, current => {
       current.epoch += 1;
@@ -3912,8 +4203,10 @@ export class Runtime {
   async burnSession({ includeTasks = false } = {}) {
     this.outboundAudit.clear();
     this.resetLearning();
+    this.resetAutoTune();
     this.deleteRefusalPattern(null);
-    await this.broker.browser.closeAll().catch(() => {});
+    await this.broker.browser.closeAllSessions().catch(() => {});
+    await Promise.all([...new Set(this.providers.values())].map(p => p?.closeAllSessions?.().catch(() => {})));
     let tasksPurged = 0;
     if (includeTasks === true) {
       for (const task of this.listTasks()) {
@@ -3985,12 +4278,19 @@ export class Runtime {
     if (active.has(task.status) || this.runs.has(id) || this.broker.locks.has(id)) {
       throw fault('TASK_ACTIVE', 'Pause and settle the task before purging it.');
     }
+    this._turnPreempted.delete(id);
+    this._abortTaskSidecars(id);
+    const pendingSidecars = [...(this._sidecars.get(id) || [])].map(e => e.promise).filter(Boolean);
+    if (pendingSidecars.length) await Promise.allSettled(pendingSidecars);
     const result = this.store.purgeTask(id);
     this._streamSubs.delete(id);
     for (const key of [...this._workerSteers.keys()]) {
       if (key.startsWith(`${id}:`)) this._workerSteers.delete(key);
     }
     await this.broker.browser.closeSession(id, { resetPreferences: true }).catch(() => {});
+    await Promise.all([...new Set(this.providers.values())].map(p => p?.dropTaskSession?.(id).catch(() => {})));
+    this._lastAutoTune.delete(id);
+    await deleteTaskVisualizer(this.store.dataDir, id).catch(() => {});
     // Only delete workspaces created inside this runtime's managed workspaces directory.
     let managedRoot = resolve(this.store.dataDir, 'workspaces') + sep;
     try { managedRoot = (await fs.realpath(resolve(this.store.dataDir, 'workspaces'))) + sep; } catch {}
@@ -4501,11 +4801,38 @@ export class Runtime {
   }
   async submitMessage(id, message, messageId, mode = 'steer', attachments) {
     if (this.closed) throw fault('RUNTIME_CLOSED', 'Runtime is closed.');
-    this.crew.assertIdle(id);
     validateMessage(message, messageId);
     const validAttachments = validateAttachments(attachments);
-    if (!['steer', 'queue'].includes(mode)) throw fault('INVALID_MESSAGE', 'Choose queue or steer.');
+    if (!['steer', 'queue', 'parallel'].includes(mode)) throw fault('INVALID_MESSAGE', 'Choose steer, queue, or parallel.');
     const task = this.getTask(id);
+    const isRunning = active.has(task.status) || this.runs.has(id);
+
+    // Parallel sidecar interjection: runs concurrently in the same thread without interrupting the main agent!
+    if (mode === 'parallel' && (isRunning || this.crew.busy(id))) {
+      const sidecar = await this.runParallelSidecar(id, message, validAttachments);
+      return { task: this.getTask(id), queued: false, parallel: true, workerId: sidecar.workerId };
+    }
+
+    // If a Crew run is active and the user steers, forward cleanly to active non-verifier crew workers without recursing!
+    if (this.crew.busy(id)) {
+      if (mode === 'steer') {
+        const crewRec = this.crew.record?.(id);
+        const targets = Object.entries(crewRec?.members || {})
+          .filter(([, m]) => m && m.role !== 'verifier' && m.taskId)
+          .map(([workerId]) => workerId);
+        const steered = [];
+        for (const wid of targets) {
+          try { steered.push(await this.queueWorkerSteer(id, wid, message)); } catch {}
+        }
+        if (!steered.length) {
+          this.store.appendEvent(id, 'conclave.steered', { workerId: 'crew', message: String(message).slice(0, 500), delivery: 'note' });
+          this._emitStream(id, { type: 'conclave.steered', workerId: 'crew', message: String(message).slice(0, 500) });
+        }
+        return { task: this.getTask(id), queued: true, steeredCrew: true, steeredCount: steered.length };
+      }
+      this.crew.assertIdle(id);
+    }
+
     if (messageId) {
       const known = [...(task.followups || []), ...(task.pendingMessages || []), ...(task.deferredMessages || [])].find(item => item.id === messageId);
       if (known) {
@@ -4514,7 +4841,6 @@ export class Runtime {
       }
       if (this.getEvents(id).some(event => event.type === 'user.message.removed' && event.data.id === messageId)) throw fault('MESSAGE_REMOVED', 'This message was removed. Send it again with a new message ID.');
     }
-    const isRunning = active.has(task.status) || this.runs.has(id);
     if (isRunning || task.pendingMessages?.length || task.deferredMessages?.length) {
       if (task.status === 'cancelled' || (isRunning && terminal.has(task.status))) {
         throw fault('TASK_TERMINAL', 'This task cannot receive queued instructions.');
@@ -4523,13 +4849,12 @@ export class Runtime {
         id: messageId || randomUUID(),
         message,
         createdAt: new Date().toISOString(),
-        mode,
+        mode: mode === 'queue' ? 'queue' : 'steer',
         ...(validAttachments.length ? { attachments: validAttachments } : {}),
       };
       const field = mode === 'queue' ? 'deferredMessages' : 'pendingMessages';
       const proposed = { ...task, [field]: [...(task[field] || []), pending] };
       checkMessageLimit([...(task.followups || []), ...(proposed.pendingMessages || []), ...(proposed.deferredMessages || [])]);
-      // If the task is currently idle (paused/waiting/blocked/failed/completed with residual deferred items), wake it!
       const shouldStart = !isRunning;
       if (shouldStart) {
         proposed.status = 'queued';
@@ -4539,9 +4864,19 @@ export class Runtime {
           delete proposed.completedAt;
         }
       }
+      const updated = this.store.updateTask(id, () => proposed, 'user.message.queued', { ...pending, source: 'owner' });
+      // Instant Steer Preemption: if an LLM call is actively thinking/streaming with no mutating tool running,
+      // abort it cleanly via AbortController / ACP session/cancel so the agent pivots in ~1–2s!
+      let didPreempt = false;
+      if (mode === 'steer' && isRunning && this._activeTurnAbort.has(id)) {
+        this._turnPreempted.add(id);
+        didPreempt = true;
+        try { this._activeTurnAbort.get(id)(); } catch {}
+      }
       return {
-        task: this.store.updateTask(id, () => proposed, 'user.message.queued', { ...pending, source: 'owner' }),
+        task: updated,
         queued: true,
+        preempted: didPreempt,
         ...(shouldStart ? { start: true } : {}),
       };
     }
@@ -4595,6 +4930,7 @@ export class Runtime {
     if (!original && !anchor) throw fault('INVALID_MESSAGE', 'The message checkpoint is unavailable.');
     const start = original ? 1 : anchor.seq;
     const contractVersion = task.contractVersion + 1;
+    this._recordAutoTuneSignal(id, 'user_regenerate');
     const followups = original ? [] : task.followups.slice(0, index + 1).map((item, i) => {
       if (i !== index) return item;
       const { originalMessage: _dropped, ...rest } = item;
@@ -4842,9 +5178,12 @@ export class Runtime {
     this.closePromise = (async () => {
       try {
         await this.crew.close();
+        for (const id of [...this._sidecars.keys(), ...this._vizAborts.keys()]) this._abortTaskSidecars(id);
         for (const id of this.runs.keys()) this.pause(id);
         await this.broker.close();
         await Promise.allSettled([...this.runs.values()].map(entry => entry.promise));
+        const allSidecarPromises = [...this._sidecars.values()].flatMap(set => [...set].map(e => e.promise).filter(Boolean));
+        if (allSidecarPromises.length) await Promise.allSettled(allSidecarPromises);
         await this.cron?.close();
         await Promise.allSettled([...this.sourceChanges.jobs.values()].map(entry => entry.promise));
         await Promise.allSettled([...this.broker.locks.values()]);

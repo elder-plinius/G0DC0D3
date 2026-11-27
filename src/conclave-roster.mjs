@@ -158,15 +158,13 @@ export const EXTERNAL_HARNESSES = Object.freeze([
   }
 ]);
 
-const DISALLOWED_CLI_BINARIES = new Set([
-  'sh', 'bash', 'zsh', 'dash', 'ksh', 'csh', 'tcsh', 'fish',
-  'node', 'deno', 'bun', 'python', 'python3', 'perl', 'ruby', 'php', 'lua',
-  'awk', 'gawk', 'sed', 'osascript', 'env', 'sudo', 'su', 'xargs', 'exec', 'eval', 'rm', 'dd', 'curl', 'wget'
+const ALLOWED_CLI_BINARIES = new Set([
+  'claude', 'claude-code-acp', 'codex', 'codex-acp', 'gemini', 'agy', 'copilot', 'opencode', 'aider', 'ollama', 'llm'
 ]);
 
 async function checkCommandOnPath(cmd, env = process.env) {
   if (!cmd || !/^[a-z0-9._-]+$/i.test(cmd)) return null;
-  if (DISALLOWED_CLI_BINARIES.has(cmd.toLowerCase())) return null;
+  if (!ALLOWED_CLI_BINARIES.has(cmd.toLowerCase())) return null;
   const home = os.homedir();
   const pathDirs = String(env.PATH || '').split(path.delimiter).filter(dir => dir && path.isAbsolute(dir));
   const extras = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', path.join(home, '.local/bin'), path.join(home, '.npm-global/bin')];
@@ -535,8 +533,8 @@ export async function resolveHarnessBinary(cmd, env = process.env) {
 
 export function buildHarnessInvocation(harnessId, harnessCommand, fullPrompt) {
   const known = harnessId ? EXTERNAL_HARNESSES.find(h => h.id === harnessId) : null;
-  const cmdName = String(harnessCommand || known?.command || '').trim();
-  if (!cmdName || !/^[a-z0-9._-]+$/i.test(cmdName) || DISALLOWED_CLI_BINARIES.has(cmdName.toLowerCase())) {
+  const cmdName = String(harnessCommand || known?.command || '').trim().toLowerCase();
+  if (!cmdName || !/^[a-z0-9._-]+$/i.test(cmdName) || !ALLOWED_CLI_BINARIES.has(cmdName)) {
     return null;
   }
   // Never pass untrusted prompt text as unguarded flags; lock down tool/hook/MCP surfaces on supported CLIs
@@ -567,7 +565,7 @@ export function buildHarnessInvocation(harnessId, harnessCommand, fullPrompt) {
     };
   }
   if (harnessId === 'gemini-cli' || cmdName === 'gemini') {
-    return { binName: cmdName, args: ['-p', '--', fullPrompt], stdinText: '', envKind: 'gemini' };
+    return { binName: cmdName, args: ['--prompt', 'Read the specialist prompt from stdin and reply directly. Do not invoke any native tools.'], stdinText: fullPrompt, envKind: 'gemini' };
   }
   if (harnessId === 'antigravity' || harnessId === 'antigravity-cli' || cmdName === 'agy') {
     return {
@@ -578,9 +576,12 @@ export function buildHarnessInvocation(harnessId, harnessCommand, fullPrompt) {
     };
   }
   if (harnessId === 'copilot-cli' || cmdName === 'copilot') {
-    return { binName: cmdName, args: ['-p', '--', fullPrompt], stdinText: '', envKind: 'copilot' };
+    return { binName: cmdName, args: ['-p', 'Read the specialist prompt from stdin and reply directly.', '-s'], stdinText: fullPrompt, envKind: 'copilot' };
   }
-  return { binName: cmdName, args: ['--', fullPrompt], stdinText: fullPrompt, envKind: 'generic' };
+  if (['opencode', 'qwen', 'goose'].includes(cmdName)) {
+    return { binName: cmdName, args: [], stdinText: fullPrompt, envKind: 'generic' };
+  }
+  return null;
 }
 
 export async function runExternalHarnessSubagent({

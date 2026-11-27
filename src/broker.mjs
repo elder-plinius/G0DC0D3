@@ -400,11 +400,11 @@ export class Broker {
       return res?.ok ? { ...res, untrustedExternalContent: true } : res;
     }
     if (call.name === 'browser.snapshot') {
-      const res = await this.browser.snapshot(taskId, call.args);
+      const res = await this.browser.snapshot(taskId, call.args, { signal });
       return res?.ok ? { ...res, untrustedExternalContent: true } : res;
     }
     if (call.name === 'browser.screenshot') {
-      return await this.browser.screenshot(taskId, call.args);
+      return await this.browser.screenshot(taskId, call.args, { signal });
     }
     throw error('INVALID_TOOL', `Unsupported read-only tool: ${call.name}`);
   }
@@ -681,15 +681,15 @@ export class Broker {
         result = this.memory.deleteMemory(call.args.id);
       } else if (call.name === 'browser.open') {
         this.assertCurrent(taskId, epoch, signal);
-        const res = await this.browser.open(taskId, call.args, outbound || {});
+        const res = await this.browser.open(taskId, call.args, outbound || {}, { signal });
         result = res?.ok ? { ...res, untrustedExternalContent: true } : res;
       } else if (call.name === 'browser.act') {
         this.assertCurrent(taskId, epoch, signal);
-        const res = await this.browser.act(taskId, call.args, outbound || {});
+        const res = await this.browser.act(taskId, call.args, outbound || {}, { signal });
         result = res?.ok ? { ...res, untrustedExternalContent: true } : res;
       } else if (call.name === 'browser.eval') {
         this.assertCurrent(taskId, epoch, signal);
-        const res = await this.browser.evaluate(taskId, call.args);
+        const res = await this.browser.evaluate(taskId, call.args, { signal });
         result = res?.ok ? { ...res, untrustedExternalContent: true } : res;
       } else if (call.name === 'browser.close') {
         result = await this.browser.closeSession(taskId);

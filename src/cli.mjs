@@ -12,8 +12,13 @@ import { fixtures } from '../fixtures/index.mjs';
 import { createConversationTask, createFixtureTask, createImportedTask, fileDiff } from './workspaces.mjs';
 import { resolveWorkflow, WORKFLOW_NAMES } from './workflows.mjs';
 import { gitDiff, gitInit, hasGit } from './git.mjs';
+import { APP_VERSION } from './version.mjs';
 
 const rawArgv = process.argv.slice(2), command = rawArgv.shift() || 'help';
+if (command === '--version' || command === '-v' || command === 'version') {
+  process.stdout.write(`G0DM0D3 ${APP_VERSION}\n`);
+  process.exit(0);
+}
 const BOOLEAN_FLAGS = new Set(['plan', 'help', 'h', 'respect-enabled', 'due-only']);
 const parsedOptions = new Map();
 const parsedFlags = new Set();
@@ -213,7 +218,7 @@ async function runChat(runtime, providers) {
         const dim = s => useColor ? `\x1b[2m${s}\x1b[0m` : s;
         const cyan = s => useColor ? `\x1b[36m${s}\x1b[0m` : s;
         const yellow = s => useColor ? `\x1b[33m${s}\x1b[0m` : s;
-        const unsub = runtime.subscribe(task.id, delta => {
+        const unsub = runtime.subscribeStream(task.id, delta => {
           if (delta.type === 'text' && delta.text) {
             if (!streamedAny) { process.stdout.write('\n'); streamedAny = true; }
             process.stdout.write(delta.text);

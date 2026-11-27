@@ -83,7 +83,10 @@ test('steering supersedes a response while queued next-turn messages remain sepa
   assert.deepEqual(requests[1].messages.slice(1).map(m=>m.content),['Name a color.','Use green.']);
   releases[1](); await until(()=>releases.length===3);
   assert.equal(requests[2].messages.at(-1).content,'Then explain.'); releases[2](); await run;
-  assert.equal(app.runtime.getEvents(chat.id).find(e=>e.type==='model.response').data.superseded,true);
+  const evs = app.runtime.getEvents(chat.id);
+  const preempted = evs.some(e => e.type === 'model.interrupted' && e.data?.reason === 'steer_preempted');
+  const superseded = evs.find(e => e.type === 'model.response')?.data?.superseded === true;
+  assert.equal(preempted || superseded, true);
 });
 
 test('a queue survives pause and process restart; stale edits and duplicate sends cannot overwrite it', async t => {

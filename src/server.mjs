@@ -1,4 +1,6 @@
 import { createVeniceCatalog, isCatalogModel, veniceEndpoint } from './venice-catalog.mjs';
+import { APP_VERSION } from './version.mjs';
+import { VISUALIZER_CSP } from './visualizer.mjs';
 import { parameterLimits, intersectParameterLimits } from './conversation-controls.mjs';
 import http from 'node:http';
 import { createPromptCommands, revisePromptCommand } from './prompt-commands.mjs';
@@ -40,8 +42,23 @@ import { promptNeedsLiveTools } from './ultra-router.mjs';
 
 const projectDir = fileURLToPath(new URL('../',import.meta.url));
 const publicDir = path.join(projectDir,'public');
-export const capabilities = ['Durable tasks and checkpointed adaptive model recovery','Brokered file, search, patch, history and command tools','Owner-configured project checks and snapshot-bound fixture evidence','Plinian and focused personas with native system instructions','Local outcome learning with inspect/reset controls','Scoped macOS Seatbelt and Linux bubblewrap (bwrap) command execution with explicit network grants'];
-export const limitations = ['Local developer build: Node 22.13+ required; ad-hoc signed, not notarized.','Command execution requires macOS Seatbelt or Linux bubblewrap (bwrap) and an owner grant. Foreground command lifecycle on macOS is best effort; Linux uses PID namespaces (--die-with-parent).','Scripted tests validate controller behavior, not universal model performance.','Owner-configured checks establish only their recorded coverage; test success does not prove every requirement.','Provider capabilities vary. Context and project-copy bounds still apply.','Local raw task history may contain source or secrets; diagnostic export redaction is best-effort.'];
+export const capabilities = [
+  'Durable SQLite tasks, Git checkpoint rewind, and adaptive model recovery',
+  'Brokered file, search, patch, browser, memory, and sandboxed command tools',
+  'ACP v1 persistent multi-harness coordination with live token & thinking streaming',
+  'Conclave 2.0 multi-round councils, Brain 2.0 auto-memory/skills, and Live Browser 2.0 takeover + Auto-QA',
+  'Live Sidecar Visualizer (✦ Visualize) in a strict CSP-sandboxed dock with real-time SSE telemetry',
+  'AutoTune passive Empirical-Bayes hyperparameter optimization per model × domain × effort',
+  'Scoped macOS Seatbelt and Linux bubblewrap (bwrap) sandboxing + Hardened/Lockdown zero-telemetry privacy'
+];
+export const limitations = [
+  'Pre-notarization community macOS builds may prompt Gatekeeper on first open; verify SHA256SUMS.txt & SLSA provenance.',
+  'Command execution requires macOS Seatbelt or Linux bubblewrap (bwrap) and an explicit owner grant.',
+  'Scripted tests validate controller behavior, not universal model performance.',
+  'Owner-configured checks establish only their recorded coverage; test success does not prove every requirement.',
+  'Provider capabilities and sampling parameter locks vary by model; AutoTune automatically skips locked parameters.',
+  'Local raw task history may contain source or secrets; diagnostic export redaction is best-effort.'
+];
 
 function outcomeFor(task,runtime) {
   if (runtime && task.status === 'completed' && task.completionKind === 'answered' && !task.replyOutcome) {
@@ -149,7 +166,7 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
       }
       if(req.method==='GET' && url.pathname==='/api/health') {
         if (!sessionReady) return send(res, 503, { error: 'Local session initializing' });
-        return send(res,200,{app:'g0dc0d3',version:'0.2.0',authRequired:auth,desktopWorktrees:true,chatWorktrees:true,patchRequestPreview:true,veniceCatalog:true});
+        return send(res,200,{app:'g0dc0d3',version:APP_VERSION,authRequired:auth,acp:true,desktopWorktrees:true,chatWorktrees:true,patchRequestPreview:true,veniceCatalog:true});
       }
       if(req.method==='POST' && url.pathname==='/api/session') {
         const now = Date.now();
@@ -221,7 +238,7 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
         connectedApiProviders:providerSettings.connectedProfiles(),
         localProviders:localProviders.list(),
         tasks:runtime.listTasks().map(task=>taskSummary(task,runtime)),providers:[...providers.values()].map(provider=>({id:provider.id,label:provider.label,model:provider.model||null,kind:provider.kind,available:provider.available??true,accounting:provider.accounting,tier:provider.tier||'standard',zdr:classifyProviderZdr(provider),meta:classifyModel(provider,{catalog:modelCatalog,learning})})),
-        fixtures:fixtures.map(({id,title,description,objective})=>({id,title,description,objective})),scenarios:scriptedScenarios,benchmark,version:'0.2.0',capabilities,limitations,personas:PERSONAS,tools:TOOLS.map(({name,description,parameters,result})=>({name,description,parameters,resultSchema:result})),executionAvailable:isSandboxSupportedPlatform(),sessionProtected:auth,workflows:listWorkflows(),permissions:runtime.getGlobalPermissions(),privacy:runtime.getPrivacy(),overseer:runtime.getOverseer(),router:runtime.getRouterSettings(),schedulesSummary:runtime.getSchedulesSummary(),modelGroups:runtime.getModelGroups({sortBy,catalog:modelCatalog}),sortModes:MODEL_SORT_MODES,catalogMeta:modelCatalog.meta()
+        fixtures:fixtures.map(({id,title,description,objective})=>({id,title,description,objective})),scenarios:scriptedScenarios,benchmark,version:APP_VERSION,capabilities,limitations,personas:PERSONAS,tools:TOOLS.map(({name,description,parameters,result})=>({name,description,parameters,resultSchema:result})),executionAvailable:isSandboxSupportedPlatform(),sessionProtected:auth,workflows:listWorkflows(),permissions:runtime.getGlobalPermissions(),privacy:runtime.getPrivacy(),overseer:runtime.getOverseer(),router:runtime.getRouterSettings(),autotune:runtime.getAutoTune(),schedulesSummary:runtime.getSchedulesSummary(),modelGroups:runtime.getModelGroups({sortBy,catalog:modelCatalog}),sortModes:MODEL_SORT_MODES,catalogMeta:modelCatalog.meta()
       });
       }
       if(req.method==='GET' && url.pathname==='/api/browser/settings')return send(res,200,await runtime.getBrowserInfo());
@@ -560,6 +577,16 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
       if(req.method==='DELETE' && url.pathname==='/api/providers/models') {
         const result = await providerSettings.removeModels(await readBody(req));
         return send(res,200,{...result,connectedApiProviders:providerSettings.connectedProfiles(),providers:[...providers.values()].map(({id,label,kind,available=true,tier='standard'})=>({id,label,kind,available,tier}))});
+      }
+      if(req.method==='GET' && url.pathname==='/api/autotune') {
+        return send(res, 200, runtime.getAutoTune());
+      }
+      if(req.method==='PATCH' && url.pathname==='/api/autotune') {
+        return send(res, 200, runtime.updateAutoTune(await readBody(req)));
+      }
+      if(req.method==='DELETE' && url.pathname==='/api/autotune') {
+        await readBody(req).catch(() => ({}));
+        return send(res, 200, runtime.resetAutoTune());
       }
       if(req.method==='GET' && url.pathname==='/api/acp/status') {
         const harnesses = (await discoverAcpHarnesses({ env: cliDiscovery?.environment || process.env })).map(h => ({
@@ -937,7 +964,7 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
           return send(res, 200, runtime.broker.browser.getStatus(taskId));
         }
       }
-      const match=url.pathname.match(/^\/api\/tasks\/([^/]+)(?:\/(run|pause|resume|cancel|accept|report-refusal|overseer-consult|save-skill|policy|providers|answer-race|message|export|patch|execution|checks|persona|effort|prompt|apply-preview|apply-source|inspect-apply|undo-apply|source-backup|hunk|generation|rewind|plan-mode|compact|checkpoints|permissions|approval|fork|transcript|commit|title))?$/);
+      const match=url.pathname.match(/^\/api\/tasks\/([^/]+)(?:\/(run|pause|resume|cancel|accept|report-refusal|overseer-consult|save-skill|visualize|visualizer|visualizer-telemetry|policy|providers|answer-race|message|export|patch|execution|checks|persona|effort|prompt|apply-preview|apply-source|inspect-apply|undo-apply|source-backup|hunk|generation|rewind|plan-mode|compact|checkpoints|permissions|approval|fork|transcript|commit|title))?$/);
       if(match) {
         const [,id,action]=match;
         if(mutation&&runtime.getTask(id).crewMember)throw Object.assign(new Error('Control crew workers through their parent conversation.'),{code:'CREW_MEMBER'});
@@ -1085,12 +1112,33 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
           return send(res,200,await runtime.purgeTask(id));
         }
         if(req.method==='PATCH'&&action==='policy')return send(res,200,{task:publicTask(runtime.updatePolicy(id,await readBody(req)),runtime)});
+        if(req.method==='POST'&&action==='visualize') {
+          const body = await readBody(req).catch(() => ({}));
+          const instruction = typeof body?.instruction === 'string' ? body.instruction.slice(0, 600) : '';
+          return send(res, 200, await runtime.generateVisualizer(id, { instruction }));
+        }
+        if(req.method==='GET'&&action==='visualizer') {
+          const html = await runtime.getVisualizerHtml(id);
+          if (!html) return send(res, 404, { error: { code: 'VISUALIZER_NOT_READY', message: 'No visualizer generated for this task yet.' } });
+          res.writeHead(200, {
+            'content-type': 'text/html; charset=utf-8',
+            'cache-control': 'no-store',
+            'content-security-policy': VISUALIZER_CSP,
+            'x-frame-options': 'SAMEORIGIN',
+            'x-content-type-options': 'nosniff',
+          });
+          res.end(html);
+          return;
+        }
+        if(req.method==='GET'&&action==='visualizer-telemetry') {
+          return send(res, 200, await runtime.getVisualizerTelemetry(id));
+        }
         if(req.method==='POST'&&action==='message') {
           const body=await readBody(req, 12 * 1024 * 1024);
           if(Object.keys(body).some(key=>!['message','messageId','mode','attachments'].includes(key)))throw Object.assign(new Error('Only message, messageId, mode and attachments are accepted in a follow-up request'),{status:400});
           const result=await runtime.submitMessage(id,body.message,body.messageId,body.mode,body.attachments);
           if(result.start)run(id);
-          return send(res,result.queued?202:200,{task:publicTask(runtime.getTask(id),runtime),queued:result.queued,duplicate:Boolean(result.duplicate)});
+          return send(res,result.queued||result.parallel?202:200,{task:publicTask(runtime.getTask(id),runtime),queued:Boolean(result.queued),parallel:Boolean(result.parallel),preempted:Boolean(result.preempted),workerId:result.workerId||null,duplicate:Boolean(result.duplicate)});
         }
         if(req.method==='PATCH'&&action==='message') {
           const body=await readBody(req);
@@ -1234,7 +1282,7 @@ if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.ur
       ? linuxSecretToolKeychain(dataDir)
       : undefined;
   const app=await createApp({auth:true, dataDir, keychain});
-  try {await app.listen();process.stdout.write(`G0DM0D3 0.2.0\n${app.accessUrl}\nState: ${app.runtime.store.dataDir}\nPrivate local launch link; keep it on this machine. Ctrl-C to stop.\n`);}
+  try {await app.listen();process.stdout.write(`G0DM0D3 ${APP_VERSION}\n${app.accessUrl}\nState: ${app.runtime.store.dataDir}\nPrivate local launch link; keep it on this machine. Ctrl-C to stop.\n`);}
   catch(error){await app.close();throw error;}
   const shutdown = () => {
     app.close().then(

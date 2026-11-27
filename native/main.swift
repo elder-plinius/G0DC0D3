@@ -389,10 +389,13 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
                     let data = data,
                     let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
                     json["app"] as? String == "g0dc0d3" {
-                if json["veniceCatalog"] as? Bool == true && json["authRequired"] as? Bool == true {
+                let bundleVer = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.3.0"
+                let serverVer = json["version"] as? String ?? ""
+                let hasModernApi = json["veniceCatalog"] as? Bool == true && json["authRequired"] as? Bool == true && json["acp"] as? Bool == true
+                if hasModernApi && (serverVer == bundleVer || serverVer.isEmpty) {
                     DispatchQueue.main.async { self.sessionRequired = true }
                     result = .healthy
-                } else if json["desktopWorktrees"] == nil {
+                } else if json["desktopWorktrees"] == nil || json["acp"] == nil || (!serverVer.isEmpty && serverVer != bundleVer) {
                     result = .legacy
                 } else { result = .incompatible }
             }
@@ -857,8 +860,9 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
     @objc private func showAbout() {
         showWindow()
         let alert = NSAlert()
-        alert.messageText = "G0DM0D3 0.2.0"
-        alert.informativeText = "Local developer alpha\n\nNative AppKit/WKWebView client with a portable Node.js runtime. Ad-hoc signed, not notarized. Node 22.13+ is required. Project commands use an experimental macOS filesystem/network boundary; detached process cleanup is best effort.\n\nScripted fault checks and live model results are labeled separately."
+        let ver = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.3.0"
+        alert.messageText = "G0DM0D3 \(ver)"
+        alert.informativeText = "Local-first AI workspace & GODCODƎ coding harness\n\nNative AppKit/WKWebView client with self-contained Node.js 22 runtime, zero telemetry, zero npm dependencies, macOS Seatbelt command sandboxing, ACP v1 multi-harness coordination, Conclave 2.0, Brain 2.0, Live Browser 2.0, and AutoTune.\n\nScripted fault checks and live model results are labeled separately."
         alert.beginSheetModal(for: window)
     }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showWindow(); return true }

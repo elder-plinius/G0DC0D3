@@ -885,7 +885,125 @@ $('#model-controls').hidden = false;
   <div id="acp-harness-list" class="acp-harness-grid" role="list" aria-label="ACP-capable harnesses"></div>
   <p id="acp-sessions-summary" class="field-help acp-sessions-summary">Checking installed ACP harnesses…</p>`;
   $('#model-controls')?.append(acpCard);
+
+  const atCard = document.createElement('section');
+  atCard.id = 'autotune-card';
+  atCard.className = 'settings-card autotune-card';
+  atCard.dataset.modelSubtab = 'routing';
+  atCard.innerHTML = `<div class="settings-card-head autotune-card-head">
+    <div>
+      <h4>AutoTune Hyperparameter Layer <span class="acp-proto-badge">Empirical Bayes</span></h4>
+      <p>Passively learns optimal sampling archetypes (temperature, top_p, min_p, penalties) per model × task domain × reasoning effort from real verification, Arena, Overseer, and user outcomes. Never overrides manual Model Controls sliders.</p>
+    </div>
+    <button type="button" class="button button-secondary" id="autotune-reset-btn">Reset learned</button>
+  </div>
+  <div class="autotune-mode-bar" role="group" aria-label="AutoTune mode">
+    <button type="button" class="button button-secondary autotune-mode-btn" data-autotune-mode="off">Off</button>
+    <button type="button" class="button button-secondary autotune-mode-btn" data-autotune-mode="passive">Passive (Conservative)</button>
+    <button type="button" class="button button-secondary autotune-mode-btn" data-autotune-mode="active">Active (Explore)</button>
+  </div>
+  <p id="autotune-summary" class="field-help">Loading AutoTune telemetry…</p>
+  <div id="autotune-learned-list" class="autotune-learned-list"></div>`;
+  $('#model-controls')?.append(atCard);
 }
+
+let autoTuneState = null;
+async function loadAutoTuneSettings() {
+  const sumEl = $('#autotune-summary');
+  const listEl = $('#autotune-learned-list');
+  if (!sumEl || !listEl) return;
+  try {
+    const data = await api('/api/autotune');
+    autoTuneState = data;
+    renderAutoTuneCard(data);
+  } catch (err) {
+    sumEl.textContent = `Could not load AutoTune: ${err?.message || 'error'}`;
+  }
+}
+function renderAutoTuneCard(data) {
+  const sumEl = $('#autotune-summary');
+  const listEl = $('#autotune-learned-list');
+  if (!sumEl || !listEl || !data) return;
+  autoTuneState = data;
+  $$('.autotune-mode-btn').forEach(btn => {
+    const active = btn.dataset.autotuneMode === data.mode;
+    btn.classList.toggle('is-active', active);
+    btn.setAttribute('aria-pressed', String(active));
+  });
+  const obs = Number(data.totalObservations || 0);
+  const modeDesc = data.mode === 'off'
+    ? 'Disabled — models use their provider defaults or manual sliders.'
+    : data.mode === 'active'
+      ? `Active Thompson Sampling · ${obs} recorded outcome${obs === 1 ? '' : 's'}.`
+      : `Passive Conservative mode (≤10% safe adjacent exploration) · ${obs} recorded outcome${obs === 1 ? '' : 's'}.`;
+  sumEl.textContent = modeDesc;
+  const rows = Array.isArray(data.learned) ? data.learned : [];
+  if (!rows.length) {
+    listEl.innerHTML = '<p class="field-help autotune-empty">No learned model × domain cells yet — AutoTune starts with informed domain priors and adapts automatically as tasks verify and complete.</p>';
+    return;
+  }
+  const profileOpts = (Array.isArray(data.profiles) ? data.profiles : []).map(p => `<option value="${escapeHTML(p.id)}">${escapeHTML(p.label)}</option>`).join('');
+  listEl.innerHTML = `<div class="autotune-table">${rows.slice(0, 12).map(r => {
+    const tVal = r.bestParams?.temperature !== undefined ? `T=${r.bestParams.temperature}` : 'default';
+    return `<div class="autotune-row">
+      <div class="autotune-row-main">
+        <strong>${escapeHTML(r.modelKey)}</strong>
+        <span class="autotune-domain-pill">${escapeHTML(r.domain)} · ${escapeHTML(r.effort)}</span>
+      </div>
+      <div class="autotune-row-meta">
+        <span class="autotune-profile-pill">${escapeHTML(r.bestLabel)} (${escapeHTML(tVal)})</span>
+        <span class="autotune-stat">${escapeHTML(String(r.winRatePct))}% · ${escapeHTML(String(r.observations))}n</span>
+        <select class="autotune-pin-select" data-at-model="${escapeHTML(r.modelKey)}" data-at-domain="${escapeHTML(r.domain)}" aria-label="Pin profile for ${escapeHTML(r.modelKey)} ${escapeHTML(r.domain)}">
+          <option value="">Auto</option>${profileOpts}
+        </select>
+      </div>
+    </div>`;
+  }).join('')}</div>`;
+  listEl.querySelectorAll('.autotune-pin-select').forEach((sel, idx) => {
+    const row = rows[idx];
+    if (row?.pinnedProfile) sel.value = row.pinnedProfile;
+    sel.addEventListener('change', async () => {
+      const val = sel.value;
+      const body = val
+        ? { pin: { modelKey: sel.dataset.atModel, domain: sel.dataset.atDomain, profileId: val } }
+        : { unpin: { modelKey: sel.dataset.atModel, domain: sel.dataset.atDomain } };
+      try {
+        renderAutoTuneCard(await api('/api/autotune', { method: 'PATCH', body: JSON.stringify(body) }));
+        settingsFeedback(val ? `Pinned ${val} profile for ${sel.dataset.atModel} (${sel.dataset.atDomain}).` : `Restored Auto selection for ${sel.dataset.atModel} (${sel.dataset.atDomain}).`);
+      } catch (err) {
+        settingsFeedback(err?.message || 'Could not update AutoTune pin.', true);
+        if (autoTuneState) renderAutoTuneCard(autoTuneState);
+      }
+    });
+  });
+}
+$$('.autotune-mode-btn').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const mode = btn.dataset.autotuneMode;
+    try {
+      renderAutoTuneCard(await api('/api/autotune', { method: 'PATCH', body: JSON.stringify({ mode }) }));
+      settingsFeedback(`AutoTune set to ${mode}.`);
+    } catch (err) {
+      settingsFeedback(err?.message || 'Could not update AutoTune mode.', true);
+      if (autoTuneState) renderAutoTuneCard(autoTuneState);
+    }
+  });
+});
+$('#autotune-reset-btn')?.addEventListener('click', async () => {
+  const ok = await confirmModal({
+    title: 'Reset AutoTune learned profiles?',
+    message: 'This clears all learned sampling posteriors and model × domain pins. AutoTune mode stays unchanged.',
+    confirmLabel: 'Reset AutoTune',
+    danger: true,
+  });
+  if (!ok) return;
+  try {
+    renderAutoTuneCard(await api('/api/autotune', { method: 'DELETE', body: '{}' }));
+    settingsFeedback('AutoTune learned profiles reset.');
+  } catch (err) {
+    settingsFeedback(err?.message || 'Could not reset AutoTune.', true);
+  }
+});
 
 let acpStatusCache = null;
 let acpStatusInFlight = null;
@@ -1647,7 +1765,7 @@ async function selectSettingsPane(pane, options = {}) {
     if (options.subtab) selectModelsSubtab(options.subtab);
     else selectModelsSubtab(modelsSubtab);
     renderModelSettings();
-    await Promise.all([loadModelConnections(), refreshAcpStatus({ force: true }), loadVeniceCatalog(), typeof loadOpenRouterCatalog === 'function' ? loadOpenRouterCatalog() : Promise.resolve(), ...(typeof loadDirectProviderCatalog === 'function' ? ['openai', 'anthropic', 'xai', 'gemini', 'meta'].map(p => loadDirectProviderCatalog(p)) : []), typeof loadServices === 'function' ? loadServices() : Promise.resolve(), typeof loadModelGroups === 'function' ? loadModelGroups() : Promise.resolve(), typeof loadOverseer === 'function' ? loadOverseer() : Promise.resolve(), typeof loadUltraRouter === 'function' ? loadUltraRouter() : Promise.resolve()]);
+    await Promise.all([loadModelConnections(), refreshAcpStatus({ force: true }), loadAutoTuneSettings(), loadVeniceCatalog(), typeof loadOpenRouterCatalog === 'function' ? loadOpenRouterCatalog() : Promise.resolve(), ...(typeof loadDirectProviderCatalog === 'function' ? ['openai', 'anthropic', 'xai', 'gemini', 'meta'].map(p => loadDirectProviderCatalog(p)) : []), typeof loadServices === 'function' ? loadServices() : Promise.resolve(), typeof loadModelGroups === 'function' ? loadModelGroups() : Promise.resolve(), typeof loadOverseer === 'function' ? loadOverseer() : Promise.resolve(), typeof loadUltraRouter === 'function' ? loadUltraRouter() : Promise.resolve()]);
     selectModelsSubtab(modelsSubtab);
   }
   if (pane === 'tools') { await Promise.all([loadPermissionsSettings(), loadHooksSettings(), loadBrowserSettings()]); }

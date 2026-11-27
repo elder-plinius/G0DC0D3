@@ -4,6 +4,7 @@ import https from 'node:https';
 import net from 'node:net';
 import zlib from 'node:zlib';
 import { DEFAULT_PRIVACY_SETTINGS, checkTargetScope } from './privacy.mjs';
+import { APP_VERSION } from './version.mjs';
 
 const MAX_REDIRECTS = 3;
 const MAX_RESPONSE_BYTES = 512 * 1024;
@@ -325,7 +326,7 @@ export async function safeWebFetch({ url, maxChars = DEFAULT_MAX_CHARS } = {}, {
   let currentUrl = await validateSafePublicUrl(initialParsed.href, lookup);
   const timeout = AbortSignal.timeout(15000);
   const combinedSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
-  const reqHeaders = { 'user-agent': 'G0DC0D3/0.2 (research-harness)', 'accept': 'text/markdown, text/plain, text/html, application/json;q=0.9' };
+  const reqHeaders = { 'user-agent': `G0DC0D3/${APP_VERSION} (research-harness)`, 'accept': 'text/markdown, text/plain, text/html, application/json;q=0.9' };
 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     onOutbound?.({ providerId: 'web.fetch', host: currentUrl.hostname, protocol: currentUrl.protocol.replace(':', ''), zdrClass: 'web-fetch', zdrFlags: ['ssrf-checked', 'dns-pinned'], secretsRedacted: 0, blocked: false });
@@ -445,7 +446,7 @@ export async function safeWebSearch({ query, limit = 6 } = {}, { privacy = DEFAU
   const res = await fetchImpl(endpoint, {
     method: 'GET',
     signal: combinedSignal,
-    headers: { 'user-agent': 'G0DC0D3/0.2 (research-harness)', 'accept': 'text/html' }
+    headers: { 'user-agent': `G0DC0D3/${APP_VERSION} (research-harness)`, 'accept': 'text/html' }
   });
   if (!res.ok) { try { await res.body?.cancel?.(); } catch {} throw fault('SEARCH_FAILED', `Web search returned HTTP ${res.status}.`); }
   const { buffer: htmlBuf } = await readBoundedResponseBuffer(res, MAX_RESPONSE_BYTES);

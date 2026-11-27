@@ -608,7 +608,7 @@ function renderComposer() {
     sendBtn.dataset.composerStop = canStop ? '1' : '';
     sendBtn.classList.toggle('is-stop-mode', canStop);
     sendBtn.disabled = canStop ? Boolean(actionBusy) : (!online || loading || task?.draining || task?.sourceBusy || sourceActionBusy || isCrewBusy(task) || cancelled || busy || (Boolean(selectedId) && actionBusy) || !hasPayload);
-    sendBtn.setAttribute('aria-label', canStop ? 'Stop generation' : busy ? 'Sending message' : queueing ? ($('#composer-delivery')?.value === 'steer' ? 'Steer current turn' : 'Queue next message') : 'Send message');
+    sendBtn.setAttribute('aria-label', canStop ? 'Stop generation' : busy ? 'Sending message' : queueing ? ($('#composer-delivery')?.value === 'steer' ? 'Steer current turn' : $('#composer-delivery')?.value === 'parallel' ? 'Run parallel sidecar' : 'Queue next message') : 'Send message');
     sendBtn.title = canStop ? 'Stop current turn (Esc)' : 'Send message';
     sendBtn.setAttribute('aria-busy', String(busy));
     const iconMode = canStop ? 'stop' : 'send';
@@ -1769,6 +1769,12 @@ async function executeSlashCommand(raw) {
     }
     return { handled: true };
   }
+  if (cmd === '/visualize' || cmd === '/viz') {
+    clearInput();
+    const refinement = (arg || '').trim();
+    window.G0DVisualizer?.open(selectedId, { autoGenerate: true, instruction: refinement });
+    return { handled: true };
+  }
   if (cmd === '/browser') {
     clearInput();
     const sub = (arg || '').trim().toLowerCase();
@@ -1840,6 +1846,7 @@ function closeAllRightDocks({ except = null } = {}) {
   if (except !== 'code') window.closeChatCode?.();
   if (except !== 'conclave' && window.G0DConclave?.isOpen?.()) window.G0DConclave.close();
   if (except !== 'browser' && window.G0DBrowserLive?.isOpen?.()) window.G0DBrowserLive.close();
+  if (except !== 'visualizer' && window.G0DVisualizer?.isOpen?.()) window.G0DVisualizer.close();
   if (except !== 'inspector' && document.body.classList.contains('inspector-open')) {
     document.body.classList.remove('inspector-open');
     syncPanels();
@@ -2056,6 +2063,7 @@ function newConversation() {
   renderTasks(true);
   renderEmpty();
   window.G0DConclave?.syncTask(null);
+  window.G0DVisualizer?.onTaskChanged?.(null);
   loadSkills(null);
   if (narrowLayout.matches) setSidebar(false);
   $('#composer-input')?.focus();
@@ -2157,6 +2165,7 @@ async function submitMessage(event) {
     const destination = buildIntent ? `/api/conversations/${encodeURIComponent(taskId)}/build-intent` : `/api/tasks/${encodeURIComponent(taskId)}/message`;
     const response = await api(destination, { method: 'POST', body: JSON.stringify(submission) });
     messageSubmissions.delete(key);
+    if (response?.parallel) toast('Parallel sidecar started — running alongside main agent.');
     if (composerScope === key) clearComposerAttachments();
     if (composerDrafts.get(key) === raw) saveComposerDraft(key, '');
     if (composerScope === key && $('#composer-input').value === raw) { $('#composer-input').value = ''; resizeComposer(); }
@@ -3862,9 +3871,10 @@ function eventDescription(event) {
     'model.request': ['Model request', '↗', '', [data.providerId ?? data.provider ?? data.model, data.strategy ? `strategy: ${data.strategy}` : '', data.call ? `call ${data.call}` : ''].filter(Boolean).join(' · ')],
     'model.response': [data.superseded ? 'Response superseded by new instructions' : 'Model response', '↙', '', data.superseded ? data.reason : data.text ?? data.response?.text ?? data.response?.message ?? data.message ?? ''],
     'model.interrupted': ['Model request interrupted', '■', '', `${data.providerId} · ${data.reason} after ${data.durationMs} ms`],
-    'tool.started': ['Tool started', '⌁', 'tool', data.name ?? data.tool ?? data.operation?.name ?? ''],
-    'tool.completed': ['Tool completed', '⌁', 'tool', data.name ?? data.tool ?? data.operation?.name ?? ''],
-    'tool.failed': ['Tool failed', '!', 'error', data.error?.message ?? data.error ?? data.message ?? ''],
+    'tool.started': (() => { const s = humanizeToolStep({ type: 'tool.started', data }); return [s.verb, '⌁', 'tool', s.target]; })(),
+    'tool.completed': (() => { const s = humanizeToolStep({ type: 'tool.completed', data }); return [s.verb, '⌁', s.isErr ? 'error' : 'tool', s.target]; })(),
+    'tool.failed': (() => { const s = humanizeToolStep({ type: 'tool.failed', data }); return [s.verb, '!', 'error', s.target || data.error?.message || data.message || '']; })(),
+    'autotune.selected': ['AutoTune', '◈', 'info', `${data.profileLabel || data.profileId || 'Focused'}${data.applied?.temperature !== undefined ? ` (T=${data.applied.temperature})` : ''} · ${data.domain || 'general'} · ${data.winRatePct ?? 0}%`],
     'recovery.started': ['Recovery initiated', '↻', 'warning', data.incident?.message ?? data.reason ?? data.diagnosis ?? data.strategy ?? data.message ?? 'Resuming G0DM0D3 recovery.'],
     'routing.retry_scheduled': ['Retry scheduled', '↻', 'warning', `Attempt ${data.retry} of ${data.maxRetries}. Waiting until ${new Date(data.retryAt).toLocaleTimeString()}.`],
     'routing.profile_changed': ['Output allowance adjusted', '↻', 'warning', `${data.before?.maxOutputTokens} → ${data.requestProfile?.maxOutputTokens} tokens.`],
@@ -3954,41 +3964,237 @@ function conversationMessage({ role, text, time, provider, key, raw, outcome, th
   return `<article class="message message-${role}" data-message="${escapeHTML(key)}"><div class="message-avatar" aria-hidden="true">${role === 'user' ? 'U' : role === 'assistant' ? '' : '·'}</div><div class="message-main"><header class="message-header"><strong class="message-author">${title}</strong>${provider ? `<span class="message-provider">${escapeHTML(provider)}</span>` : ''}<time class="message-time" title="${escapeHTML(time)}">${escapeHTML(shortDate(time))}</time>${regenBtn}${copyBtn}${role === 'user' && selectedData?.task?.workspaceKind === 'conversation' && /^(objective|followup)-/.test(key) ? `<button type="button" class="button button-quiet edit-chat" data-edit-chat="${escapeHTML(key)}" aria-label="Edit or rewind this message">Edit / rewind</button>` : ''}</header>${['declined','partial'].includes(outcome?.kind) ? `<p class="reply-outcome" title="${outcome.source === 'text_heuristic' ? 'Detected from reply wording; no retry decision is made by this label.' : 'Reported by provider'}">${escapeHTML(outcome.label)}</p>` : ''}${thinkingHtml}${attachmentsHtml}<div class="message-body">${body}</div>${scorecard}${raw ? `<details class="message-raw" data-disclosure="raw-${escapeHTML(key)}" ${openDetails.has(`raw-${key}`) ? 'open' : ''}><summary>Response details</summary><pre tabindex="0" role="region" aria-label="Model response details">${escapeHTML(pretty(raw))}</pre></details>` : ''}</div></article>`;
 }
 
+function shortUrlLabel(rawUrl) {
+  const s = String(rawUrl || '').trim();
+  if (!s) return '';
+  try {
+    const u = new URL(s);
+    const host = u.hostname.replace(/^www\./, '');
+    const path = u.pathname && u.pathname !== '/' ? u.pathname : '';
+    const full = `${host}${path}`;
+    return full.length > 52 ? `${full.slice(0, 49)}…` : full;
+  } catch {
+    return s.length > 52 ? `${s.slice(0, 49)}…` : s;
+  }
+}
+
+function formatCompactBytes(bytes) {
+  const n = Number(bytes);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n >= 10240 ? 0 : 1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function humanizeToolStep(event) {
+  const data = event?.data || {};
+  const isErr = event?.type === 'tool.failed' || event?.type === 'model.error' || data?.ok === false || data?.status === 'failed' || data?.result?.ok === false;
+  const isRun = event?.type?.endsWith('.started');
+  const name = String(data.name || '');
+  const args = data.args && typeof data.args === 'object' ? data.args : {};
+  const res = data.result && typeof data.result === 'object' ? data.result : {};
+  const durMs = Number(data.durationMs || res.durationMs || 0);
+  const durBadge = durMs >= 1000 ? `${(durMs / 1000).toFixed(1)}s` : '';
+
+  if (event?.type === 'evaluation.started') {
+    return { verb: 'Verifying', target: 'workspace checks & tests', badge: '', badgeKind: 'accent', isErr: false };
+  }
+  if (event?.type === 'evaluation.completed') {
+    const ok = data.status === 'pass';
+    return {
+      verb: ok ? 'Verified' : 'Check failed',
+      target: data.summary || (ok ? 'All checks passed' : 'Verification failed'),
+      badge: ok ? 'pass' : 'fail',
+      badgeKind: ok ? 'ok' : 'err',
+      isErr: !ok,
+    };
+  }
+  if (event?.type === 'model.switched') {
+    const toLabel = providerById(data.to)?.label || data.to || 'backup model';
+    return { verb: 'Switched', target: toLabel, badge: data.reason || 'route', badgeKind: 'accent', isErr: false };
+  }
+  if (event?.type === 'routing.reframe_retry') {
+    return { verb: 'Retried', target: 'Reframed approach', badge: 'retry', badgeKind: 'accent', isErr: false };
+  }
+  if (event?.type === 'subagent.started') {
+    const role = data.role || 'sidecar';
+    return { verb: 'Running', target: data.prompt ? `${role} · ${String(data.prompt).slice(0, 48)}` : `${role} sidecar`, badge: 'parallel', badgeKind: 'accent', isErr: false };
+  }
+  if (event?.type === 'subagent.completed') {
+    const role = data.role || 'subagent';
+    return { verb: 'Delegated', target: `${role} finished`, badge: data.calls ? `${data.calls} calls` : '', badgeKind: 'accent', isErr: !data.ok };
+  }
+
+  const pickPath = () => String(res.path || args.path || args.file || args.target || '').replace(/^\.\//, '');
+  const pickUrl = () => shortUrlLabel(res.finalUrl || res.url || args.url || '');
+
+  switch (name) {
+    case 'web.fetch': {
+      const target = pickUrl() || 'web page';
+      const size = formatCompactBytes(res.bytes || res.length || (typeof res.text === 'string' ? res.text.length : 0));
+      const status = res.status && res.status !== 200 ? `HTTP ${res.status}` : '';
+      return {
+        verb: isRun ? 'Fetching' : (isErr ? 'Fetch failed' : 'Fetched'),
+        target,
+        badge: status || size || durBadge,
+        badgeKind: isErr ? 'err' : 'muted',
+        isErr,
+      };
+    }
+    case 'web.search': {
+      const q = String(args.query || res.query || '').trim();
+      const count = Array.isArray(res.results) ? `${res.results.length} hits` : (res.count ? `${res.count} hits` : '');
+      return {
+        verb: isRun ? 'Searching' : 'Searched',
+        target: q ? `“${q.slice(0, 48)}${q.length > 48 ? '…' : ''}”` : 'the web',
+        badge: count || durBadge,
+        badgeKind: isErr ? 'err' : 'muted',
+        isErr,
+      };
+    }
+    case 'repo.read': {
+      const p = pickPath() || 'file';
+      const lines = res.totalLines || res.lines || (args.startLine && args.endLine ? `L${args.startLine}-${args.endLine}` : '');
+      return {
+        verb: isRun ? 'Reading' : 'Read',
+        target: p,
+        badge: typeof lines === 'number' ? `${lines}L` : String(lines || ''),
+        badgeKind: isErr ? 'err' : 'muted',
+        isErr,
+      };
+    }
+    case 'repo.list': {
+      const dir = pickPath() || '.';
+      const count = Array.isArray(res.files) ? `${res.files.length} files` : (res.count ? `${res.count} items` : '');
+      return {
+        verb: isRun ? 'Listing' : 'Listed',
+        target: dir === '.' ? 'workspace files' : dir,
+        badge: count,
+        badgeKind: isErr ? 'err' : 'muted',
+        isErr,
+      };
+    }
+    case 'repo.search': {
+      const q = String(args.query || args.pattern || '').trim();
+      const hits = Array.isArray(res.matches) ? `${res.matches.length} matches` : (res.count ? `${res.count} matches` : '');
+      return {
+        verb: isRun ? 'Searching' : 'Searched',
+        target: q ? `/${q.slice(0, 42)}/` : 'repository',
+        badge: hits,
+        badgeKind: isErr ? 'err' : 'muted',
+        isErr,
+      };
+    }
+    case 'repo.write':
+    case 'repo.patch': {
+      const p = pickPath() || 'file';
+      const verb = name === 'repo.patch' ? (isRun ? 'Editing' : 'Edited') : (isRun ? 'Writing' : 'Wrote');
+      const size = formatCompactBytes(res.bytes || (typeof args.content === 'string' ? args.content.length : 0));
+      return { verb, target: p, badge: size || durBadge, badgeKind: isErr ? 'err' : 'ok', isErr };
+    }
+    case 'repo.delete': {
+      return { verb: isRun ? 'Removing' : 'Removed', target: pickPath() || 'file', badge: '', badgeKind: isErr ? 'err' : 'muted', isErr };
+    }
+    case 'process.run': {
+      const cmd = String(args.command || res.command || 'command').trim();
+      const shortCmd = cmd.length > 52 ? `${cmd.slice(0, 49)}…` : cmd;
+      const exitCode = res.exitCode ?? res.code;
+      const badge = exitCode !== undefined && exitCode !== null
+        ? (exitCode === 0 ? (durBadge || 'exit 0') : `exit ${exitCode}`)
+        : durBadge;
+      const failed = isErr || (typeof exitCode === 'number' && exitCode !== 0);
+      return { verb: isRun ? 'Running' : 'Ran', target: shortCmd, badge, badgeKind: failed ? 'err' : 'ok', isErr: failed };
+    }
+    case 'git.status':
+    case 'git.diff':
+    case 'git.commit': {
+      const sub = name.split('.')[1];
+      const msg = String(args.message || res.message || '').trim();
+      return {
+        verb: isRun ? `Git ${sub}` : (sub === 'commit' ? 'Committed' : `Checked git ${sub}`),
+        target: msg ? msg.slice(0, 48) : (pickPath() || 'repository'),
+        badge: res.hash ? String(res.hash).slice(0, 7) : '',
+        badgeKind: isErr ? 'err' : 'ok',
+        isErr,
+      };
+    }
+    default: {
+      if (name.startsWith('browser.')) {
+        const act = name.slice(8);
+        const url = pickUrl();
+        const label = args.selector || args.text || url || act;
+        return {
+          verb: isRun ? `Browser ${act}` : `Browser ${act}`,
+          target: String(label).slice(0, 48),
+          badge: durBadge,
+          badgeKind: isErr ? 'err' : 'accent',
+          isErr,
+        };
+      }
+      const cleanName = name ? name.replace(/[._]/g, ' ') : (event?.type || 'step');
+      const fallbackTarget = pickPath() || pickUrl() || String(args.query || data.message || '').slice(0, 48);
+      return {
+        verb: isRun ? 'Running' : (isErr ? 'Failed' : 'Completed'),
+        target: fallbackTarget ? `${cleanName} · ${fallbackTarget}` : cleanName,
+        badge: durBadge,
+        badgeKind: isErr ? 'err' : 'muted',
+        isErr,
+      };
+    }
+  }
+}
+
 function conversationWork(events, openDetails) {
   if (!events.length) return '';
   const key = `work-${events[0].id ?? events[0].seq}`;
-  const tools = events.filter((event) => event.type === 'tool.completed').length;
-  const checks = events.filter((event) => event.type === 'evaluation.completed').length;
-  const recovery = events.some((event) => event.type.startsWith('recovery.') || event.type === 'model.switched');
-  if (!tools && !checks && !recovery && !events.some(event => ['model.error', 'tool.failed', 'task.failed', 'task.cancelled'].includes(event.type))) return '';
-  const outcome = [...events].reverse().find((event) => ['task.completed', 'task.failed', 'task.cancelled', 'evaluation.completed', 'model.switched', 'recovery.started'].includes(event.type));
-  const writes = events.filter(e => e.type === 'tool.completed' && ['repo.write', 'repo.patch', 'git.commit'].includes(e.data?.name));
-  const writePaths = [...new Set(writes.map(e => e.data?.result?.path).filter(Boolean))];
-  const commands = events.filter(e => e.type === 'tool.completed' && e.data?.name === 'process.run');
-  const reads = events.filter(e => e.type === 'tool.completed' && ['repo.read', 'repo.search', 'repo.list'].includes(e.data?.name));
+  const stepEvents = events.filter((event) => [
+    'tool.completed', 'tool.failed', 'evaluation.completed', 'model.switched',
+    'recovery.started', 'model.error', 'task.failed', 'task.cancelled', 'subagent.completed'
+  ].includes(event.type));
+  if (!stepEvents.length) return '';
+
+  const toolDone = events.filter(e => e.type === 'tool.completed');
+  const checks = events.filter(e => e.type === 'evaluation.completed').length;
+  const recovery = events.some(e => e.type.startsWith('recovery.') || e.type === 'model.switched');
+  const writes = toolDone.filter(e => ['repo.write', 'repo.patch', 'git.commit'].includes(e.data?.name));
+  const writePaths = [...new Set(writes.map(e => e.data?.result?.path || e.data?.args?.path).filter(Boolean))];
+  const reads = toolDone.filter(e => ['repo.read', 'repo.search', 'repo.list'].includes(e.data?.name));
+  const fetches = toolDone.filter(e => ['web.fetch', 'web.search'].includes(e.data?.name));
+  const commands = toolDone.filter(e => e.data?.name === 'process.run');
+  const browserOps = toolDone.filter(e => String(e.data?.name || '').startsWith('browser.'));
   const commits = writes.filter(e => e.data?.name === 'git.commit' && e.data?.result?.committed);
+
   const parts = [];
-  if (writePaths.length) parts.push(`${writePaths.length} ${writePaths.length === 1 ? 'file' : 'files'} written`);
-  else if (tools) parts.push(`${tools} ${tools === 1 ? 'tool' : 'tools'} used`);
+  if (writePaths.length) parts.push(`${writePaths.length} ${writePaths.length === 1 ? 'file' : 'files'} edited`);
+  if (reads.length) parts.push(`${reads.length} ${reads.length === 1 ? 'file' : 'files'} explored`);
+  if (fetches.length) parts.push(`${fetches.length} ${fetches.length === 1 ? 'source' : 'sources'} fetched`);
   if (commands.length) parts.push(`${commands.length} ${commands.length === 1 ? 'command' : 'commands'}`);
+  if (browserOps.length) parts.push(`${browserOps.length} browser ${browserOps.length === 1 ? 'step' : 'steps'}`);
+  if (!parts.length && toolDone.length) parts.push(`${toolDone.length} ${toolDone.length === 1 ? 'step' : 'steps'}`);
   if (checks) parts.push(`${checks} ${checks === 1 ? 'check' : 'checks'}`);
-  if (recovery) parts.push('Recovery');
-  const title = parts.join(' · ') || 'Task activity';
+  if (recovery) parts.push('recovered');
+  const title = parts.slice(0, 3).join(' · ') || 'Agent activity';
+
+  const outcome = [...events].reverse().find((event) => ['task.completed', 'task.failed', 'task.cancelled', 'evaluation.completed'].includes(event.type));
   const summary = outcome ? eventDescription(outcome)[0] : '';
+
   let fileChips = '';
   if (writePaths.length) {
     fileChips = `<div class="work-file-chips">${writePaths.map(p => {
       const name = p.split('/').pop();
       return `<button type="button" class="work-file-chip" data-view-change="${escapeHTML(p)}" title="${escapeHTML(p)}"><span class="work-file-chip-icon">M</span>${escapeHTML(name)}</button>`;
-    }).join('')}${commits.length ? `<span class="work-commit-chip">committed</span>` : ''}</div>`;
+    }).join('')}${commits.length ? '<span class="work-commit-chip">committed</span>' : ''}</div>`;
   }
-  const fileCountChip = writePaths.length ? `<span class="work-file-count">${writePaths.length} ${writePaths.length === 1 ? 'file' : 'files'}</span>` : '';
-  return `<details class="work-group" data-disclosure="${escapeHTML(key)}" ${openDetails.has(key) ? 'open' : ''}><summary class="work-group-summary"><span>${escapeHTML(title)}</span>${fileCountChip}<span class="work-group-outcome">${escapeHTML(summary)}</span></summary>${fileChips}<div class="work-group-body">${events.map((event) => {
-    const [eventTitle, , stateClass, rawSummary] = eventDescription(event);
-    const text = typeof rawSummary === 'string' ? rawSummary : pretty(rawSummary);
+
+  const rowsHtml = stepEvents.map((event) => {
+    const s = humanizeToolStep(event);
     const stepKey = `step-${event.id ?? event.seq}`;
-    return `<details class="work-step ${escapeHTML(stateClass)}" data-disclosure="${escapeHTML(stepKey)}" ${openDetails.has(stepKey) ? 'open' : ''}><summary class="work-step-title"><span>${escapeHTML(eventTitle)}</span><span class="work-step-detail">${escapeHTML(text.slice(0, 180))}${text.length > 180 ? '…' : ''}</span></summary><pre tabindex="0" role="region" aria-label="Work step details">${escapeHTML(pretty(event.data ?? {}))}</pre></details>`;
-  }).join('')}</div></details>`;
+    const dotCls = s.isErr ? 'is-err' : 'is-ok';
+    const dotSym = s.isErr ? '!' : '✓';
+    return `<details class="live-rail-step ${dotCls}" data-disclosure="${escapeHTML(stepKey)}" ${openDetails.has(stepKey) ? 'open' : ''}><summary class="live-rail-row"><span class="live-rail-dot ${dotCls}" aria-hidden="true">${dotSym}</span><span class="live-rail-verb">${escapeHTML(s.verb)}</span><span class="live-rail-target">${escapeHTML(s.target)}</span>${s.badge ? `<span class="live-rail-badge kind-${escapeHTML(s.badgeKind)}">${escapeHTML(s.badge)}</span>` : ''}</summary><pre class="live-rail-peek" tabindex="0" role="region" aria-label="Work step details">${escapeHTML(pretty(event.data ?? {}))}</pre></details>`;
+  }).join('');
+
+  return `<details class="work-group work-group-rail" data-disclosure="${escapeHTML(key)}" ${openDetails.has(key) ? 'open' : ''}><summary class="work-group-summary"><span class="work-group-title">${escapeHTML(title)}</span><span class="work-group-outcome">${escapeHTML(summary)}</span></summary>${fileChips}<div class="live-rail-list work-group-body">${rowsHtml}</div></details>`;
 }
 
 function renderTimeline(events, total, task) {
@@ -4025,7 +4231,15 @@ function renderTimeline(events, total, task) {
   if (task.conversationRevision) messages.push('<div class="history-notice">Rewound · earlier turns preserved in export.</div>');
   if (events.length >= evLimit && total > events.length) messages.push(`<div class="history-notice">Showing the latest ${events.length} of ${total} activity events. <a href="/api/tasks/${encodeURIComponent(task.id)}/export" download>Export full history</a></div>`);
   let work = [];
-  const flush = () => { if (work.length) { messages.push(conversationWork(work, openDetails)); work = []; } };
+  let lastFlushedSeq = 0;
+  const flush = () => {
+    if (work.length) {
+      const tailSeq = Number(work[work.length - 1]?.seq || 0);
+      if (tailSeq > lastFlushedSeq) lastFlushedSeq = tailSeq;
+      messages.push(conversationWork(work, openDetails));
+      work = [];
+    }
+  };
   let lastAssistantEvent = null;
   const canRegen = task.workspaceKind === 'conversation' && !ACTIVE.has(task.status) && !task.draining && task.status !== 'cancelled' && !isCrewBusy(task);
   if (canRegen) {
@@ -4114,13 +4328,19 @@ function renderTimeline(events, total, task) {
       } else {
         messages.push(`<div class="recovery-event"><span aria-hidden="true">✦</span><span><strong>${escapeHTML(description[0])}</strong> ${escapeHTML(description[3])}</span></div>`);
       }
+    } else if (event.type === 'autotune.selected' && event.data) {
+      const at = event.data;
+      const tTxt = at.applied?.temperature !== undefined ? `T=${at.applied.temperature}` : 'tuned';
+      messages.push(`<div class="autotune-receipt"><span aria-hidden="true">◈</span><span><strong>AutoTune</strong> · ${escapeHTML(at.profileLabel || at.profileId || 'Focused')} (${escapeHTML(tTxt)}) · ${escapeHTML(at.domain || 'general')} · ${escapeHTML(String(at.winRatePct ?? 0))}% win</span></div>`);
     } else if (['model.switched', 'providers.updated', 'routing.retry_scheduled', 'routing.strategy_changed', 'routing.profile_changed', 'routing.reframe_retry', 'overseer.judged', 'owner.refusal_reported', 'permission.auto_approved', 'hook.blocked', 'memory.auto_learned', 'skill.created'].includes(event.type)) {
       flush();
       const description = eventDescription(event);
       messages.push(`<div class="recovery-event"><span aria-hidden="true">↻</span><span><strong>${escapeHTML(description[0])}</strong> ${escapeHTML(description[3])}</span></div>`);
     } else work.push(event);
   }
-  flush();
+  // When the task is actively running, keep the trailing work inside the unified Live Work Rail
+  // instead of rendering a duplicate floating "18 tools used" box right above it!
+  if (!ACTIVE.has(task.status)) flush();
   if (typeof renderConversationQueue === 'function') messages.push(renderConversationQueue(task));
   const visiblePartial = task.outcome?.kind === 'partial' && conversationEvents.findLast(e => e.type === 'model.response' && !e.data?.superseded)?.data?.replyOutcome?.kind === 'partial';
   if (task.blocker?.message && !visiblePartial && !ACTIVE.has(task.status) && !TERMINAL.has(task.status)) messages.push(conversationMessage({ role: 'system', text: task.outcome ? `${task.outcome.label}\n\n${task.outcome.detail}` : task.blocker.message, raw: task.outcome ? task.blocker : null, time: task.updatedAt, key: `blocker-${task.id}` }, openDetails));
@@ -4138,16 +4358,15 @@ function renderTimeline(events, total, task) {
       : recent?.type === 'routing.auto_continued'
         ? 'Continuing output'
         : task.status === 'verifying'
-          ? 'Checking files and tests'
+          ? 'Verifying changes & tests'
           : streamToolName
             ? toolPhaseLabel(streamToolName).replace(/…$/, '')
             : recent?.type === 'tool.started'
               ? toolPhaseLabel(recent.data?.name || 'tool').replace(/…$/, '')
               : task.recoveries
-                ? `Recovering with ${activeProvLabel}`
+                ? `Recovering · ${activeProvLabel}`
                 : `Thinking${activeProvLabel ? ` · ${activeProvLabel}` : ''}`;
-    const dots = '<span class="thinking-dots" aria-hidden="true"><span></span><span></span><span></span></span>';
-    // Build compact Codex-style live plan & recent step trail for the current turn
+
     const todos = Array.isArray(task.todos) ? task.todos : [];
     const doneTodos = todos.filter(t => t.status === 'done').length;
     const planHtml = todos.length
@@ -4156,22 +4375,50 @@ function renderTimeline(events, total, task) {
           return `<li class="live-plan-item status-${escapeHTML(item.status || 'pending')}"><span class="live-plan-icon" aria-hidden="true">${icon}</span><span>${escapeHTML(item.text || '')}</span></li>`;
         }).join('')}</ul></div>`
       : '';
+
     const lastUserIdx = events.findLastIndex(e => ['user.message', 'user.messages.applied', 'conversation.rewound'].includes(e.type));
-    const turnEvents = (lastUserIdx >= 0 ? events.slice(lastUserIdx + 1) : events).filter(e =>
-      ['tool.started', 'tool.completed', 'evaluation.started', 'evaluation.completed', 'model.switched', 'routing.reframe_retry', 'subagent.completed'].includes(e.type)
-    ).slice(-4);
-    const trailHtml = turnEvents.length
-      ? `<ul class="live-work-trail">${turnEvents.map(ev => {
-          const [evTitle, , evState, evDetail] = eventDescription(ev);
-          const icon = ev.type.endsWith('.started') ? '◐' : evState === 'error' ? '!' : '✓';
-          const shortDetail = typeof evDetail === 'string' && evDetail.trim() ? ` · ${evDetail.trim().slice(0, 90)}` : '';
-          return `<li class="live-trail-item state-${escapeHTML(evState || 'ok')}"><span class="live-trail-icon" aria-hidden="true">${icon}</span><span><strong>${escapeHTML(evTitle)}</strong>${escapeHTML(shortDetail)}</span></li>`;
-        }).join('')}</ul>`
+    const lastUserSeq = lastUserIdx >= 0 ? Number(events[lastUserIdx]?.seq || 0) : 0;
+    const minRailSeq = Math.max(lastUserSeq, lastFlushedSeq);
+    const turnSlice = (lastUserIdx >= 0 ? events.slice(lastUserIdx + 1) : events).filter(e => Number(e.seq || 0) > minRailSeq);
+    const completedWorkerIds = new Set(events.filter(e => e.type === 'subagent.completed' && e.data?.workerId).map(e => e.data.workerId));
+    const runningSidecars = events.filter(e => e.type === 'subagent.started' && e.data?.workerId && !completedWorkerIds.has(e.data.workerId));
+    const allTurnSteps = turnSlice.filter(e =>
+      ['tool.completed', 'tool.failed', 'evaluation.started', 'evaluation.completed', 'model.switched', 'routing.reframe_retry', 'subagent.completed'].includes(e.type)
+    );
+    const activeStarted = recent?.type === 'tool.started' && Number(recent.seq || 0) > lastUserSeq && !allTurnSteps.some(e => e.seq > recent.seq) ? [recent] : [];
+    const combinedSteps = [...allTurnSteps, ...runningSidecars, ...activeStarted];
+    const olderSteps = combinedSteps.length > 6 ? combinedSteps.slice(0, -6) : [];
+    const latestSteps = combinedSteps.slice(-6);
+    const renderRailStep = (ev) => {
+      const s = humanizeToolStep(ev);
+      const isRun = ev.type.endsWith('.started');
+      const stepKey = `live-step-${ev.id ?? ev.seq}`;
+      const dotCls = isRun ? 'is-running' : (s.isErr ? 'is-err' : 'is-ok');
+      const dotSym = isRun ? '◐' : (s.isErr ? '!' : '✓');
+      return `<details class="live-rail-step ${dotCls}" data-disclosure="${escapeHTML(stepKey)}" ${openDetails.has(stepKey) ? 'open' : ''}><summary class="live-rail-row"><span class="live-rail-dot ${dotCls}" aria-hidden="true">${dotSym}</span><span class="live-rail-verb">${escapeHTML(s.verb)}</span><span class="live-rail-target">${escapeHTML(s.target)}</span>${s.badge ? `<span class="live-rail-badge kind-${escapeHTML(s.badgeKind)}">${escapeHTML(s.badge)}</span>` : ''}</summary><pre class="live-rail-peek" tabindex="0" role="region" aria-label="Step details">${escapeHTML(pretty(ev.data ?? {}))}</pre></details>`;
+    };
+    const olderKey = `live-older-${task.id}`;
+    const olderHtml = olderSteps.length
+      ? `<details class="live-rail-older" data-disclosure="${escapeHTML(olderKey)}" ${openDetails.has(olderKey) ? 'open' : ''}><summary class="live-rail-older-summary">${olderSteps.length} earlier ${olderSteps.length === 1 ? 'step' : 'steps'}</summary><div class="live-rail-older-body">${olderSteps.map(renderRailStep).join('')}</div></details>`
       : '';
-    const turnAnchorTime = recent?.time ? Date.parse(recent.time) : (streamTurnStartedAt || Date.parse(task.updatedAt) || Date.now());
+    const trailHtml = combinedSteps.length
+      ? `<div class="live-rail-list">${olderHtml}${latestSteps.map(renderRailStep).join('')}</div>`
+      : '';
+
+    const thoughtSnippet = streamTaskId === task.id && streamThinking
+      ? streamThinking.trim().split('\n').filter(Boolean).slice(-2).join(' ').slice(-180)
+      : '';
+    const thoughtTickerHtml = thoughtSnippet
+      ? `<div class="live-rail-thought" id="live-rail-thought">${escapeHTML(thoughtSnippet)}</div>`
+      : '<div class="live-rail-thought hidden" id="live-rail-thought"></div>';
+
+    const stepCountChip = combinedSteps.length ? `<span class="live-rail-count">${combinedSteps.length} ${combinedSteps.length === 1 ? 'step' : 'steps'}</span>` : '';
+    const parsedRecent = recent?.time ? Date.parse(recent.time) : NaN;
+    const parsedUpdated = task.updatedAt ? Date.parse(task.updatedAt) : NaN;
+    const turnAnchorTime = Number.isFinite(parsedRecent) ? parsedRecent : (streamTurnStartedAt || (Number.isFinite(parsedUpdated) ? parsedUpdated : Date.now()));
     const elapsedSec = Math.max(0, Math.floor((Date.now() - turnAnchorTime) / 1000));
     const elapsedLabel = elapsedSec >= 60 ? `${Math.floor(elapsedSec / 60)}m ${elapsedSec % 60}s` : `${elapsedSec}s`;
-    messages.push(`<div class="live-work-card"><div class="live-work-head"><span class="spinner" aria-hidden="true"></span><span class="activity-label"><span class="activity-phase-text">${escapeHTML(phase)}</span>${dots}</span><span class="live-work-elapsed" data-turn-started="${escapeHTML(String(turnAnchorTime))}">${escapeHTML(elapsedLabel)}</span></div>${planHtml}${trailHtml}</div><div id="stream-slot">${streamTaskId === task.id ? buildStreamPreviewHtml(openDetails) : ''}</div>`);
+    messages.push(`<section class="live-work-rail" aria-label="Active agent progress"><div class="live-work-head"><span class="spinner" aria-hidden="true"></span><span class="activity-label"><span class="activity-phase-text is-shimmer">${escapeHTML(phase)}</span></span><div class="live-rail-head-right">${stepCountChip}<span class="live-work-elapsed" data-turn-started="${escapeHTML(String(turnAnchorTime))}">${escapeHTML(elapsedLabel)}</span><button type="button" class="button button-quiet live-viz-btn" data-open-visualizer="1" title="Generate a live visual dashboard for what the agent is doing (/visualize)"><span aria-hidden="true">◈</span><span>Visualize</span></button></div></div>${thoughtTickerHtml}${planHtml}${trailHtml}</section><div id="stream-slot">${streamTaskId === task.id ? buildStreamPreviewHtml(openDetails) : ''}</div>`);
   } else if (task.draining) messages.push('<div class="conversation-state">Stopping the previous request…</div>');
   else if (task.status === 'waiting_input' && task.workspaceKind !== 'conversation' && task.followups?.length) messages.push('<div class="conversation-state">Ready for review · checks pending.</div>');
   const lastReplyEvent = conversationEvents.findLast(e => e.type === 'model.response' && !e.data?.superseded && typeof (e.data?.response?.text || e.data?.text) === 'string');
@@ -5242,6 +5489,7 @@ async function openLivePreview({ taskId, entry, html, files, title, artifactKey,
     window.closeChatCode?.();
     if (window.G0DBrowserLive?.isOpen?.()) window.G0DBrowserLive.close();
     if (window.G0DConclave?.isOpen?.()) window.G0DConclave.close();
+    if (window.G0DVisualizer?.isOpen?.()) window.G0DVisualizer.close();
     if (typeof setInspector === 'function') setInspector(false);
     if (artifactDockState.onMessage) window.removeEventListener('message', artifactDockState.onMessage);
     if (artifactDockState.onKey) window.removeEventListener('keydown', artifactDockState.onKey);
@@ -5662,6 +5910,7 @@ function openAgentBrowserDock(view) {
   window.closeChatCode?.();
   if (window.G0DBrowserLive?.isOpen?.()) window.G0DBrowserLive.close();
   if (window.G0DConclave?.isOpen?.()) window.G0DConclave.close();
+  if (window.G0DVisualizer?.isOpen?.()) window.G0DVisualizer.close();
   setInspector(false);
   initArtifactSplitter();
   if (artifactDockState.onMessage) window.removeEventListener('message', artifactDockState.onMessage);
@@ -5928,6 +6177,7 @@ function renderCommands() {
     { kind: 'action', title: 'Forge Conclave Agent (Stats Builder)', detail: 'Build a custom specialist with live benchmark radar stats from any API or CLI harness', keywords: 'conclave agent builder stats radar roster codex claude hermes grok antigravity', run: () => { window.G0DConclave?.open({ lens: 'roster' }); window.G0DConclave?.openBuilder(null); } },
     { kind: 'action', title: 'Open Live Browser Mirror (/browser)', detail: 'Watch your agent navigate, click, and test apps live or pop out a real Chromium window', keywords: 'browser live watch screencast window headless non-headless chrome /browser', run: () => window.G0DBrowserLive?.open() },
     { kind: 'action', title: 'Toggle Visible Browser Window', detail: 'Switch the contained agent browser between headless mirror and a real visible Chromium window', keywords: 'browser window visible non-headless popout chrome watch', run: () => { window.G0DBrowserLive?.open(); window.G0DBrowserLive?.toggleWindowMode(); } },
+    { kind: 'action', title: 'Open Live Sidecar Visualizer (/visualize)', detail: 'Generate an isolated interactive HTML/SVG dashboard tracking what the agent is doing live', keywords: 'visualize visualizer dashboard chart graph watch monitor /visualize', run: () => window.G0DVisualizer?.open(selectedId, { autoGenerate: true }) },
     { kind: 'action', title: 'Open The Conclave (Multi-Agent Stage)', detail: 'Visualize parallel subagents, Diff Races, and Arena councils (/conclave)', keywords: 'conclave swarm multi agent subagent crew arena council stage /conclave /swarm', run: () => window.G0DConclave?.open() },
     { kind: 'action', title: 'Open Models & Subscriptions', detail: 'CLI logins, API keys, and local models', keywords: 'claude codex gemini copilot ollama key provider /model', run: () => openSettings('models', { subtab: 'connections' }) },
     { kind: 'action', title: 'System Prompts & Tool Schemas', detail: 'Inspect and edit every system prompt & JSON tool schema (/system)', keywords: 'system prompt tool schema transparency edit override /system /schemas', run: () => openSettings('system', { subtab: 'prompts' }) },
@@ -6119,9 +6369,10 @@ function renderSelected(data, force = false, opts = {}) {
   const signature = JSON.stringify(data);
   if (!force && signature === detailSignature) return;
   window.G0DConclave?.syncTask(task);
+  window.G0DVisualizer?.onTaskChanged?.(task?.id);
   const oldTaskId = $('#selected-id').dataset.fullId;
   const taskChanged = oldTaskId !== task.id;
-  if (taskChanged && !artifactDockState.open && !document.body.classList.contains('inspector-open') && !window.G0DConclave?.isOpen?.() && !window.G0DBrowserLive?.isOpen?.()) {
+  if (taskChanged && !artifactDockState.open && !document.body.classList.contains('inspector-open') && !window.G0DConclave?.isOpen?.() && !window.G0DBrowserLive?.isOpen?.() && !window.G0DVisualizer?.isOpen?.()) {
     window.restoreChatCode?.(task);
   }
   const scroller = $('#task-content');
@@ -6346,10 +6597,18 @@ function manageStream(task) {
               elapsedEl.dataset.turnStarted = String(streamTurnStartedAt);
               elapsedEl.textContent = '0s';
             }
+            const ticker0 = $('#live-rail-thought');
+            if (ticker0) { ticker0.textContent = ''; ticker0.classList.add('hidden'); }
             updateLiveStreamSlot();
           } else if (delta.type === 'thinking' && delta.text) {
             streamThinking += delta.text;
             streamToolName = '';
+            const ticker = $('#live-rail-thought');
+            if (ticker) {
+              const snippet = streamThinking.trim().split('\n').filter(Boolean).slice(-2).join(' ').slice(-180);
+              ticker.textContent = snippet;
+              ticker.classList.toggle('hidden', !snippet);
+            }
             updateLiveStreamSlot();
           } else if (delta.type === 'text' && delta.text) {
             streamText += delta.text;
@@ -6359,6 +6618,8 @@ function manageStream(task) {
             streamToolName = delta.name || '';
             streamText = '';
             streamThinking = '';
+            const ticker1 = $('#live-rail-thought');
+            if (ticker1) { ticker1.textContent = ''; ticker1.classList.add('hidden'); }
             updateLiveStreamSlot();
             const phaseEl = $('.activity-phase-text') || $('.activity-label');
             if (phaseEl) phaseEl.textContent = toolPhaseLabel(delta.name, delta.args).replace(/…$/, '');
@@ -6380,8 +6641,11 @@ function manageStream(task) {
                 pre.scrollTop = pre.scrollHeight;
               }
             }
+          } else if (delta.type === 'visualizer.ready') {
+            window.G0DVisualizer?.onReadyEvent(task.id, delta);
           } else if (delta.type === 'tool.completed') {
             streamToolName = '';
+            window.G0DVisualizer?.scheduleTelemetryPush(task.id);
             const phaseEl = $('.activity-phase-text') || $('.activity-label');
             if (phaseEl) phaseEl.textContent = 'Thinking';
             if (delta.ok && ['repo.write', 'repo.patch', 'repo.delete', 'repo.move', 'git.commit', 'task.todo'].includes(delta.name)) {
@@ -8702,6 +8966,11 @@ document.addEventListener('keydown', (event) => {
     event.preventDefault();
     return;
   }
+  if ($('#visualizer-dock')?.classList.contains('is-expanded')) {
+    $('#viz-expand-btn')?.click();
+    event.preventDefault();
+    return;
+  }
   if ($('#composer-shell')?.classList.contains('composer-options-open')) {
     setComposerOptionsOpen(false);
     $('#composer-options-toggle')?.focus();
@@ -8713,6 +8982,7 @@ document.addEventListener('keydown', (event) => {
   if (document.body.classList.contains('inspector-open')) { setInspector(false, true); event.preventDefault(); return; }
   if (narrowLayout.matches && document.body.classList.contains('sidebar-open')) { setSidebar(false); $('#sidebar-toggle').focus(); event.preventDefault(); return; }
   if (artifactDockState.open && !artifactDockState.inspectMode && !artifactDockState.fullscreen) { closeArtifactDock({ recordDismiss: true }); event.preventDefault(); return; }
+  if (window.G0DVisualizer?.isOpen?.()) { window.G0DVisualizer.close(); event.preventDefault(); return; }
   const activeTaskNow = selectedData?.task?.id === selectedId ? selectedData.task : null;
   if (activeTaskNow && ACTIVE.has(activeTaskNow.status) && !$('#composer-input')?.value?.trim()) {
     event.preventDefault();
@@ -8983,6 +9253,7 @@ window.toast = toast;
     { cmd: '/theme', hint: 'Switch UI theme (/theme obsidian | minimal | alabaster | dragons | psychedelic | hacker | synthwave | vesuvian | ancient | celestial)' },
     { cmd: '/settings', hint: 'Open settings' },
     { cmd: '/forge', hint: 'Forge a task-specific Megaprompt & rubric into the composer (/forge <prompt>)' },
+    { cmd: '/visualize', hint: 'Open bespoke Live Sidecar Visualizer for what the agent is doing (/visualize [refinement])' },
     { cmd: '/browser', hint: 'Open Live Browser mirror (/browser window | headless | close)' },
     { cmd: '/conclave', hint: 'Open The Conclave or launch directly (/conclave <mission> | roster | demo | forge)' },
     { cmd: '/swarm', hint: 'Open The Conclave multi-agent swarm visualizer' },
@@ -9570,3 +9841,264 @@ $('#model-picker').addEventListener('click', event => {
 $('#model-picker-manage').addEventListener('click', () => {$('#model-picker').close(); openSettings('models');});
 $('#settings-pick-model').addEventListener('click', event => openModelPicker(settingsTaskId,event.currentTarget));
 window.addEventListener('resize',positionModelPicker);
+
+/* ── Live Sidecar Visualizer Dock (✦ Visualize) ─────────────────────────────── */
+window.G0DVisualizer = (function initG0DVisualizer() {
+  let isOpen = false;
+  let isExpanded = false;
+  let activeTaskId = null;
+  let generating = false;
+  let telemetryTimer = null;
+  let pollInterval = null;
+  let versionNonce = 0;
+
+  const dockEl = () => $('#visualizer-dock');
+  const btnEl = () => $('#visualizer-toggle-btn');
+
+  function ensureShell() {
+    const dock = dockEl();
+    if (!dock || dock.dataset.vizInit) return dock;
+    dock.dataset.vizInit = '1';
+    dock.innerHTML = `
+      <header class="viz-header">
+        <div class="viz-title-wrap">
+          <span class="viz-sigil" aria-hidden="true">◈</span>
+          <div class="viz-title-copy">
+            <h2 class="viz-title">LIVE VISUALIZER</h2>
+            <p class="viz-subtitle" id="viz-subtitle">Isolated sidecar telemetry dashboard</p>
+          </div>
+        </div>
+        <div class="viz-actions">
+          <span class="viz-status-chip" id="viz-status-chip">Ready</span>
+          <button type="button" class="button button-secondary viz-regen-btn" id="viz-regen-btn" title="Regenerate bespoke visualizer for the current task">↻ Refresh</button>
+          <button type="button" class="icon-button" id="viz-expand-btn" title="Expand or restore visualizer" aria-label="Expand visualizer" aria-pressed="false">⤢</button>
+          <button type="button" class="icon-button" id="viz-close-btn" title="Close visualizer" aria-label="Close visualizer">×</button>
+        </div>
+      </header>
+      <div class="viz-stage" id="viz-stage">
+        <div class="viz-empty" id="viz-empty">
+          <p class="viz-empty-title">Live Agent Visualizer</p>
+          <p class="viz-empty-copy">Generates an isolated, live-updating HTML/SVG dashboard tailored to what your agent is doing — without polluting the agent’s context.</p>
+          <button type="button" class="button button-primary" id="viz-empty-start">◈ Generate Visualizer</button>
+        </div>
+        <iframe id="viz-iframe" class="viz-iframe hidden" title="Live agent visualizer" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
+      </div>
+      <form class="viz-refine-bar" id="viz-refine-form">
+        <input type="text" class="input viz-refine-input" id="viz-refine-input" placeholder="Refine visual (e.g. “show dependency graph + pass/fail bars”)" aria-label="Refine live visualizer">
+        <button type="submit" class="button button-secondary" id="viz-refine-submit">Refine</button>
+      </form>
+    `;
+
+    $('#viz-close-btn')?.addEventListener('click', () => close());
+    $('#viz-expand-btn')?.addEventListener('click', () => {
+      isExpanded = !isExpanded;
+      dock.classList.toggle('is-expanded', isExpanded);
+      const eb = $('#viz-expand-btn');
+      if (eb) eb.setAttribute('aria-pressed', String(isExpanded));
+    });
+    $('#viz-regen-btn')?.addEventListener('click', () => {
+      const tid = activeTaskId || selectedId;
+      if (tid) generate(tid, '');
+    });
+    $('#viz-empty-start')?.addEventListener('click', () => {
+      const tid = activeTaskId || selectedId;
+      if (tid) generate(tid, '');
+      else toast('Start or select a task first to visualize it.');
+    });
+    $('#viz-refine-form')?.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const input = $('#viz-refine-input');
+      const instr = input?.value?.trim() || '';
+      const tid = activeTaskId || selectedId;
+      if (!tid) { toast('Select a task first.'); return; }
+      if (input) input.value = '';
+      generate(tid, instr);
+    });
+    $('#viz-iframe')?.addEventListener('load', () => {
+      pushTelemetryNow();
+    });
+    return dock;
+  }
+
+  function setStatus(label, busy = false) {
+    const chip = $('#viz-status-chip');
+    if (chip) {
+      chip.textContent = label;
+      chip.classList.toggle('is-busy', busy);
+    }
+    const regen = $('#viz-regen-btn');
+    if (regen) regen.disabled = busy;
+    const refBtn = $('#viz-refine-submit');
+    if (refBtn) refBtn.disabled = busy;
+  }
+
+  function syncButton() {
+    const btn = btnEl();
+    if (!btn) return;
+    btn.classList.toggle('is-open', isOpen);
+    btn.setAttribute('aria-pressed', String(isOpen));
+  }
+
+  function mountIframe(taskId) {
+    const iframe = $('#viz-iframe');
+    const empty = $('#viz-empty');
+    if (!iframe) return;
+    versionNonce += 1;
+    iframe.src = `/api/tasks/${encodeURIComponent(taskId)}/visualizer?v=${versionNonce}`;
+    iframe.classList.remove('hidden');
+    empty?.classList.add('hidden');
+  }
+
+  async function pushTelemetryNow() {
+    if (!isOpen || !activeTaskId) return;
+    const tid = activeTaskId;
+    const iframe = $('#viz-iframe');
+    if (!iframe || iframe.classList.contains('hidden') || !iframe.contentWindow) return;
+    try {
+      const payload = await api(`/api/tasks/${encodeURIComponent(tid)}/visualizer-telemetry`);
+      if (!isOpen || activeTaskId !== tid) return;
+      const iframeNow = $('#viz-iframe');
+      if (payload && typeof payload === 'object' && iframeNow?.contentWindow) {
+        iframeNow.contentWindow.postMessage({ ...payload, type: 'g0d:viz' }, '*');
+        const sub = $('#viz-subtitle');
+        if (sub && payload?.task) {
+          const ops = Object.values(payload.toolCounts || {}).reduce((a, b) => a + Number(b || 0), 0);
+          sub.textContent = `${payload.task.status || 'active'} · ${ops} ops${payload.metrics ? ' · live metrics' : ''}`;
+        }
+      }
+    } catch {}
+  }
+
+  function scheduleTelemetryPush() {
+    if (!isOpen || !activeTaskId) return;
+    if (telemetryTimer) return;
+    telemetryTimer = setTimeout(() => {
+      telemetryTimer = null;
+      pushTelemetryNow();
+    }, 350);
+  }
+
+  async function generate(taskId, instruction = '') {
+    if (!taskId) return;
+    activeTaskId = taskId;
+    if (!isOpen) await open(taskId, { autoGenerate: false });
+    if (generating) return;
+    generating = true;
+    setStatus(instruction ? 'Refining…' : 'Forging…', true);
+    try {
+      const res = await api(`/api/tasks/${encodeURIComponent(taskId)}/visualize`, {
+        method: 'POST',
+        body: JSON.stringify({ instruction }),
+      });
+      if (!isOpen || activeTaskId !== taskId) return;
+      mountIframe(taskId);
+      setStatus(res?.generatedBy && res.generatedBy !== 'deterministic_fallback' ? 'Live · AI' : 'Live', false);
+    } catch (err) {
+      if (isOpen && activeTaskId === taskId) {
+        setStatus('Error', false);
+        toast(err.message || 'Could not generate visualizer.');
+      }
+    } finally {
+      generating = false;
+      const regen = $('#viz-regen-btn');
+      if (regen) regen.disabled = false;
+      const refBtn = $('#viz-refine-submit');
+      if (refBtn) refBtn.disabled = false;
+    }
+  }
+
+  async function open(taskId, { autoGenerate = true, instruction = '' } = {}) {
+    const tid = taskId || selectedId;
+    if (!tid) {
+      toast('Start or select a task to visualize what the agent is doing.');
+      return;
+    }
+    ensureShell();
+    closeAllRightDocks({ except: 'visualizer' });
+
+    activeTaskId = tid;
+    isOpen = true;
+    dockEl()?.classList.remove('hidden');
+    document.body.classList.add('visualizer-open');
+    syncButton();
+
+    if (pollInterval) clearInterval(pollInterval);
+    pollInterval = setInterval(() => {
+      if (isOpen && activeTaskId && selectedData?.task?.id === activeTaskId && ACTIVE.has(selectedData.task.status)) {
+        pushTelemetryNow();
+      }
+    }, 3500);
+
+    if (instruction) {
+      await generate(tid, instruction);
+      return;
+    }
+
+    // Check if a visualizer already exists for this task; if not and autoGenerate, forge one immediately
+    try {
+      const head = await fetch(`/api/tasks/${encodeURIComponent(tid)}/visualizer`, { method: 'GET', headers: { 'x-g0d-request': '1' } });
+      if (!isOpen || activeTaskId !== tid) return;
+      if (head.ok) {
+        mountIframe(tid);
+        setStatus('Live', false);
+        return;
+      }
+    } catch {}
+
+    if (!isOpen || activeTaskId !== tid) return;
+    if (autoGenerate) {
+      await generate(tid, '');
+    } else {
+      $('#viz-iframe')?.classList.add('hidden');
+      $('#viz-empty')?.classList.remove('hidden');
+      setStatus('Ready', false);
+    }
+  }
+
+  function close() {
+    isOpen = false;
+    isExpanded = false;
+    activeTaskId = null;
+    const dock = dockEl();
+    if (dock) {
+      dock.classList.add('hidden');
+      dock.classList.remove('is-expanded');
+    }
+    $('#viz-expand-btn')?.setAttribute('aria-pressed', 'false');
+    document.body.classList.remove('visualizer-open');
+    if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+    if (telemetryTimer) { clearTimeout(telemetryTimer); telemetryTimer = null; }
+    syncButton();
+  }
+
+  function toggle(taskId) {
+    if (isOpen && (!taskId || taskId === activeTaskId)) close();
+    else open(taskId || selectedId, { autoGenerate: true });
+  }
+
+  function onReadyEvent(taskId) {
+    if (isOpen && activeTaskId === taskId && !generating) {
+      mountIframe(taskId);
+      setStatus('Live', false);
+    }
+  }
+
+  function onTaskChanged(taskId) {
+    if (!isOpen) return;
+    if (!taskId) { close(); return; }
+    if (taskId !== activeTaskId) {
+      open(taskId, { autoGenerate: false });
+    }
+  }
+
+  $('#visualizer-toggle-btn')?.addEventListener('click', () => toggle(selectedId));
+  document.addEventListener('click', (event) => {
+    const trigger = event.target.closest('[data-open-visualizer]');
+    if (!trigger) return;
+    event.preventDefault();
+    open(selectedId, { autoGenerate: true });
+  });
+  window.addEventListener('pagehide', close);
+
+  return { open, close, toggle, generate, scheduleTelemetryPush, onReadyEvent, onTaskChanged, isOpen: () => isOpen };
+})();

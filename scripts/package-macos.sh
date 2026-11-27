@@ -48,8 +48,9 @@ cp LICENSE THIRD_PARTY_LICENSES.md "$app/Contents/Resources/"
 # Stage self-contained runtime (zero external npm dependencies)
 rt="$app/Contents/Resources/runtime"
 cp package.json LICENSE THIRD_PARTY_LICENSES.md "$rt/"
+node -e "const fs=require('node:fs'),p=process.argv[1],v=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));j.version=v;fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n');" "$rt/package.json" "$version"
 cp -R src public data fixtures "$rt/"
-cp bench/scripted.mjs "$rt/bench/"
+cp bench/*.mjs "$rt/bench/"
 
 # Bundle Node.js 22.13+ binary matching target arch
 node_bin="${G0D_NODE_BINARY:-}"
