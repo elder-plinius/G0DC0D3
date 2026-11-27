@@ -251,7 +251,8 @@ test('AntigravityCliProvider reuses persistent ACP session across turns (1 spawn
       }, { privacy: { localOnly: false }, onDelta: d => seenReasoning.push(d) });
       assert.equal(t1.text, 'FRESH_ACP_OK');
       assert.equal(t1.transport, 'acp-v1');
-      assert.equal(seenReasoning.some(d => d.type === 'reasoning'), true);
+      assert.equal(seenReasoning.some(d => d.type === 'thinking'), true);
+      assert.match(t1.thinking || '', /Planning next broker tool step/);
 
       // Turn 2: MUST reuse the exact same persistent ACP process (still only 1 PID in spawnLog!)
       const t2 = await provider.turn({

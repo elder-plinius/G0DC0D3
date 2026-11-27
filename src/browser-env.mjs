@@ -1074,7 +1074,7 @@ class CdpSession {
       this.ws = null;
       const proc = this.proc;
       this.proc = null;
-      if (proc && proc.exitCode === null && !proc.killed) {
+      if (proc && proc.exitCode === null && proc.signalCode === null && !proc.killed) {
         const sendSig = sig => {
           try {
             if (process.platform !== 'win32' && Number.isInteger(proc.pid)) process.kill(-proc.pid, sig);
@@ -1083,9 +1083,13 @@ class CdpSession {
         };
         sendSig('SIGTERM');
         await new Promise(resolve => {
-          const t = setTimeout(() => { sendSig('SIGKILL'); resolve(); }, 1500);
-          t.unref?.();
-          proc.once('exit', () => { clearTimeout(t); resolve(); });
+          let done = false;
+          const finish = () => { if (done) return; done = true; clearTimeout(killT); clearTimeout(finalT); resolve(); };
+          const killT = setTimeout(() => { sendSig('SIGKILL'); }, 1500);
+          killT.unref?.();
+          const finalT = setTimeout(finish, 2500);
+          finalT.unref?.();
+          proc.once('close', finish);
         });
       }
       this.latestScreenshot = null;
@@ -1093,7 +1097,7 @@ class CdpSession {
       if (!preserveProfile && this.profileDir) {
         const dir = this.profileDir;
         this.profileDir = null;
-        await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+        await fs.rm(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 100 }).catch(() => {});
       }
       if (!preserveProfile) {
         this._emit({ type: 'browser.closed', active: false });

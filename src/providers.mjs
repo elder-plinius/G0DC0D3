@@ -2537,7 +2537,7 @@ export class AntigravityCliProvider extends CodexProvider {
             images,
             signal,
             timeoutMs: timeoutOverrideMs || turnBudgetMs,
-            onDelta: onDelta ? (evt => { if (evt?.type === 'reasoning') onDelta(evt); }) : null,
+            onDelta: onDelta ? (evt => { if (evt?.type === 'reasoning' || evt?.type === 'thinking') onDelta({ type: 'thinking', text: evt.text }); }) : null,
           });
           if (res.toolCalls.length > 0) {
             await this.acpPool.drop(poolKey).catch(() => {});
@@ -2635,7 +2635,7 @@ export class AntigravityCliProvider extends CodexProvider {
 
       return {
         ...result.decision,
-        ...(result.reasoning ? { reasoning: result.reasoning } : {}),
+        ...(result.reasoning ? { thinking: result.reasoning, reasoning: result.reasoning } : {}),
         usage: result.usage,
         model: this.model || 'antigravity-cli-default',
         evidenceKind: result.transport === 'acp-v1' ? 'live_antigravity_acp' : 'live_antigravity_cli',
@@ -2925,7 +2925,7 @@ export class AcpHarnessProvider {
       return {
         type: 'message',
         text: res.text,
-        ...(res.reasoning ? { reasoning: res.reasoning } : {}),
+        ...(res.reasoning ? { thinking: res.reasoning, reasoning: res.reasoning } : {}),
         finish: refused ? 'refusal' : 'done',
         usage: res.usage,
         model: this.model || this.harnessId,

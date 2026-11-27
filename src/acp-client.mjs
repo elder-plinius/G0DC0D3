@@ -201,7 +201,11 @@ function extractAcpPaths(toolCall = {}) {
   const found = [];
   const push = (val) => {
     if (typeof val === 'string' && val.trim()) {
-      const cleaned = val.trim().startsWith('file://') ? decodeURIComponent(val.trim().slice(7)) : val.trim();
+      const trimmed = val.trim();
+      let cleaned = trimmed;
+      if (trimmed.startsWith('file://')) {
+        try { cleaned = decodeURIComponent(trimmed.slice(7)); } catch { return; }
+      }
       if (cleaned) found.push(cleaned);
     }
   };
@@ -1217,7 +1221,9 @@ export class AcpClient {
     signal?.addEventListener('abort', onAbort, { once: true });
 
     try {
+      const reqId = this.nextId;
       const reqPromise = this.request('session/prompt', { sessionId, prompt: blocks }, timeoutMs);
+      reqPromise.catch(() => {});
       let result;
       try {
         result = await Promise.race([reqPromise, abortGracePromise]);
@@ -1227,6 +1233,11 @@ export class AcpClient {
           throw err;
         }
         if (signal?.aborted) {
+          const pendingEntry = this.pending.get(reqId);
+          if (pendingEntry) {
+            this.pending.delete(reqId);
+            pendingEntry.reject(Object.assign(new Error('ACP prompt cancelled.'), { code: 'cancelled', retryable: false }));
+          }
           throw Object.assign(new Error('ACP prompt cancelled.'), { code: 'cancelled', retryable: false });
         }
         throw err;

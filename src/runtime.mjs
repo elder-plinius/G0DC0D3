@@ -1646,7 +1646,7 @@ export class Runtime {
         response = { type: 'error', code: timeout ? 'PROVIDER_TIMEOUT' : 'PROVIDER_ERROR',
           message: timeout ? 'The Venice request timed out.' : 'The Venice connection ended before a complete response arrived.' };
       } else if (turnError) {
-        await this._recover(id, epoch, { code: turnError.name === 'TimeoutError' ? 'PROVIDER_TIMEOUT' : turnError.code || 'PROVIDER_ERROR', message: turnError.message, kind: 'provider_error', retryable: turnError.retryable, durationMs: turnDurationMs }, controller.signal);
+        await this._recover(id, epoch, { code: turnError.name === 'TimeoutError' ? 'PROVIDER_TIMEOUT' : turnError.code || 'PROVIDER_ERROR', message: turnError.message, kind: 'provider_error', retryable: turnError.retryable, ...(Number.isFinite(turnError.retryAfterMs) ? { retryAfterMs: turnError.retryAfterMs } : {}), durationMs: turnDurationMs }, controller.signal);
         continue;
       }
       const superseded = Boolean(this.getTask(id).pendingMessages?.length);
