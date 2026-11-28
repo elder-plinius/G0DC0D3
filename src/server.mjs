@@ -11,6 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Runtime } from './runtime.mjs';
 import { CRON_PRESETS } from './cron.mjs';
+import { NorthStarManager, NORTHSTAR_TEMPLATES } from './northstar.mjs';
 import { evaluateTask } from './evaluator.mjs';
 import { environmentProviders, HttpProvider } from './providers.mjs';
 import { createProviderSettings, linuxSecretToolKeychain, nativeKeychain } from './provider-settings.mjs';
@@ -125,6 +126,9 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
   const worktrees = new WorktreeProjects(runtime.store, { get: id => providers.get(id) ?? catalog.get(id) },
     { outboundOptions: () => runtime.outboundOptions() });
   runtime.worktrees = worktrees;
+  const northStar = new NorthStarManager({ dataDir, runtime });
+  await northStar.init();
+  runtime.northStar = northStar;
   const previews = createPreviewRegistry(runtime);
   async function loadSelected(ids) {
     if (Array.isArray(ids) && ids.some(id => isCatalogModel(id) || providers.get(id)?.baseUrl === veniceEndpoint)) await catalog.list();
@@ -281,6 +285,30 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
       if(req.method==='GET' && url.pathname==='/api/conclave/formations')return send(res,200,{formations:runtime.getConclaveFormations()});
       if(req.method==='POST' && url.pathname==='/api/conclave/formations')return send(res,201,runtime.saveConclaveFormation(await readBody(req)));
       if(req.method==='GET' && url.pathname==='/api/conclave/leaderboard')return send(res,200,runtime.getConclaveLeaderboard());
+      if(req.method==='GET' && url.pathname==='/api/northstar')return send(res,200,{runs:northStar.listRuns(),summary:northStar.summary(),templates:NORTHSTAR_TEMPLATES});
+      if(req.method==='POST' && url.pathname==='/api/northstar') {
+        const body = await readBody(req);
+        const runObj = await northStar.createRun(body, { autoStart: Boolean(body.autoStart) });
+        return send(res,201,{run:runObj,summary:northStar.summary()});
+      }
+      const nsMatch = url.pathname.match(/^\/api\/northstar\/([a-zA-Z0-9_-]{4,64})(?:\/(start|pause|resume|steer|diff|apply))?$/);
+      if (nsMatch) {
+        const nsId = decodeURIComponent(nsMatch[1]);
+        const nsAction = nsMatch[2] || '';
+        if (req.method === 'GET' && !nsAction) {
+          const runObj = northStar.getRun(nsId);
+          const experiments = await northStar.getExperiments(nsId, 100);
+          const labLog = await northStar.getLabLog(nsId);
+          return send(res, 200, { run: runObj, experiments, labLog });
+        }
+        if (req.method === 'DELETE' && !nsAction) return send(res, 200, await northStar.deleteRun(nsId));
+        if (req.method === 'GET' && nsAction === 'diff') return send(res, 200, await northStar.getChampionDiff(nsId));
+        if (req.method === 'POST' && nsAction === 'start') { await readBody(req); return send(res, 200, { run: northStar.startRun(nsId) }); }
+        if (req.method === 'POST' && nsAction === 'resume') { await readBody(req); return send(res, 200, { run: northStar.resumeRun(nsId) }); }
+        if (req.method === 'POST' && nsAction === 'pause') { const body = await readBody(req); return send(res, 200, { run: await northStar.pauseRun(nsId, body.reason) }); }
+        if (req.method === 'POST' && nsAction === 'steer') { const body = await readBody(req); return send(res, 200, { run: await northStar.steerRun(nsId, body.note) }); }
+        if (req.method === 'POST' && nsAction === 'apply') { await readBody(req); return send(res, 200, await northStar.applyChampionToRepo(nsId)); }
+      }
       const formDelMatch = req.method === 'DELETE' && url.pathname.match(/^\/api\/conclave\/formations\/([^/]+)$/);
       if (formDelMatch) return send(res, 200, runtime.deleteConclaveFormation(decodeURIComponent(formDelMatch[1])));
       if(req.method==='POST' && url.pathname==='/api/conclave/run') {
@@ -1266,6 +1294,7 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
       staticFiles['/themes.css'] = ['themes.css','text/css'];
       staticFiles['/mermaid-lite.js'] = ['mermaid-lite.js','text/javascript'];
       staticFiles['/conclave.js'] = ['conclave.js','text/javascript'];
+      staticFiles['/northstar.js'] = ['northstar.js','text/javascript'];
       staticFiles['/browser-live.js'] = ['browser-live.js','text/javascript'];
       staticFiles['/alerts.js'] = ['alerts.js','text/javascript'];
       staticFiles['/brand-wordmark.ttf'] = ['brand-wordmark.ttf', 'font/ttf'];
@@ -1298,6 +1327,7 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
       server.closeIdleConnections();
       server.closeAllConnections?.();
       closePromise=(async()=>{
+        await northStar.close();
         await worktrees.close();
         const outcomes=await Promise.allSettled([new Promise(resolve=>server.close(()=>resolve())),runtime.close(),benchmarkPromise]);
         await session.close();

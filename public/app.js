@@ -1745,6 +1745,12 @@ async function executeSlashCommand(raw) {
     openSettings('schedules');
     return { handled: true };
   }
+  if (cmd === '/northstar' || cmd === '/climb' || cmd === '/autoresearch') {
+    clearInput();
+    if (window.G0DNorthStar?.openLauncher) window.G0DNorthStar.openLauncher(arg);
+    else openSettings('schedules');
+    return { handled: true };
+  }
   if (cmd === '/alerts' || cmd === '/notifications' || cmd === '/sounds') {
     clearInput();
     openSettings('notifications');
@@ -6259,6 +6265,7 @@ function renderCommands() {
     { kind: 'action', title: 'Open project', detail: 'Work in a local source copy', keywords: 'import folder workspace', run: () => openCreate(undefined, { source: 'project' }) },
     { kind: 'action', title: 'Prompt commands', detail: 'Create and edit ! shortcuts', keywords: 'prompts bang shortcuts', run: () => openSettings('prompts') },
     { kind: 'action', title: 'Scheduled Jobs & Crons', detail: 'Create, run, or pause recurring & timed automations (/schedules)', keywords: 'cron schedule recurring timer automation jobs launchd /cron /schedules', run: () => openSettings('schedules') },
+    { kind: 'action', title: 'North Star AutoResearch (Hill-Climb)', detail: 'Launch multi-hour/multi-day git-atomic autonomous optimization (/northstar)', keywords: 'northstar autoresearch hill climb optimize overnight marathon /northstar /climb', run: () => window.G0DNorthStar?.openLauncher ? window.G0DNorthStar.openLauncher() : openSettings('schedules') },
     { kind: 'action', title: 'Sounds & Notifications Settings', detail: 'Configure optional chimes, sound packs, volume & OS notifications (/alerts)', keywords: 'sound chime audio notification alert banner bell volume dock /alerts /sounds /notifications', run: () => openSettings('notifications') },
     { kind: 'action', title: window.G0DAlerts?.get?.().muted ? 'Unmute Sounds & Notifications' : 'Mute Sounds & Notifications', detail: window.G0DAlerts?.get?.().muted ? 'Resume optional chimes and desktop alerts (/mute)' : 'Silence all chimes and desktop notifications — Do Not Disturb (/mute)', keywords: 'mute unmute silence quiet dnd do not disturb sound alert notification /mute', run: () => { if (!window.G0DAlerts) return; const next = !window.G0DAlerts.get().muted; window.G0DAlerts.update({ muted: next }); toast(next ? 'Sounds & notifications muted.' : 'Sounds & notifications unmuted.'); } },
     ...(task ? [
@@ -9825,6 +9832,7 @@ window.toast = toast;
     { cmd: '/skill', hint: 'Save reusable skill (/skill save <name> <instructions>)' },
     { cmd: '/privacy', hint: 'Open Privacy & ZDR Shield (zero telemetry & egress controls)' },
     { cmd: '/schedules', hint: 'Open Scheduled Jobs & Cron Automations (/cron)' },
+    { cmd: '/northstar', hint: 'Launch a multi-hour North Star AutoResearch hill-climb (/climb)' },
     { cmd: '/cron', hint: 'Manage recurring cron jobs & timers' },
     { cmd: '/alerts', hint: 'Configure optional sounds & desktop notifications' },
     { cmd: '/mute', hint: 'Toggle Do Not Disturb (mute / unmute sounds & alerts)' },
