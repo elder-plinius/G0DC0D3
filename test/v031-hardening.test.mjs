@@ -9,7 +9,7 @@ import { evaluateTask } from '../src/evaluator.mjs';
 import { getFixture } from '../fixtures/index.mjs';
 import { Runtime } from '../src/runtime.mjs';
 import { createApp } from '../src/server.mjs';
-import { selectAutoTuneParams, defaultAutoTuneState } from '../src/autotune.mjs';
+import { selectAutoTuneParams, recordAutoTuneOutcome, defaultAutoTuneState } from '../src/autotune.mjs';
 import { createAcpPermissionHandler, createAcpSandboxHandlers } from '../src/acp-client.mjs';
 import { ACCEPT_EDITS_PRESET, HARD_DENY_SHELL_RULES, derivePatternRule, evaluatePermission, insertTaskAllowRule, toolTarget } from '../src/permissions.mjs';
 import { nextCronTime, previewCronRuns, renderLaunchdPlist } from '../src/cron.mjs';
@@ -473,4 +473,55 @@ test('v0.3.1 Projects UX uplevel: unified popover, native Browse…, auto-previe
   assert.match(swift, /performDragOperation/);
   assert.match(swift, /godcode-folder-drop/);
   assert.match(swift, /godcode-folder-drag/);
+});
+
+test('v0.3.1 HyperTuner uplevel: posterior-ranked retries, passive-arm drift decay, adaptive family shrinkage, observation-weighted eviction, and family warm-start', () => {
+  const prov = { id: 'venice:qwen3-coder-32b', model: 'qwen3-coder-32b', protocol: 'openai-chat' };
+  const sibling = { id: 'venice:qwen3-coder-30b-a3b', model: 'qwen3-coder-30b-a3b', protocol: 'openai-chat' };
+
+  // 1. Posterior-ranked retry: when surgical is proven strong and balanced is failing, retry from focused steps DOWN to surgical
+  let st = { ...defaultAutoTuneState(), mode: 'passive' };
+  for (let i = 0; i < 8; i++) {
+    st = recordAutoTuneOutcome(st, { provider: prov, domain: 'swe', profileId: 'surgical', signal: 'verification_pass' });
+    st = recordAutoTuneOutcome(st, { provider: prov, domain: 'swe', profileId: 'balanced', signal: 'verification_fail' });
+  }
+  const retryPick = selectAutoTuneParams(st, {
+    provider: prov,
+    domain: 'swe',
+    contextKind: 'retry',
+    previousProfileId: 'focused',
+    rng: () => 0.5,
+  });
+  assert.equal(retryPick.active, true);
+  assert.equal(retryPick.receipt.profileId, 'surgical', 'Retry must step down to proven surgical arm rather than blindly increasing temperature');
+
+  // 2. Family warm-start: sibling with >=5 family observations activates immediately on Turn 1 in Passive mode
+  const siblingPick = selectAutoTuneParams(st, { provider: sibling, domain: 'swe', rng: () => 0.9 });
+  assert.equal(siblingPick.active, true, 'Sibling model should warm-start from >=5 family observations');
+  assert.equal(siblingPick.receipt.profileId, 'surgical');
+
+  // 3. Discounted TS passive-arm decay: unpulled arm's stale evidence decays when other arms are observed
+  const beforeUnpulledB = st.cells['qwen3-coder-32b::swe::medium'].arms.balanced.b;
+  for (let i = 0; i < 10; i++) {
+    st = recordAutoTuneOutcome(st, { provider: prov, domain: 'swe', profileId: 'surgical', signal: 'verification_pass' });
+  }
+  const afterUnpulledB = st.cells['qwen3-coder-32b::swe::medium'].arms.balanced.b;
+  assert.ok(afterUnpulledB < beforeUnpulledB, `Unpulled arm evidence must decay toward uncertainty (${beforeUnpulledB} -> ${afterUnpulledB})`);
+
+  // 4. Observation-weighted MAX_CELLS eviction: 260 1-obs noise cells never evict a high-observation cell
+  let evictState = { ...defaultAutoTuneState(), mode: 'active' };
+  for (let i = 0; i < 20; i++) {
+    evictState = recordAutoTuneOutcome(evictState, { provider: prov, domain: 'swe', profileId: 'surgical', signal: 'verification_pass' });
+  }
+  evictState.cells['qwen3-coder-32b::swe::medium'].updatedAt = '2026-01-01T00:00:00.000Z';
+  for (let i = 0; i < 260; i++) {
+    evictState = recordAutoTuneOutcome(evictState, {
+      provider: { id: `noise:m-${i}`, model: `noise-m-${i}`, protocol: 'openai-chat' },
+      domain: 'general',
+      profileId: 'balanced',
+      signal: 'clean_completion',
+    });
+  }
+  assert.ok(Object.keys(evictState.cells).length <= 250);
+  assert.ok(Boolean(evictState.cells['qwen3-coder-32b::swe::medium']), 'High-observation cell must survive 1-obs noise flood');
 });
