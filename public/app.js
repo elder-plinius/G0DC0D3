@@ -645,7 +645,7 @@ function renderComposer() {
   $('#composer-project').classList.toggle('has-project', Boolean(task?.codeWorkspace || task?.sourcePath || attachedPending));
   const preferred = providerById(newConversationProviders()[0]);
   const race = task ? task.answerRace : RecoveryUI.preferences().answerRace;
-  setText('#composer-model-label', race ? `${race.models?.length || 2} arena writers` : task ? providerById(task.providerId)?.label || task.providerId || 'Model' : preferred?.label || 'Connect model');
+  setText('#composer-model-label', race ? `${race.models?.length || 2} Conclave writers` : task ? providerById(task.providerId)?.label || task.providerId || 'Model' : preferred?.label || 'Connect model');
   $('#composer-project').title = attachedPending
     ? `Attached project (${attachedPending.mode === 'worktree' ? 'Git Worktree' : 'Isolated Copy'}): ${attachedPending.path} — click to switch or detach`
     : task?.workspaceKind === 'conversation'
@@ -660,7 +660,7 @@ function renderComposer() {
   const cmdSuffix = task ? (task.execution?.enabled ? (task.execution.network ? ' · Cmd+Net' : ' · Cmd') : '') : '';
   setText('#composer-permissions-label', `${shortPermLabel}${cmdSuffix}`);
   $('#composer-permissions').title = `Permission Gate: ${shortPermLabel} (Shift+Tab to cycle, click to configure)`;
-  $('#composer-model').title = race ? 'View the Arena writers and judge' : task ? 'Change model for this chat' : 'Choose or connect a model';
+  $('#composer-model').title = race ? 'View the Conclave writers and judge' : task ? 'Change model for this chat' : 'Choose or connect a model';
   setVisible('#composer-connect', !task && Boolean(composerErrors.get(key)) && !preferred);
   renderRecoveryControl(task, loading || !online);
   renderPlanModeControl(task, loading || !online);
@@ -720,7 +720,7 @@ function renderRecoveryControl(task, loading = false) {
   const raceLabel = routerMode === 'auto_route' && !racing
     ? 'Ultra-Plinian · Auto'
     : routerMode === 'auto_arena' && !racing
-      ? `Ultra-Plinian · Arena ${arenaN}×`
+      ? `Ultra-Plinian · Conclave ${arenaN}×`
       : racing
         ? `Ultra-Plinian · Custom ${arenaN}×`
         : 'Ultra-Plinian';
@@ -731,7 +731,7 @@ function renderRecoveryControl(task, loading = false) {
     ? 'Ultra-Plinian Auto-Route · Click to switch mode'
     : ultraOn
       ? (view.enabled ? 'Ultra-Plinian + G0DM0D3 active · Click to configure' : 'Ultra-Plinian active · Click to configure')
-      : 'Ultra-Plinian mode (Off) · Click to enable Auto-Route or Arena';
+      : 'Ultra-Plinian mode (Off) · Click to enable Auto-Route or Conclave';
   $('#composer-race').disabled = loading || Boolean(task?.draining) || ACTIVE.has(task?.status);
 
   setText('#composer-ultra-label', view.label === 'G0DM0D3' || view.label === 'GodMode' ? 'GODMODƎ' : view.label);
@@ -1412,7 +1412,7 @@ function renderTaskMetaStrip(task) {
   if (!strip) return;
   if (!task) { setVisible('#task-meta-strip', false); strip.innerHTML = ''; return; }
   const provider = providerById(task.providerId);
-  const modelLabel = task.answerRace ? `${task.answerRace.models.length} Arena writers` : provider?.label || task.providerId || 'No model';
+  const modelLabel = task.answerRace ? `${task.answerRace.models.length} Conclave writers` : provider?.label || task.providerId || 'No model';
   const tier = String(provider?.tier || 'standard').toLowerCase();
   const calls = Number(task.calls ?? 0);
   const maxCalls = Number(task.policy?.maxCalls ?? 0);
@@ -3242,8 +3242,8 @@ function renderUltraRouterSection() {
   const modeCards = [
     ['off', 'Off', 'Use your manually selected model & waterfall.'],
     ['auto_route', 'Auto-Route (Best Model)', 'Picks the highest-scoring endpoint per task domain & routes away from refusals.'],
-    ['auto_arena', 'Auto-Arena (2–4 Models + Judge)', 'Races your top 2–4 distinct model families & trains your personal Elo from the blind judge.'],
-    ['manual_arena', 'Manual Arena', 'Race any 2–4 connected models & judge below.']
+    ['auto_arena', 'Auto-Conclave (2–4 Models + Judge)', 'Races your top 2–4 distinct model families & trains your personal Elo from the blind judge.'],
+    ['manual_arena', 'Custom Conclave', 'Race any 2–4 connected models & judge below.']
   ];
   const domainTabs = domains.map(d => `<button type="button" class="ultra-domain-tab ${d.id === activeDom ? 'active' : ''}" data-router-domain="${escapeHTML(d.id)}" title="${escapeHTML(d.description)}">${escapeHTML(d.shortLabel)}</button>`).join('');
   const boardHtml = activeRows.length
@@ -3257,7 +3257,7 @@ function renderUltraRouterSection() {
   const metacogModes = [
     ['off', 'Off', 'Send your raw prompt without metacognitive scaffolding.'],
     ['smart', 'Smart Framing (0ms)', 'Instant domain × model-family framing, 100% cache-safe (Recommended).'],
-    ['auto_forge', 'Auto-Forge (LLM)', 'Smart framing + live LLM Megaprompt & Arena Judge rubric on complex Turn-1 tasks.']
+    ['auto_forge', 'Auto-Forge (LLM)', 'Smart framing + live LLM Megaprompt & Conclave Judge rubric on complex Turn-1 tasks.']
   ];
   const prevDetailsOpen = Boolean(container.querySelector('.ultra-json-details')?.open);
   const focusedInRouter = document.activeElement && container.contains(document.activeElement)
@@ -3276,7 +3276,7 @@ function renderUltraRouterSection() {
     <div class="ultra-metacog-block">
       <div class="ultra-metacog-head">
         <strong>✦ Task Metacognition &amp; Megaprompting</strong>
-        <span class="field-help">Calibrates task protocols &amp; Arena judge rubrics to the routed model family (or run <code>/forge &lt;prompt&gt;</code> anytime).</span>
+        <span class="field-help">Calibrates task protocols &amp; Conclave judge rubrics to the routed model family (or run <code>/forge &lt;prompt&gt;</code> anytime).</span>
       </div>
       <div class="ultra-metacog-modes" role="radiogroup" aria-label="Task metacognition mode">
         ${metacogModes.map(([id, title, desc]) => `<button type="button" class="ultra-metacog-btn ${metacogMode === id ? 'active' : ''}" data-router-metacog="${id}" ${ultraRouterBusy ? 'disabled' : ''}><strong>${title}</strong><span>${desc}</span></button>`).join('')}
@@ -4440,7 +4440,7 @@ function renderTimeline(events, total, task) {
     const recent = [...fullTurnEvents].reverse().find(e => ['model.request', 'tool.started', 'evaluation.started', 'routing.auto_continued'].includes(e.type));
     const activeProvLabel = providerById(task.providerId)?.label || task.providerId || '';
     const phase = task.answerRace
-      ? (events.findLast(e => e.type === 'race.dispatched')?.data.stage === 'grade' ? 'Grading parallel drafts' : `Drafting with ${task.answerRace.models?.length || 2} Arena writers`)
+      ? (events.findLast(e => e.type === 'race.dispatched')?.data.stage === 'grade' ? 'Grading parallel drafts' : `Drafting with ${task.answerRace.models?.length || 2} Conclave writers`)
       : recent?.type === 'routing.auto_continued'
         ? 'Continuing output'
         : task.status === 'verifying'
@@ -6270,7 +6270,7 @@ function renderCommands() {
     { kind: 'action', title: 'Open Live Browser Mirror (/browser)', detail: 'Watch your agent navigate, click, and test apps live or pop out a real Chromium window', keywords: 'browser live watch screencast window headless non-headless chrome /browser', run: () => window.G0DBrowserLive?.open() },
     { kind: 'action', title: 'Toggle Visible Browser Window', detail: 'Switch the contained agent browser between headless mirror and a real visible Chromium window', keywords: 'browser window visible non-headless popout chrome watch', run: () => { window.G0DBrowserLive?.open(); window.G0DBrowserLive?.toggleWindowMode(); } },
     { kind: 'action', title: 'Open Live Sidecar Visualizer (/visualize)', detail: 'Generate an isolated interactive HTML/SVG dashboard tracking what the agent is doing live', keywords: 'visualize visualizer dashboard chart graph watch monitor /visualize', run: () => window.G0DVisualizer?.open(selectedId, { autoGenerate: true }) },
-    { kind: 'action', title: 'Open The Conclave (Multi-Agent Stage)', detail: 'Visualize parallel subagents, Diff Races, and Arena councils (/conclave)', keywords: 'conclave swarm multi agent subagent crew arena council stage /conclave /swarm', run: () => window.G0DConclave?.open() },
+    { kind: 'action', title: 'Open The Conclave (Multi-Agent Stage)', detail: 'Visualize parallel subagents, Diff Races, and Conclave councils (/conclave)', keywords: 'conclave swarm multi agent subagent crew arena council stage /conclave /swarm', run: () => window.G0DConclave?.open() },
     { kind: 'action', title: 'Open Models & Subscriptions', detail: 'CLI logins, API keys, and local models', keywords: 'claude codex gemini copilot ollama key provider /model', run: () => openSettings('models', { subtab: 'connections' }) },
     { kind: 'action', title: 'Configure HyperTuner (AutoTemp)', detail: 'Toggle Off / Passive / Active adaptive temperature & sampling profiles', keywords: 'hypertuner autotemp autotune temperature sampling bayes top_p min_p', run: () => openSettings('hypertuner') },
     { kind: 'action', title: 'System Prompts & Tool Schemas', detail: 'Inspect and edit every system prompt & JSON tool schema (/system)', keywords: 'system prompt tool schema transparency edit override /system /schemas', run: () => openSettings('system', { subtab: 'prompts' }) },
@@ -8132,11 +8132,11 @@ function renderUltraPopover() {
   const modes = [
     ['off', 'Off', 'Direct model & fallback waterfall', false],
     ['auto_route', 'Auto-Route', hasMultipleModels ? 'Best model per prompt + local Elo' : 'Single model active (add 2+ to route)', false],
-    ['auto_arena', 'Arena Race', hasMultipleModels ? `Race ${arenaSize} models blindly + judge` : 'Needs 2+ connected models', !hasMultipleModels],
+    ['auto_arena', 'Conclave Race', hasMultipleModels ? `Race ${arenaSize} models blindly + judge` : 'Needs 2+ connected models', !hasMultipleModels],
   ];
 
   const sizeSection = hasMultipleModels ? `
-    <div class="ultra-pop-seg-row" aria-label="Arena contender count">
+    <div class="ultra-pop-seg-row" aria-label="Conclave contender count">
       <span class="ultra-pop-seg-label">Contenders</span>
       <div class="ultra-pop-seg-pills">
         ${[2, 3, 4].map(n => `<button type="button" class="ultra-pop-pill${mode === 'auto_arena' && arenaSize === n ? ' active' : ''}" data-ultra-arena-size="${n}" ${ultraRouterBusy || (n > Math.max(2, totalLiveModels)) ? 'disabled' : ''}>${n}×</button>`).join('')}
@@ -8157,7 +8157,7 @@ function renderUltraPopover() {
       </div>
     </div>`;
 
-  const statusTag = mode === 'off' ? 'Off' : mode === 'auto_route' ? 'Auto-Route active' : mode === 'manual_arena' ? `Custom ${racing?.models?.length || 2}× Arena` : `Auto-Arena ${arenaSize}×`;
+  const statusTag = mode === 'off' ? 'Off' : mode === 'auto_route' ? 'Auto-Route active' : mode === 'manual_arena' ? `Custom ${racing?.models?.length || 2}× Conclave` : `Auto-Conclave ${arenaSize}×`;
   pop.innerHTML = `
     <div class="ultra-popover-head">
       <div><strong>Ultra-Plinian</strong><small>${escapeHTML(statusTag)}</small></div>
@@ -8173,7 +8173,7 @@ function renderUltraPopover() {
     ${customLineupBanner}
     ${metaSection}
     <div class="ultra-popover-foot">
-      <button type="button" class="button button-secondary ultra-pop-customize" data-ultra-open-settings="arena">⚙ Customize Arena &amp; Routing…</button>
+      <button type="button" class="button button-secondary ultra-pop-customize" data-ultra-open-settings="arena">⚙ Customize Conclave &amp; Routing…</button>
       <span class="ultra-pop-status">${escapeHTML(task ? 'This chat' : 'Default')}</span>
     </div>`;
   positionUltraPopover();
@@ -8217,9 +8217,9 @@ $('#ultra-popover')?.addEventListener('click', async event => {
     if ([2, 3, 4].includes(n)) {
       try {
         await applyUltraCustomArena(null);
-        await updateUltraRouter({ mode: 'auto_arena', arenaSize: n }, `Ultra-Plinian Arena set to ${n} contenders.`);
+        await updateUltraRouter({ mode: 'auto_arena', arenaSize: n }, `Ultra-Plinian Conclave set to ${n} contenders.`);
       } catch (err) {
-        toast(err.message || 'Could not update Arena size.');
+        toast(err.message || 'Could not update Conclave size.');
       }
       renderUltraPopover();
     }
@@ -8241,7 +8241,7 @@ $('#ultra-popover')?.addEventListener('click', async event => {
   const mode = modeBtn.dataset.ultraPopMode;
   try {
     await applyUltraCustomArena(null);
-    const label = mode === 'off' ? 'Off' : mode === 'auto_route' ? 'Auto-Route' : 'Arena Race';
+    const label = mode === 'off' ? 'Off' : mode === 'auto_route' ? 'Auto-Route' : 'Conclave Race';
     await updateUltraRouter({ mode }, `Ultra-Plinian set to ${label}.`);
   } catch (err) {
     toast(err.message || 'Could not update Ultra-Plinian mode.');

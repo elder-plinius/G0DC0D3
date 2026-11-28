@@ -231,7 +231,7 @@ document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" clas
         <div class="setting-row"><label for="alerts-ev-approval">Approval required<small>When a tool call or shell command pauses waiting for your permission.</small></label><div class="setting-row-controls"><button type="button" class="button button-quiet alerts-event-play" data-alert-preview="approval">Play</button><input type="checkbox" role="switch" class="toggle" id="alerts-ev-approval" data-alert-event="approval"></div></div>
         <div class="setting-row"><label for="alerts-ev-error">Error, blocked, or paused<small>When a run fails, hits a budget limit, or gets blocked and needs attention.</small></label><div class="setting-row-controls"><button type="button" class="button button-quiet alerts-event-play" data-alert-preview="error">Play</button><input type="checkbox" role="switch" class="toggle" id="alerts-ev-error" data-alert-event="error"></div></div>
         <div class="setting-row"><label for="alerts-ev-schedule">Scheduled cron job finished<small>When a recurring or one-shot automation completes in the background.</small></label><div class="setting-row-controls"><button type="button" class="button button-quiet alerts-event-play" data-alert-preview="schedule">Play</button><input type="checkbox" role="switch" class="toggle" id="alerts-ev-schedule" data-alert-event="schedule"></div></div>
-        <div class="setting-row"><label for="alerts-ev-conclave">Conclave squad or Arena finished<small>When a multi-agent squad or Diff Race reports its results.</small></label><div class="setting-row-controls"><button type="button" class="button button-quiet alerts-event-play" data-alert-preview="conclave">Play</button><input type="checkbox" role="switch" class="toggle" id="alerts-ev-conclave" data-alert-event="conclave"></div></div>
+        <div class="setting-row"><label for="alerts-ev-conclave">Conclave squad or race finished<small>When a multi-agent Conclave squad or Diff Race reports its results.</small></label><div class="setting-row-controls"><button type="button" class="button button-quiet alerts-event-play" data-alert-preview="conclave">Play</button><input type="checkbox" role="switch" class="toggle" id="alerts-ev-conclave" data-alert-event="conclave"></div></div>
       </div>
     </section>
 
@@ -287,7 +287,7 @@ document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" clas
       <div class="transparency-subtabs models-subtabs" role="tablist" aria-label="Models sections">
         <button type="button" class="transparency-subtab active" data-models-subtab="connections" role="tab" aria-selected="true">Connections &amp; Keys</button>
         <button type="button" class="transparency-subtab" data-models-subtab="catalog" role="tab" aria-selected="false">Catalog &amp; Backups</button>
-        <button type="button" class="transparency-subtab" data-models-subtab="routing" role="tab" aria-selected="false">Routing &amp; Arena</button>
+        <button type="button" class="transparency-subtab" data-models-subtab="routing" role="tab" aria-selected="false">Routing &amp; Conclave</button>
         <button type="button" class="transparency-subtab" data-models-subtab="overseer" role="tab" aria-selected="false">Overseer</button>
       </div>
     </section>
@@ -916,7 +916,7 @@ $('#model-controls').hidden = false;
   atCard.innerHTML = `<div class="settings-card-head autotune-card-head">
     <div>
       <h4>HyperTuner Hyperparameter Layer <span class="acp-proto-badge">Empirical Bayes</span></h4>
-      <p>Passively learns optimal sampling archetypes (temperature, top_p, min_p, penalties) per model × task domain × reasoning effort from real verification, Arena, Overseer, and user outcomes. Never overrides manual Model Controls sliders.</p>
+      <p>Passively learns optimal sampling archetypes (temperature, top_p, min_p, penalties) per model × task domain × reasoning effort from real verification, Conclave, Overseer, and user outcomes. Never overrides manual Model Controls sliders.</p>
     </div>
     <button type="button" class="button button-secondary" id="autotune-reset-btn">Reset learned</button>
   </div>

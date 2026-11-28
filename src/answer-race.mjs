@@ -118,7 +118,7 @@ export async function runAnswerRace(runtime, task, epoch, signal) {
   const superseded = () => runtime.getTask(id).pendingMessages?.length > 0;
   const stop = (code,message,extra={}) => runtime._status(id,epoch,'waiting_input',{code,message,...extra});
   const ids = race.models, judge = resolveRaceModel(race.judge, runtime.catalog, runtime.providers), models = ids.map(key => resolveRaceModel(key, runtime.catalog, runtime.providers));
-  if (!judge || models.some(model=>!model)) return stop('RACE_UNAVAILABLE','A selected arena model is unavailable. Update the Ultra-Plinian choices in Models.');
+  if (!judge || models.some(model=>!model)) return stop('RACE_UNAVAILABLE','A selected Conclave model is unavailable. Update the Ultra-Plinian choices in Models.');
   const neededCalls = models.length + 1;
   const budget = () => runtime._status(id, epoch, 'paused_budget', { code: 'CALL_BUDGET', message: `Ultra-Plinian needs ${models.length} drafting calls and one grading call. Increase the chat’s call limit to continue.` });
   if (task.calls + neededCalls > task.policy.maxCalls) return budget();

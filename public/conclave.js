@@ -163,7 +163,7 @@
           <span class="conclave-sigil" aria-hidden="true">✦</span>
           <div class="conclave-title-copy">
             <h2 class="conclave-title">THE CONCLAVE</h2>
-            <p class="conclave-subtitle" id="conclave-subtitle">Multi-Agent Council &amp; Arena Stage</p>
+            <p class="conclave-subtitle" id="conclave-subtitle">Multi-Agent Conclave Stage</p>
           </div>
         </div>
         <div class="conclave-header-controls">
@@ -237,7 +237,7 @@
               <div class="clp-links">
                 <button type="button" class="button button-quiet" data-conclave-preset="roster">⛨ Roster</button>
                 <button type="button" class="button button-quiet" data-conclave-preset="forge">⚒ Forge</button>
-                <button type="button" class="button button-quiet" data-conclave-preset="arena">⚡ Arena</button>
+                <button type="button" class="button button-quiet" data-conclave-preset="arena">⚡ Race</button>
               </div>
             </div>
             <div class="conclave-standby-formations hidden" id="conclave-standby-formations"></div>
@@ -577,7 +577,7 @@
     }
     if (preset === 'arena') {
       if (typeof window.openSettings === 'function') window.openSettings('models', { subtab: 'routing' });
-      else if (typeof window.toast === 'function') window.toast('Open Settings → Models → Routing & Arena to configure Head-to-Head Arena.');
+      else if (typeof window.toast === 'function') window.toast('Open Settings → Models → Routing & Conclave to configure Head-to-Head Conclave.');
     }
   }
 
@@ -586,10 +586,10 @@
     const base = now - 14000;
     const cycle = tick % 6;
     if (cycle === 5) {
-      // Showcase Head-to-Head Arena Race mode on cycle 5!
+      // Showcase Head-to-Head Conclave Race mode on cycle 5!
       return {
         taskId: 'demo',
-        title: 'Conclave Preview · Ultra-Plinian Arena',
+        title: 'Conclave Preview · Ultra-Plinian Race',
         status: 'completed',
         mode: 'arena',
         orchestrator: { modelLabel: 'Ultra-Plinian Router', status: 'completed', calls: 3, maxCalls: 250, recoveries: 0 },
@@ -1275,7 +1275,7 @@
   function renderAll() {
     if (!dockEl()?.dataset.conclaveInit) return;
     const mode = data?.mode || 'standby';
-    const modeLabels = { arena: 'Arena Race', crew: 'Coding Crew', swarm: 'Constellation', diff_race: 'Diff Race', standby: 'Standby' };
+    const modeLabels = { arena: 'Conclave Race', crew: 'Coding Crew', swarm: 'Constellation', diff_race: 'Diff Race', standby: 'Standby' };
     const pill = document.getElementById('conclave-mode-pill');
     if (pill) {
       pill.textContent = demoMode ? `${modeLabels[mode] || 'Preview'} · Demo` : (modeLabels[mode] || 'Standby');
@@ -1285,7 +1285,7 @@
     if (sub) {
       sub.textContent = data?.title
         ? `${data.title} · ${data.orchestrator?.modelLabel ? shortModel(data.orchestrator.modelLabel) : 'Orchestrator'}`
-        : 'Multi-Agent Council & Arena Stage';
+        : 'Multi-Agent Conclave Stage';
     }
     const setT = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = String(v); };
     setT('conclave-stat-active', data?.stats?.activeWorkers ?? 0);
@@ -1998,7 +1998,7 @@
     ctx.fillStyle = pal.muted;
     ctx.font = '600 10px ui-monospace, SFMono-Regular, monospace';
     ctx.textAlign = 'left';
-    ctx.fillText(`ULTRA-PLINIAN ${n}-WAY ARENA RACE`, leftX, 24);
+    ctx.fillText(`ULTRA-PLINIAN ${n}-WAY CONCLAVE RACE`, leftX, 24);
     ctx.restore();
 
     contenders.forEach((c, idx) => {

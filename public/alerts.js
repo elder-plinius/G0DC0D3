@@ -47,7 +47,7 @@
       urgent: false,
     },
     conclave: {
-      label: 'Conclave squad or Arena finished',
+      label: 'Conclave squad or race finished',
       hint: 'Alert when a multi-agent squad or Diff Race finishes.',
       sampleTitle: 'Conclave finished',
       sampleBody: 'All parallel agents finished reporting results.',
