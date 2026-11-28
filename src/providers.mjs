@@ -2933,17 +2933,32 @@ export class AcpHarnessProvider {
           ].join('\n')
         : '';
 
-      // Pre-index workspace files on Turn 1 (bounded 36 KiB, prioritized by engineering relevance)
-      // so delegated ACP harnesses skip blind directory discovery and immediately see the real codebase.
+      // Pre-index workspace files on Turn 1 (bounded 36 KiB, prioritized by objective relevance).
+      // On large monorepos (>20 files), inline ONLY objective-referenced files and top-level manifests/docs
+      // so we never waste context tokens on unrelated alphabetical decoy modules.
       let workspacePreload = '';
       if (entry.turnCount === 0 && this.delegated && workspace && Array.isArray(context.files) && context.files.length > 0) {
+        const objectiveCorpus = [
+          String(task.objective || ''),
+          ...followups.map(f => String(f?.message || '')),
+        ].join('\n').toLowerCase();
+        const isObjectiveReferenced = (p = '') => {
+          const low = p.toLowerCase();
+          if (!low) return false;
+          if (objectiveCorpus.includes(low)) return true;
+          const base = path.posix.basename(low);
+          return base.length >= 6 && !/^(?:index|main|init|utils|types|config)\.[a-z]+$/.test(base) && objectiveCorpus.includes(base);
+        };
+        const isRootManifestOrDoc = (p = '') => /^(?:agents\.md|claude\.md|readme\.md|incident_report\.md|package\.json|pyproject\.toml|cargo\.toml|go\.mod|tsconfig\.json)$/i.test(p);
+        const isLargeRepo = context.files.length > 20;
         const sortedFiles = [...context.files].sort((a, b) => {
           const score = (p = '') => {
+            if (isObjectiveReferenced(p)) return 0;
+            if (isRootManifestOrDoc(p)) return 1;
             const low = p.toLowerCase();
-            if (/(?:^|\/)(?:agents\.md|claude\.md|readme\.md|incident_report\.md|package\.json|pyproject\.toml|cargo\.toml|go\.mod|tsconfig\.json)$/.test(low)) return 0;
-            if (/^(?:src|app|lib|bin|pkg|internal|cmd)\//.test(low)) return 1;
-            if (/^(?:test|tests|spec|__tests__)\//.test(low)) return 2;
-            return 3;
+            if (/^(?:src|app|lib|bin|pkg|internal|cmd|packages)\//.test(low)) return 2;
+            if (/^(?:test|tests|spec|__tests__)\//.test(low)) return 3;
+            return 4;
           };
           return score(a?.path) - score(b?.path) || String(a?.path || '').localeCompare(String(b?.path || ''));
         });
@@ -2957,6 +2972,7 @@ export class AcpHarnessProvider {
           if (budget <= 512) break;
           if (typeof f?.content !== 'string' || !f.path) continue;
           if (/(?:^|\/)(?:package-lock\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|poetry\.lock)$/.test(f.path)) continue;
+          if (isLargeRepo && !isObjectiveReferenced(f.path) && !isRootManifestOrDoc(f.path)) continue;
           if (f.content.length > 12 * 1024 || f.content.length > budget) continue;
           inlineBlocks.push(`--- ${f.path} ---\n${f.content}`);
           budget -= f.content.length;
