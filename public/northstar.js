@@ -71,9 +71,17 @@
       }
       render();
       const anyRunning = runs.some(r => r.status === 'running');
-      if (anyRunning && !pollTimer) {
-        pollTimer = setInterval(() => { refresh().catch(() => {}); }, 3500);
-      } else if (!anyRunning && pollTimer) {
+      const settingsOpen = Boolean(document.getElementById('settings-dialog')?.open);
+      if (anyRunning && settingsOpen && !pollTimer) {
+        pollTimer = setInterval(() => {
+          if (!document.getElementById('settings-dialog')?.open) {
+            clearInterval(pollTimer);
+            pollTimer = null;
+            return;
+          }
+          refresh().catch(() => {});
+        }, 3500);
+      } else if ((!anyRunning || !settingsOpen) && pollTimer) {
         clearInterval(pollTimer);
         pollTimer = null;
       }

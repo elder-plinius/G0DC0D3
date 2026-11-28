@@ -577,6 +577,7 @@
       if (activeLens === 'timeline') drawTimeline();
     });
 
+    renderLaunchpadControls();
     return dock;
   }
 

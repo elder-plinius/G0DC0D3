@@ -1752,7 +1752,7 @@ function renderSettingsSearchResults(rawQuery) {
   for (const tab of SETTINGS_TABS) {
     const paneEl = $(`#settings-pane-${tab.id}`);
     if (!paneEl) continue;
-    const candidates = [...paneEl.querySelectorAll('.settings-card, .setting-row, .shortcut-row, .transparency-card')];
+    const candidates = [...paneEl.querySelectorAll('.settings-card, .setting-row, .shortcut-row, .transparency-card, .settings-limits label, .settings-field-block')];
     for (const el of candidates) {
       if (el.hidden || el.classList.contains('hidden') || el.closest('[hidden]:not([role="tabpanel"])')) continue;
       if (el.classList.contains('settings-card') && el.querySelector('.setting-row')) {
@@ -1976,6 +1976,11 @@ $('#settings-dialog').addEventListener('click', async event => {
     if (hit) {
       await selectSettingsPane(hit.tabId, hit.subtab ? { subtab: hit.subtab } : {});
       if (hit.targetEl) {
+        let ancestor = hit.targetEl.parentElement;
+        while (ancestor && ancestor !== $('#settings-dialog')) {
+          if (ancestor.tagName === 'DETAILS') ancestor.open = true;
+          ancestor = ancestor.parentElement;
+        }
         hit.targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
         hit.targetEl.classList.remove('settings-jump-pulse');
         void hit.targetEl.offsetWidth;

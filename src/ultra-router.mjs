@@ -464,11 +464,12 @@ const JUDGE_TASTEMAKER_TIERS = Object.freeze([
 const JUDGE_LIBERATED_TIERS = Object.freeze([
   // For high-agency / security / edgy prompts: unpreachy high-intelligence judges that won't refuse or penalize direct answers
   /abliterat(?:ion|ed)[-_.]?(?:abliterated[-_.]?)?(?:model[-_.]?)?large/i,
-  /hermes[-_.]?4[-_.]?405b/i,
-  /deepseek[-_.]?v4.*(?:uncensored|abliterat)|qwen[-_.]?3[-_.]?[67][-_.]?plus/i,
+  /glm[-_.]?5[-_.]?3.*(?:abliterat|uncensored|heretic|penclaw)/i,
+  /hermes[-_.]?[34][-_.]?(?:405b|70b)/i,
+  /deepseek[-_.]?v4.*(?:uncensored|abliterat|heretic)|qwen[-_.]?3[-_.]?[678].*(?:heretic|abliterat|plus)/i,
   /gemini[-_.]?4(?:[._-]0)?[-_.]?neon|\bneon[-_.]?4\b/i,
-  /venice[-_.]?uncensored|abliterat|heretic/i,
-  /grok[-_.]?4|glm[-_.]?5[-_.]?3.*uncensored/i,
+  /venice[-_.]?uncensored|dolphin|abliterat|heretic/i,
+  /grok[-_.]?4|glm[-_.]?5[-_.]?3/i,
 ]);
 
 export function selectBestJudge(pool = [], chosenIds = [], { refusalRisk = 0, domain = 'fast_general' } = {}) {

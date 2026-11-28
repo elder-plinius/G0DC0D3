@@ -73,13 +73,13 @@ async function findUncensoredCatalogFallback(runtime, excludeIds = [], privacy =
   const catalogList = await runtime.catalog?.list?.().catch(() => null);
   const available = (catalogList?.models || []).filter(m => m?.id && !excluded.has(m.id));
   const preferred = [
+    'venice-catalog:glm-5-3-flash-uncensored',
+    'venice-catalog:deepseek-v4-1-flash-1017-uncensored',
+    'venice-catalog:deepseek-v4-1-flash-uncensored',
+    'venice-catalog:abliteration-abliterated-model-large-v2',
+    'venice-catalog:qwen-3-6-plus',
     'venice-catalog:venice-uncensored-1-2',
     'venice-catalog:venice-uncensored',
-    'venice-catalog:deepseek-v4-1-flash-uncensored',
-    'venice-catalog:deepseek-v4-1-flash-1017-uncensored',
-    'venice-catalog:glm-5-3-flash-uncensored',
-    'venice-catalog:qwen-3-6-plus',
-    'venice-catalog:abliteration-abliterated-model-large-v2',
     'venice-catalog:abliteration-abliterated-model-large-flash',
     'venice-catalog:gemma-4-uncensored'
   ];

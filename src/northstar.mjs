@@ -95,7 +95,8 @@ function parseJsonPath(obj, dotPath) {
 }
 
 export function extractMetric(output, { metricMode = 'regex', metricPattern = '', exitCode = 0 } = {}) {
-  const text = String(output || '');
+  const fullText = String(output || '');
+  const text = fullText.length > 32768 ? fullText.slice(-32768) : fullText;
   if (metricMode === 'exit_code') {
     return exitCode === 0 ? 1 : 0;
   }
@@ -157,10 +158,16 @@ export function normalizeNorthStarInput(input = {}) {
   const repoPath = String(input.repoPath || '').trim();
   if (!repoPath) throw nsError('Provide a local repository or workspace folder path.');
   const resolvedRepo = path.resolve(repoPath);
+  if (resolvedRepo === path.parse(resolvedRepo).root) {
+    throw nsError('Repository path cannot be the filesystem root.');
+  }
 
   const metricMode = VALID_METRIC_MODES.has(String(input.metricMode || 'regex')) ? String(input.metricMode || 'regex') : 'regex';
   const metricPattern = String(input.metricPattern || '').trim().slice(0, 300);
   if (metricMode === 'regex' && metricPattern) {
+    if (/\([^)]*[+*][^)]*\)[+*?]/.test(metricPattern)) {
+      throw nsError('Metric regex contains unsafe nested quantifiers.');
+    }
     try { new RegExp(metricPattern); } catch (err) { throw nsError(`Invalid metric regex: ${err.message}`); }
   }
   const direction = VALID_DIRECTIONS.has(String(input.direction || 'minimize')) ? String(input.direction || 'minimize') : 'minimize';
@@ -258,8 +265,25 @@ async function runShellCommand(command, cwd, { timeoutMs = 120_000, signal = nul
 }
 
 async function gitExec(args, cwd) {
-  const { stdout } = await execFileAsync('git', args, { cwd, maxBuffer: 8 * 1024 * 1024 });
+  const { stdout } = await execFileAsync('git', args, {
+    cwd,
+    maxBuffer: 8 * 1024 * 1024,
+    env: {
+      ...process.env,
+      GIT_TERMINAL_PROMPT: '0',
+      GIT_AUTHOR_NAME: 'G0DC0D3 North Star',
+      GIT_AUTHOR_EMAIL: 'northstar@g0dc0d3.local',
+      GIT_COMMITTER_NAME: 'G0DC0D3 North Star',
+      GIT_COMMITTER_EMAIL: 'northstar@g0dc0d3.local',
+    },
+  });
   return stdout.trim();
+}
+
+async function gitWorktreeCommit(cwd, message) {
+  await gitExec(['add', '-A'], cwd);
+  await gitExec(['commit', '-q', '-m', message], cwd);
+  return gitExec(['rev-parse', 'HEAD'], cwd);
 }
 
 function fileMatchesAllowlist(relPath, allowlist) {
@@ -629,9 +653,21 @@ export class NorthStarManager {
   }
 
   async _changedFiles(worktreePath) {
-    const status = await gitExec(['status', '--porcelain'], worktreePath);
-    if (!status) return [];
-    return status.split(/\r?\n/).filter(Boolean).map(line => line.slice(3).trim().replace(/^"|"$/g, ''));
+    const { stdout } = await execFileAsync('git', ['status', '--porcelain', '-uall'], { cwd: worktreePath, maxBuffer: 8 * 1024 * 1024 });
+    const raw = stdout.replace(/[\r\n]+$/, '');
+    if (!raw) return [];
+    const out = [];
+    for (const line of raw.split(/\r?\n/)) {
+      if (line.length < 4) continue;
+      const body = line.slice(3).trim();
+      // Handle rename lines: "old -> new" — check both paths for scope enforcement!
+      if (body.includes(' -> ')) {
+        for (const part of body.split(' -> ')) out.push(part.trim().replace(/^"|"$/g, ''));
+      } else {
+        out.push(body.replace(/^"|"$/g, ''));
+      }
+    }
+    return [...new Set(out.filter(Boolean))];
   }
 
   _resolveProvidersForIteration(run) {
@@ -789,9 +825,20 @@ export class NorthStarManager {
       let note = '';
       let commitSha = null;
 
+      const symlinkHits = [];
+      for (const rel of changed) {
+        try {
+          const st = await fs.lstat(path.join(run.worktreePath, rel));
+          if (st.isSymbolicLink()) symlinkHits.push(rel);
+        } catch {}
+      }
       if (!changed.length) {
         status = 'no_op';
         note = 'No workspace files modified.';
+      } else if (symlinkHits.length) {
+        status = 'scope_violation';
+        note = `Symlink creation is blocked in North Star worktrees: ${symlinkHits.slice(0, 4).join(', ')}`;
+        await this._resetToSha(run.worktreePath, run.championSha);
       } else if (run.editableFiles.length && changed.some(f => !fileMatchesAllowlist(f, run.editableFiles))) {
         const bad = changed.filter(f => !fileMatchesAllowlist(f, run.editableFiles));
         status = 'scope_violation';
@@ -821,8 +868,7 @@ export class NorthStarManager {
             delta = score - run.bestScore;
             if (isStrictlyBetter(score, run.bestScore, run.direction)) {
               const commitMsg = `northstar(exp-${String(iterNum).padStart(3, '0')}): ${score} (${delta >= 0 ? '+' : ''}${delta.toFixed(4)})`;
-              await gitCommit(run.worktreePath, { message: commitMsg });
-              commitSha = await gitExec(['rev-parse', 'HEAD'], run.worktreePath);
+              commitSha = await gitWorktreeCommit(run.worktreePath, commitMsg);
               run.championSha = commitSha;
               run.bestScore = score;
               run.keptCount += 1;

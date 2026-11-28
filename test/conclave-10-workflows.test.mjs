@@ -172,7 +172,7 @@ test('Conclave UX Launchpad: 6 generalized starter agents, 10 diverse long-form 
     assert.equal(padCheck.visible, true);
     assert.equal(padCheck.templates, 10);
     assert.equal(padCheck.teamPills, 6);
-    assert.equal(padCheck.modes, 3);
+    assert.equal(padCheck.modes, 4);
     assert.equal(padCheck.inlineStyles, 0);
 
     // 3. Test smart auto-routing across all 10 completely different long-form task scenarios!
