@@ -1,5 +1,6 @@
 import { createVeniceCatalog, isCatalogModel, veniceEndpoint } from './venice-catalog.mjs';
 import { APP_VERSION } from './version.mjs';
+import { checkForUpdates } from './updates.mjs';
 import { VISUALIZER_CSP } from './visualizer.mjs';
 import { parameterLimits, intersectParameterLimits } from './conversation-controls.mjs';
 import http from 'node:http';
@@ -572,6 +573,11 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
         if(selected.some(provider=>!provider))return send(res,400,{error:'A selected model is unavailable. Refresh the model list.'});
         const models=selected.map(parameterLimits);
         return send(res,200,{models,fields:intersectParameterLimits(models),fetchedAt:discovered.fetchedAt,stale:discovered.stale,warning:discovered.warning});
+      }
+      if(req.method==='POST' && url.pathname==='/api/updates/check') {
+        await readBody(req).catch(() => ({}));
+        const result = await checkForUpdates({ currentVersion: APP_VERSION, privacy: runtime.getPrivacy().settings });
+        return send(res, 200, result);
       }
       if(req.method==='GET' && url.pathname==='/api/setup')return send(res,200,{setup:setup.state(),...await cliConnections.status({refresh:url.searchParams.get('refresh')==='1'})});
       if(req.method==='POST' && url.pathname==='/api/setup')return send(res,200,{setup:setup.acknowledge(await readBody(req))});

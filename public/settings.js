@@ -6,6 +6,7 @@ const SETTINGS_ICONS = {
   notifications: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3a4.5 4.5 0 0 0-4.5 4.5v2.7L4 12.6v1.2h12v-1.2l-1.5-2.4V7.5A4.5 4.5 0 0 0 10 3z"/><path d="M8.3 15.8a1.9 1.9 0 0 0 3.4 0"/></svg>',
   shortcuts: '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="5" width="15" height="10" rx="2"/><path d="M5.5 8.5h1M8.5 8.5h1M11.5 8.5h1M14.5 8.5h.5M6.5 11.5h7"/></svg>',
   models: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.5 12 8l5.5 2-5.5 2-2 5.5L8 12l-5.5-2L8 8z"/></svg>',
+  hypertuner: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6h12M4 10h12M4 14h12"/><circle cx="7.5" cy="6" r="1.8"/><circle cx="13" cy="10" r="1.8"/><circle cx="9" cy="14" r="1.8"/></svg>',
   recovery: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 7.5A6 6 0 1 0 16 11"/><path d="M15.5 3.5v4h-4"/></svg>',
   memory: '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6.5"/><circle cx="10" cy="10" r="2.5"/><path d="M10 3.5v2M10 14.5v2"/></svg>',
   prompts: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 5.5h12M4 10h8M4 14.5h10"/><circle cx="15.5" cy="10" r="1.5"/></svg>',
@@ -28,6 +29,7 @@ const SETTINGS_GROUPS = [
     label: 'Intelligence',
     tabs: [
       { id: 'models', label: 'Models & APIs', hint: 'Keys, catalog & routing', badgeId: 'settings-badge-models' },
+      { id: 'hypertuner', label: 'HyperTuner', hint: 'AutoTemp & sampling tuning', badgeId: 'settings-badge-hypertuner' },
       { id: 'recovery', label: 'Recovery', hint: 'GODMODƎ failover & limits', badgeId: 'settings-badge-recovery' },
     ],
   },
@@ -118,6 +120,21 @@ document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" clas
         <div class="setting-row"><div><h3>Inference connections &amp; permissions</h3><p>Review local CLI logins, API keys, and what each connection allows.</p></div><button type="button" class="button button-secondary" data-open-setup>Review setup</button></div>
         <div class="setting-row"><div><h3>Get to know GODMODƎ</h3><p>A 1-minute tour of GODMODƎ recovery, Ultra-Plinian, and model controls.</p></div><button type="button" class="button button-secondary" data-open-tour>Take a quick tour</button></div>
       </div>
+
+      <div class="settings-card" id="settings-updates-card">
+        <div class="settings-card-head">
+          <h4>Software Updates</h4>
+          <p>Manual, zero-telemetry release checks against official GitHub Releases. Nothing phones home automatically.</p>
+        </div>
+        <div class="setting-row">
+          <div>
+            <h3>Installed version <span class="meta-chip" id="settings-app-version">v0.3.0</span></h3>
+            <p id="settings-update-summary">Checks only when you click the button. Blocked automatically in Local-Only mode.</p>
+          </div>
+          <button type="button" class="button button-secondary" id="settings-check-updates">Check for updates</button>
+        </div>
+        <div id="settings-update-result" class="update-status-card hidden" role="status" aria-live="polite"></div>
+      </div>
     </section>
 
     <section id="settings-pane-notifications" role="tabpanel" aria-labelledby="settings-tab-notifications" hidden>
@@ -156,7 +173,7 @@ document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" clas
           </div>
           <div class="alerts-pack-grid" id="alerts-pack-grid" role="radiogroup" aria-label="Sound pack">
             <button type="button" class="alerts-pack-btn" role="radio" aria-checked="false" data-alert-pack="glass"><strong>Crystal Glass</strong><small>Harmonic chime</small></button>
-            <button type="button" class="alerts-pack-btn" role="radio" aria-checked="false" data-alert-pack="synth"><strong>Plinian Synth</strong><small>Warm chord</small></button>
+            <button type="button" class="alerts-pack-btn" role="radio" aria-checked="false" data-alert-pack="synth"><strong>Warm Synth</strong><small>Warm chord</small></button>
             <button type="button" class="alerts-pack-btn" role="radio" aria-checked="false" data-alert-pack="minimal"><strong>Studio Tap</strong><small>Subtle pulse</small></button>
             <button type="button" class="alerts-pack-btn" role="radio" aria-checked="false" data-alert-pack="retro"><strong>Retro 8-bit</strong><small>Chiptune blip</small></button>
             <button type="button" class="alerts-pack-btn" role="radio" aria-checked="false" data-alert-pack="system"><strong>macOS System</strong><small>Native NSSound</small></button>
@@ -275,6 +292,13 @@ document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" clas
       </div>
     </section>
 
+    <section id="settings-pane-hypertuner" role="tabpanel" aria-labelledby="settings-tab-hypertuner" hidden>
+      <header class="settings-pane-head">
+        <h3>HyperTuner (AutoTemp)</h3>
+        <p>Automatic temperature and sampling tuning per model × task domain × effort level — adapts passively from verified outcomes without ever overriding manual Model Controls sliders.</p>
+      </header>
+    </section>
+
     <section id="settings-pane-recovery" role="tabpanel" aria-labelledby="settings-tab-recovery" hidden>
       <header class="settings-pane-head">
         <h3>GODMODƎ Recovery &amp; Limits</h3>
@@ -328,32 +352,32 @@ document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" clas
             <h4>Permission Gate</h4>
             <p class="field-help" id="permission-gate-scope-note">Pick a preset below to decide whether tools run automatically or pause for your approval.</p>
           </div>
-          <span class="meta-chip" id="permission-gate-badge">Safe</span>
+          <span class="meta-chip" id="permission-gate-badge">Ask Shell &amp; Deletes</span>
         </div>
         <div class="permission-presets" role="group" aria-label="Permission presets">
           <button type="button" class="permission-preset-card" data-permission-preset="permissive" aria-pressed="false">
-            <strong>Permissive (Auto-Run)</strong>
-            <span>Tools run automatically inside workspace guardrails without confirmation prompts.</span>
+            <strong>Autonomous (Auto-Run)</strong>
+            <span>Runs edits and workspace commands automatically without confirmation prompts (hard blocks still apply).</span>
           </button>
           <button type="button" class="permission-preset-card" data-permission-preset="auto" aria-pressed="false">
-            <strong>Auto · AI Judge (Recommended)</strong>
-            <span>Overseer checks shell, deletes &amp; fetches; pauses only on risky ops.</span>
+            <strong>AI Screened (Overseer)</strong>
+            <span>Overseer screens shell commands, deletes &amp; fetches; pauses only when an action looks high-impact.</span>
           </button>
           <button type="button" class="permission-preset-card" data-permission-preset="acceptEdits" aria-pressed="false">
-            <strong>Accept Edits</strong>
-            <span>Auto-approve file edits; ask before shell commands, deletes &amp; commits.</span>
+            <strong>Auto-Edit · Ask Commands</strong>
+            <span>Auto-approves file edits; pauses to ask before shell commands, deletes &amp; commits.</span>
           </button>
           <button type="button" class="permission-preset-card" data-permission-preset="safe" aria-pressed="false">
-            <strong>Safe Guardrails</strong>
-            <span>Ask before any shell command or file deletion; block destructive ops.</span>
+            <strong>Ask Shell &amp; Deletes</strong>
+            <span>Auto-allows reads; pauses to confirm shell commands, file deletions &amp; destructive ops.</span>
           </button>
           <button type="button" class="permission-preset-card" data-permission-preset="default" aria-pressed="false">
-            <strong>Ask Everything</strong>
-            <span>Confirm every edit, delete, shell command, and git commit.</span>
+            <strong>Ask Every Action</strong>
+            <span>Pauses to confirm every file edit, delete, shell command, and git commit.</span>
           </button>
           <button type="button" class="permission-preset-card" data-permission-preset="dontAsk" aria-pressed="false">
-            <strong>Don’t Ask (CI)</strong>
-            <span>Silently deny shell, deletes &amp; commits without pausing.</span>
+            <strong>Headless CI (No Prompts)</strong>
+            <span>Never prompts; silently denies shell commands, deletes &amp; commits for unattended runs.</span>
           </button>
         </div>
         <p class="field-help settings-tip-bar">Shortcut: press <kbd>Shift+Tab</kbd> in the composer anytime to cycle permission modes. Custom rules below are evaluated top-to-bottom (last match wins).</p>
@@ -430,7 +454,7 @@ document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" clas
     <section id="settings-pane-schedules" role="tabpanel" aria-labelledby="settings-tab-schedules" hidden>
       <header class="settings-pane-head">
         <h3>Schedules &amp; Cron Jobs</h3>
-        <p>Run recurring or one-shot <strong>GODMODƎ</strong> prompts and <strong>GODCODƎ</strong> repository sweeps automatically in your local timezone. Unattended jobs default to the <strong>Safe</strong> permission gate and honor active Privacy / Lockdown rules.</p>
+        <p>Run recurring or one-shot <strong>GODMODƎ</strong> prompts and <strong>GODCODƎ</strong> repository sweeps automatically in your local timezone. Unattended jobs default to the <strong>Ask Shell &amp; Deletes</strong> permission gate and honor active Privacy / Lockdown rules.</p>
       </header>
       <div class="settings-card">
         <div class="settings-card-head">
@@ -506,11 +530,11 @@ document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" clas
             <label class="sched-field">
               <span>Permission Gate</span>
               <select id="sched-preset">
-                <option value="safe" selected>Safe (Recommended)</option>
-                <option value="read_only">Read-only (Deny writes &amp; shell)</option>
-                <option value="dontAsk">Headless Safe (Auto-deny shell/delete)</option>
-                <option value="default">Ask Everything</option>
-                <option value="acceptEdits">Accept Edits</option>
+                <option value="safe" selected>Ask Shell &amp; Deletes (Default)</option>
+                <option value="read_only">Read-Only (Deny writes &amp; shell)</option>
+                <option value="dontAsk">Headless CI (Auto-deny shell/delete)</option>
+                <option value="default">Ask Every Action</option>
+                <option value="acceptEdits">Auto-Edit · Ask Commands</option>
               </select>
             </label>
           </div>
@@ -746,11 +770,11 @@ document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" clas
           </button>
           <button type="button" class="security-profile-btn is-hardened" data-security-profile="hardened" aria-pressed="false">
             <strong>⛨ Hardened (Red Team / Bounty)</strong>
-            <span>Locks Strict ZDR + secret scrubbing + Safe gate + Ephemeral engagement (no disk memory/learning).</span>
+            <span>Locks Strict ZDR + secret scrubbing + Ask Shell gate + Ephemeral engagement (no disk memory/learning).</span>
           </button>
           <button type="button" class="security-profile-btn is-lockdown" data-security-profile="lockdown" aria-pressed="false">
             <strong>⛨ Airgap Lockdown</strong>
-            <span>Zero cloud egress (local models only) + Ask Everything gate + Ephemeral engagement.</span>
+            <span>Zero cloud egress (local models only) + Ask Every Action gate + Ephemeral engagement.</span>
           </button>
         </div>
         <div class="setting-row"><label for="privacy-ephemeral-session">Ephemeral Engagement ("Burn Bag")<small>Pauses cross-session memory saves and local outcome learning so sensitive engagement artifacts stay strictly scoped.</small></label><input type="checkbox" role="switch" class="toggle" id="privacy-ephemeral-session" data-privacy-toggle="ephemeralSession"></div>
@@ -889,7 +913,6 @@ $('#model-controls').hidden = false;
   const atCard = document.createElement('section');
   atCard.id = 'autotune-card';
   atCard.className = 'settings-card autotune-card';
-  atCard.dataset.modelSubtab = 'routing';
   atCard.innerHTML = `<div class="settings-card-head autotune-card-head">
     <div>
       <h4>HyperTuner Hyperparameter Layer <span class="acp-proto-badge">Empirical Bayes</span></h4>
@@ -904,7 +927,7 @@ $('#model-controls').hidden = false;
   </div>
   <p id="autotune-summary" class="field-help">Loading HyperTuner telemetry…</p>
   <div id="autotune-learned-list" class="autotune-learned-list"></div>`;
-  $('#model-controls')?.append(atCard);
+  $('#settings-pane-hypertuner')?.append(atCard);
 }
 
 let autoTuneState = null;
@@ -1018,6 +1041,7 @@ $$('.autotune-mode-btn').forEach(btn => {
       if (seq !== autoTuneReqSeq) return;
       renderAutoTuneCard(updated);
       settingsFeedback(`HyperTuner set to ${mode}.`);
+      updateSettingsNavBadges();
     } catch (err) {
       if (seq !== autoTuneReqSeq) return;
       settingsFeedback(err?.message || 'Could not update HyperTuner mode.', true);
@@ -1168,12 +1192,12 @@ function rulesSignature(rules) {
 }
 
 const PERMISSION_PRESET_LABELS = Object.freeze({
-  permissive: 'Permissive',
-  auto: 'Auto (AI Judge)',
-  acceptEdits: 'Accept Edits',
-  safe: 'Safe Guardrails',
-  default: 'Ask Everything',
-  dontAsk: 'Don’t Ask (CI)',
+  permissive: 'Autonomous',
+  auto: 'AI Screened',
+  acceptEdits: 'Auto-Edit',
+  safe: 'Ask Shell & Deletes',
+  default: 'Ask Every Action',
+  dontAsk: 'Headless CI',
 });
 
 function detectPermissionPreset(rules) {
@@ -1670,12 +1694,15 @@ function updateSettingsNavBadges() {
   };
   const liveCount = (state.providers || []).filter(p => p.kind !== 'scripted' && p.available !== false).length;
   setBadge('settings-badge-models', liveCount > 0 ? String(liveCount) : '0', liveCount > 0 ? 'is-ok' : 'is-warn');
+  const htMode = String(autoTuneState?.mode || state.autotune?.mode || 'passive').toLowerCase();
+  const htLabel = htMode === 'active' ? 'Active' : htMode === 'off' ? 'Off' : 'Passive';
+  setBadge('settings-badge-hypertuner', htLabel, htMode === 'active' ? 'is-accent' : htMode === 'passive' ? 'is-ok' : '');
   const task = settingsTask();
   const view = RecoveryUI.presentation(task, Date.now(), newConversationProviders());
   setBadge('settings-badge-recovery', view.enabled ? 'ON' : 'OFF', view.enabled ? 'is-accent' : '');
   const { rules } = activePermissionRulesForScope();
   const preset = detectPermissionPreset(rules);
-  setBadge('settings-badge-tools', preset === 'permissive' ? 'Auto' : preset === 'auto' ? 'AI' : preset === 'safe' ? 'Safe' : preset === 'acceptEdits' ? 'Edits' : preset === 'dontAsk' ? 'CI' : 'Ask');
+  setBadge('settings-badge-tools', preset === 'permissive' ? 'Auto' : preset === 'auto' ? 'AI' : preset === 'safe' ? 'Ask Shell' : preset === 'acceptEdits' ? 'Edit' : preset === 'dontAsk' ? 'CI' : 'Ask All');
   const ps = state.privacy?.settings;
   if (ps) {
     const badgeTxt = ps.securityProfile === 'lockdown' ? 'Lockdown'
@@ -1798,9 +1825,10 @@ async function selectSettingsPane(pane, options = {}) {
   $('.settings-body').scrollTop = 0;
   const scopedPanes = new Set(['general', 'models', 'recovery', 'tools', 'advanced']);
   $('.settings-context')?.classList.toggle('is-muted', !scopedPanes.has(pane));
-  const feedback = { notifications: 'Optional sounds & notifications save locally on this device — zero telemetry.', shortcuts: 'Press ? anytime outside Settings to view keyboard shortcuts.', recovery: 'GODMODƎ recovery, retry limits, and continuation controls save automatically.', prompts: 'Saved on this device for every chat.', schedules: 'Scheduled jobs run locally in your timezone and respect Privacy & Permission Gates.', system: 'Local prompt transparency — overrides apply on this device to live non-fixture chats.', memory: 'Personal instructions, memories, and /skills save locally on this device.', privacy: 'Zero telemetry. ZDR & privacy controls apply immediately.', models: 'Switch between Connections, Catalog, Routing, and Overseer above.', tools: settingsTask() ? 'Permissions save automatically. Save checks after editing.' : 'Permissions and checks apply to individual tasks.' };
+  const feedback = { notifications: 'Optional sounds & notifications save locally on this device — zero telemetry.', shortcuts: 'Press ? anytime outside Settings to view keyboard shortcuts.', hypertuner: 'HyperTuner adapts temperature & sampling per model × domain — manual Model Controls always take priority.', recovery: 'GODMODƎ recovery, retry limits, and continuation controls save automatically.', prompts: 'Saved on this device for every chat.', schedules: 'Scheduled jobs run locally in your timezone and respect Privacy & Permission Gates.', system: 'Local prompt transparency — overrides apply on this device to live non-fixture chats.', memory: 'Personal instructions, memories, and /skills save locally on this device.', privacy: 'Zero telemetry. ZDR & privacy controls apply immediately.', models: 'Switch between Connections, Catalog, Routing, and Overseer above.', tools: settingsTask() ? 'Permissions save automatically. Save checks after editing.' : 'Permissions and checks apply to individual tasks.' };
   settingsFeedback(feedback[pane] || 'Changes save automatically.');
   if (pane === 'notifications') { window.G0DAlerts?.refreshNativePermission?.(); renderAlertsSettings(); }
+  if (pane === 'hypertuner') { await loadAutoTuneSettings(); }
   if (pane === 'prompts') { try { await loadPromptLibrary(); } catch (error) { settingsFeedback(error.message, true); } }
   if (pane === 'schedules') { try { await loadSchedulesSettings(); } catch (error) { settingsFeedback(error.message, true); } }
   if (pane === 'system') {
@@ -1830,6 +1858,9 @@ async function openSettings(pane = 'general', options = {}) {
   settingsTaskId = currentTask && currentTask.status !== 'cancelled' ? currentTask.id : null;
   delete $('#race-options').dataset.scope;
   settingsFeedback('Changes save automatically.');
+  if ($('#settings-app-version') && state?.version) {
+    $('#settings-app-version').textContent = 'v' + String(state.version).replace(/^v/i, '');
+  }
   renderSettingsValues();
   if (!$('#settings-dialog').open) $('#settings-dialog').showModal();
   await selectSettingsPane(pane, options);
@@ -2983,7 +3014,7 @@ function renderSchedulesList() {
         <span class="meta-chip">${escapeHTML(job.humanLabel || '')}</span>
         <span class="meta-chip">Next: ${escapeHTML(job.enabled ? formatScheduleTime(job.nextRunAt) : 'Paused')}</span>
         <span class="meta-chip">Model: ${escapeHTML(providerLabel(job.providerIds?.[0]))}</span>
-        <span class="meta-chip">Gate: ${escapeHTML(job.permissionPreset || 'safe')}</span>
+        <span class="meta-chip">Gate: ${escapeHTML(PERMISSION_PRESET_LABELS[job.permissionPreset || 'safe'] || job.permissionPreset || 'Ask Shell')}</span>
         ${lastChip}
         ${job.lastTaskId ? `<button type="button" class="button button-quiet sched-open-task" data-sched-open-task="${escapeHTML(job.lastTaskId)}">Open thread →</button>` : ''}
       </div>
@@ -3196,3 +3227,78 @@ $('#sched-list')?.addEventListener('click', async event => {
     } catch (error) { settingsFeedback(error.message, true); }
   }
 });
+
+let updateCheckBusy = false;
+function renderUpdateResult(result, errorMessage = '') {
+  const box = $('#settings-update-result');
+  const summary = $('#settings-update-summary');
+  const verChip = $('#settings-app-version');
+  if (verChip && (result?.currentVersion || state?.version)) {
+    verChip.textContent = 'v' + String(result?.currentVersion || state.version).replace(/^v/i, '');
+  }
+  if (!box) return;
+  if (errorMessage) {
+    box.className = 'update-status-card is-error';
+    box.innerHTML = `<div class="update-status-head"><span class="update-status-badge is-error">Check unavailable</span></div><p class="update-status-detail">${escapeHTML(errorMessage)}</p>`;
+    if (summary) summary.textContent = errorMessage;
+    return;
+  }
+  if (!result) {
+    box.className = 'update-status-card hidden';
+    box.innerHTML = '';
+    return;
+  }
+  const pubDate = result.publishedAt ? new Date(result.publishedAt).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '';
+  const safeReleaseUrl = typeof result.releaseUrl === 'string' && /^https:\/\//i.test(result.releaseUrl) ? result.releaseUrl : 'https://github.com/elder-plinius/G0DC0D3/releases';
+  const safeSiteUrl = typeof result.siteUrl === 'string' && /^https:\/\//i.test(result.siteUrl) ? result.siteUrl : 'https://godcode.gg';
+  const safeAssetUrl = typeof result.downloadAsset?.url === 'string' && /^https:\/\//i.test(result.downloadAsset.url) ? result.downloadAsset.url : '';
+  if (result.updateAvailable) {
+    box.className = 'update-status-card is-available';
+    const downloadLink = safeAssetUrl
+      ? `<a class="button button-primary" href="${escapeHTML(safeAssetUrl)}" target="_blank" rel="noopener noreferrer">Download ${escapeHTML(result.downloadAsset.name)}</a>`
+      : '';
+    const notesBlock = result.notesPreview ? `<pre class="update-notes-preview">${escapeHTML(result.notesPreview)}</pre>` : '';
+    box.innerHTML = `<div class="update-status-head"><span class="update-status-badge is-available">Update available</span><strong>v${escapeHTML(result.currentVersion)} → ${escapeHTML(result.tagName || ('v' + result.latestVersion))}</strong>${pubDate ? `<span class="update-status-date">Released ${escapeHTML(pubDate)}</span>` : ''}</div>${notesBlock}<div class="update-links">${downloadLink}<a class="button button-secondary" href="${escapeHTML(safeReleaseUrl)}" target="_blank" rel="noopener noreferrer">View release notes</a><a class="button button-quiet" href="${escapeHTML(safeSiteUrl)}" target="_blank" rel="noopener noreferrer">godcode.gg</a></div>`;
+    if (summary) summary.textContent = `Version ${result.latestVersion} is available (you are on v${result.currentVersion}).`;
+  } else {
+    const isAhead = result.status === 'ahead';
+    box.className = 'update-status-card is-current';
+    box.innerHTML = `<div class="update-status-head"><span class="update-status-badge is-current">${isAhead ? 'Development build' : 'Up to date'}</span><strong>v${escapeHTML(result.currentVersion)}</strong>${pubDate ? `<span class="update-status-date">Latest release: ${escapeHTML(result.tagName || ('v' + result.latestVersion))} (${escapeHTML(pubDate)})</span>` : ''}</div><div class="update-links"><a class="button button-quiet" href="${escapeHTML(safeReleaseUrl)}" target="_blank" rel="noopener noreferrer">GitHub Releases</a><a class="button button-quiet" href="${escapeHTML(safeSiteUrl)}" target="_blank" rel="noopener noreferrer">godcode.gg</a></div>`;
+    if (summary) summary.textContent = isAhead
+      ? `Running newer local build v${result.currentVersion} (latest public release: v${result.latestVersion}).`
+      : `You are running the latest release (v${result.currentVersion}).`;
+  }
+}
+
+async function checkForUpdates({ openSettings: shouldOpenSettings = false } = {}) {
+  if (shouldOpenSettings) {
+    await openSettings('general');
+    $('#settings-updates-card')?.scrollIntoView({ block: 'nearest' });
+  }
+  if (updateCheckBusy) return;
+  updateCheckBusy = true;
+  const btn = $('#settings-check-updates');
+  if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
+  const summary = $('#settings-update-summary');
+  if (summary) summary.textContent = 'Checking GitHub Releases (no telemetry sent)…';
+  try {
+    const result = await api('/api/updates/check', { method: 'POST', body: '{}' });
+    renderUpdateResult(result);
+    if (result.updateAvailable) {
+      toast(`Update available: ${result.tagName || ('v' + result.latestVersion)} (current v${result.currentVersion})`);
+    } else if (shouldOpenSettings) {
+      toast(`G0DM0D3 v${result.currentVersion} is up to date.`);
+    }
+    return result;
+  } catch (error) {
+    const msg = error?.message || 'Could not check for updates.';
+    renderUpdateResult(null, msg);
+    toast(msg);
+    return null;
+  } finally {
+    updateCheckBusy = false;
+    if (btn) { btn.disabled = false; btn.textContent = 'Check for updates'; }
+  }
+}
+window.checkForUpdates = checkForUpdates;
+$('#settings-check-updates')?.addEventListener('click', () => void checkForUpdates({ openSettings: false }));

@@ -65,6 +65,7 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
         menu.addItem(appMenuItem)
         let appMenu = NSMenu(title: "G0DM0D3")
         appMenu.addItem(withTitle: "About G0DM0D3", action: #selector(showAbout), keyEquivalent: "")
+        appMenu.addItem(withTitle: "Check for Updates…", action: #selector(checkForUpdatesMenu), keyEquivalent: "")
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Settings…", action: #selector(openSettingsMenu), keyEquivalent: ",")
         appMenu.addItem(.separator())
@@ -848,6 +849,17 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
     @objc private func retry() { webContentRestarts = 0; connect() }
     @objc private func showWindow() { window?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
     @objc private func openSettingsMenu() { showWindow(); webView.evaluateJavaScript("typeof openSettings==='function'&&openSettings('general')", completionHandler: nil) }
+    @objc private func checkForUpdatesMenu() {
+        showWindow()
+        guard webViewReady else {
+            let alert = NSAlert()
+            alert.messageText = "Workspace is still connecting"
+            alert.informativeText = "Wait a moment for the local G0DM0D3 runtime to finish connecting, then choose Check for Updates… again."
+            alert.beginSheetModal(for: window)
+            return
+        }
+        webView.evaluateJavaScript("typeof checkForUpdates==='function'&&checkForUpdates({openSettings:true})", completionHandler: nil)
+    }
     @objc private func newChatMenu() { showWindow(); webView.evaluateJavaScript("typeof newConversation==='function'&&newConversation()", completionHandler: nil) }
     @objc private func zoomIn() { webView.pageZoom = min(2.0, webView.pageZoom + 0.1) }
     @objc private func zoomOut() { webView.pageZoom = max(0.6, webView.pageZoom - 0.1) }

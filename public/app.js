@@ -634,7 +634,7 @@ function renderComposer() {
     ? task.permissionRules
     : (Array.isArray(state.permissions?.rules) ? state.permissions.rules : []);
   const permPresetNow = typeof detectPermissionPreset === 'function' ? detectPermissionPreset(permRulesNow) : (permRulesNow.length ? 'custom' : 'permissive');
-  const shortPermLabel = { permissive: 'Permissive', auto: 'Auto (AI)', acceptEdits: 'Accept Edits', safe: 'Safe', default: 'Ask All', dontAsk: 'CI' }[permPresetNow] || `Custom (${permRulesNow.length})`;
+  const shortPermLabel = { permissive: 'Autonomous', auto: 'AI Screened', acceptEdits: 'Auto-Edit', safe: 'Ask Shell', default: 'Ask All', dontAsk: 'Headless CI' }[permPresetNow] || `Custom (${permRulesNow.length})`;
   const cmdSuffix = task ? (task.execution?.enabled ? (task.execution.network ? ' · Cmd+Net' : ' · Cmd') : '') : '';
   setText('#composer-permissions-label', `${shortPermLabel}${cmdSuffix}`);
   $('#composer-permissions').title = `Permission Gate: ${shortPermLabel} (Shift+Tab to cycle, click to configure)`;
@@ -695,13 +695,16 @@ function renderRecoveryControl(task, loading = false) {
   setVisible('#composer-race', !task || task.workspaceKind === 'conversation');
   $('#composer-race').classList.toggle('race-enabled', ultraOn);
   const arenaN = racing?.models?.length || state.router?.arenaSize || ultraRouterData?.settings?.arenaSize || 3;
-  $('#composer-race').textContent = routerMode === 'auto_route' && !racing
-    ? 'Ultra-Plinian · Auto ⌄'
+  const raceLabel = routerMode === 'auto_route' && !racing
+    ? 'Ultra-Plinian · Auto'
     : routerMode === 'auto_arena' && !racing
-      ? `Ultra-Plinian · Arena ${arenaN}× ⌄`
+      ? `Ultra-Plinian · Arena ${arenaN}×`
       : racing
-        ? `Ultra-Plinian · Custom ${arenaN}× ⌄`
-        : 'Ultra-Plinian ⌄';
+        ? `Ultra-Plinian · Custom ${arenaN}×`
+        : 'Ultra-Plinian';
+  const raceLabelEl = $('#composer-race-label');
+  if (raceLabelEl) raceLabelEl.textContent = raceLabel;
+  else $('#composer-race').textContent = `${raceLabel} ⌄`;
   $('#composer-race').title = routerMode === 'auto_route' && !racing
     ? 'Ultra-Plinian Auto-Route · Click to switch mode'
     : ultraOn
@@ -6198,16 +6201,18 @@ function renderCommands() {
     { kind: 'action', title: 'Open Live Sidecar Visualizer (/visualize)', detail: 'Generate an isolated interactive HTML/SVG dashboard tracking what the agent is doing live', keywords: 'visualize visualizer dashboard chart graph watch monitor /visualize', run: () => window.G0DVisualizer?.open(selectedId, { autoGenerate: true }) },
     { kind: 'action', title: 'Open The Conclave (Multi-Agent Stage)', detail: 'Visualize parallel subagents, Diff Races, and Arena councils (/conclave)', keywords: 'conclave swarm multi agent subagent crew arena council stage /conclave /swarm', run: () => window.G0DConclave?.open() },
     { kind: 'action', title: 'Open Models & Subscriptions', detail: 'CLI logins, API keys, and local models', keywords: 'claude codex gemini copilot ollama key provider /model', run: () => openSettings('models', { subtab: 'connections' }) },
+    { kind: 'action', title: 'Configure HyperTuner (AutoTemp)', detail: 'Toggle Off / Passive / Active adaptive temperature & sampling profiles', keywords: 'hypertuner autotemp autotune temperature sampling bayes top_p min_p', run: () => openSettings('hypertuner') },
     { kind: 'action', title: 'System Prompts & Tool Schemas', detail: 'Inspect and edit every system prompt & JSON tool schema (/system)', keywords: 'system prompt tool schema transparency edit override /system /schemas', run: () => openSettings('system', { subtab: 'prompts' }) },
     { kind: 'action', title: 'Prefills & Message Shaping', detail: 'Experiment with system/user conditioning and assistant/reasoning prefills (/prefill)', keywords: 'prefill shaping conditioning think reasoning steering lab /prefill /inject', run: () => openSettings('system', { subtab: 'lab' }) },
     { kind: 'action', title: 'Open Overseer Quick Controls', detail: 'Toggle Overseer auto-recovery & soft-refusal judge', keywords: 'overseer judge refusal unblock recovery', run: () => toggleOverseerPopover(true) },
     { kind: 'action', title: 'Choose Theme…', detail: 'Switch between 10 dark & light workspace themes (/theme)', keywords: 'theme skin appearance dark light color /theme', run: () => window.G0DThemes?.togglePopover?.(true) },
-    { kind: 'action', title: 'Hardened Security Mode (Red Team / Bounty)', detail: 'Strict ZDR + secret scrubbing + Safe gate + Ephemeral Burn Bag', keywords: 'hardened security red team bounty opsec zdr privacy', run: () => { openSettings('privacy'); } },
+    { kind: 'action', title: 'Hardened Security Mode (Red Team / Bounty)', detail: 'Strict ZDR + secret scrubbing + Ask Shell gate + Ephemeral Burn Bag', keywords: 'hardened security red team bounty opsec zdr privacy', run: () => { openSettings('privacy'); } },
     { kind: 'action', title: 'Open Privacy & ZDR Shield', detail: 'Zero telemetry, Hardened/Lockdown, Target Scope & Burn Bag (/privacy)', keywords: 'privacy zdr zero telemetry airgap lockdown local only audit burn scope /privacy /zdr', run: () => openSettings('privacy') },
     { kind: 'action', title: 'Open Memory & Skills', detail: 'Cross-session memory and reusable /skills', keywords: 'remember memory skills slash commands /memory /skill', run: () => openSettings('memory') },
-    { kind: 'action', title: 'Open Permission Gate', detail: 'Safe guardrails, shell commands, and checks', keywords: 'permissions approval safe permissive guardrails tools', run: () => openSettings('tools') },
+    { kind: 'action', title: 'Open Permission Gate', detail: 'Ask Shell, Auto-Edit, Autonomous, shell commands, and checks', keywords: 'permissions approval ask shell auto-edit autonomous guardrails tools', run: () => openSettings('tools') },
     { kind: 'action', title: 'Keyboard Shortcuts', detail: 'View all keyboard hotkeys and slash commands (?)', keywords: 'shortcuts hotkeys keys help ?', run: () => { dismissDrawers(); if (!$('#shortcuts-dialog')?.open) $('#shortcuts-dialog')?.showModal(); } },
     { kind: 'action', title: 'Replay Quick Tour', detail: 'Walk through GODMODƎ and GODCODƎ highlights', keywords: 'tour onboarding walkthrough guide', run: () => { window.SetupUI?.openTour?.(); } },
+    { kind: 'action', title: 'Check for Updates', detail: 'Check GitHub Releases for a newer G0DM0D3 version (zero telemetry)', keywords: 'update upgrade version release latest check', run: () => { window.checkForUpdates?.({ openSettings: true }); } },
     { kind: 'action', title: 'Settings (⌘,)', detail: 'General preferences and adaptive recovery', keywords: 'preferences theme font recovery settings', run: () => openSettings('general') },
   ];
   const themeActions = window.G0DThemes ? window.G0DThemes.list().map(t => ({

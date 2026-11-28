@@ -6,7 +6,7 @@
 
   const SOUND_PACKS = Object.freeze([
     { id: 'glass', label: 'Crystal Glass', hint: 'Clean harmonic chime' },
-    { id: 'synth', label: 'Plinian Synth', hint: 'Warm polyphonic chord' },
+    { id: 'synth', label: 'Warm Synth', hint: 'Warm polyphonic chord' },
     { id: 'minimal', label: 'Studio Tap', hint: 'Soft, low-profile pulse' },
     { id: 'retro', label: 'Retro 8-bit', hint: 'Crisp chiptune arpeggio' },
     { id: 'system', label: 'macOS System', hint: 'Native macOS NSSound (falls back in browser)' },

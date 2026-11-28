@@ -80,6 +80,8 @@ test('Zero-Telemetry Structural Audit: zero analytics SDKs, zero phone-home URLs
     '127.0.0.1',
     'localhost'
   ]);
+  // Manual opt-in update check hosts, strictly scoped to src/updates.mjs (gated by privacy.localOnly, zero telemetry)
+  const UPDATES_ONLY_HOSTS = new Set(['api.github.com', 'github.com', 'godcode.gg']);
   // Banned analytics / telemetry domains & SDK identifiers
   const BANNED_TELEMETRY = /\b(?:posthog\.com|ingest\.t3\.codes|sentry\.io|axiom\.co|mixpanel\.com|amplitude\.com|segment\.io|datadoghq\.com|google-analytics\.com|plausible\.io)\b/i;
 
@@ -90,7 +92,8 @@ test('Zero-Telemetry Structural Audit: zero analytics SDKs, zero phone-home URLs
     assert.equal(BANNED_TELEMETRY.test(text), false, `Banned telemetry reference found in src/${name}`);
     for (const match of text.matchAll(/https?:\/\/([a-zA-Z0-9][a-zA-Z0-9.-]*[a-zA-Z0-9])/g)) {
       const host = match[1].toLowerCase();
-      assert.equal(ALLOWED_HOSTS.has(host), true, `Unexpected outbound host "${host}" in src/${name}`);
+      const permitted = ALLOWED_HOSTS.has(host) || (name === 'updates.mjs' && UPDATES_ONLY_HOSTS.has(host));
+      assert.equal(permitted, true, `Unexpected outbound host "${host}" in src/${name}`);
     }
   }
 

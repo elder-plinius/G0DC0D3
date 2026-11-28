@@ -2933,31 +2933,53 @@ export class AcpHarnessProvider {
           ].join('\n')
         : '';
 
-      // Pre-index workspace files on Turn 1 (bounded 28 KiB) so delegated ACP harnesses
-      // skip blind directory discovery & redundant read_file turns.
+      // Pre-index workspace files on Turn 1 (bounded 36 KiB, prioritized by engineering relevance)
+      // so delegated ACP harnesses skip blind directory discovery and immediately see the real codebase.
       let workspacePreload = '';
       if (entry.turnCount === 0 && this.delegated && workspace && Array.isArray(context.files) && context.files.length > 0) {
-        const fileList = context.files.slice(0, 120).map(f => f.path).join(', ');
+        const sortedFiles = [...context.files].sort((a, b) => {
+          const score = (p = '') => {
+            const low = p.toLowerCase();
+            if (/(?:^|\/)(?:agents\.md|claude\.md|readme\.md|incident_report\.md|package\.json|pyproject\.toml|cargo\.toml|go\.mod|tsconfig\.json)$/.test(low)) return 0;
+            if (/^(?:src|app|lib|bin|pkg|internal|cmd)\//.test(low)) return 1;
+            if (/^(?:test|tests|spec|__tests__)\//.test(low)) return 2;
+            return 3;
+          };
+          return score(a?.path) - score(b?.path) || String(a?.path || '').localeCompare(String(b?.path || ''));
+        });
+        const fileList = sortedFiles
+          .slice(0, 120)
+          .map(f => typeof f?.content === 'string' ? `${f.path} (${f.content.split('\n').length}L)` : f.path)
+          .join(', ');
         const inlineBlocks = [];
-        let budget = 28 * 1024;
-        for (const f of context.files) {
+        let budget = 36 * 1024;
+        for (const f of sortedFiles) {
           if (budget <= 512) break;
           if (typeof f?.content !== 'string' || !f.path) continue;
-          if (/(?:^|\/)(?:package-lock\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock)$/.test(f.path)) continue;
-          if (f.content.length > 10 * 1024 || f.content.length > budget) continue;
+          if (/(?:^|\/)(?:package-lock\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|poetry\.lock)$/.test(f.path)) continue;
+          if (f.content.length > 12 * 1024 || f.content.length > budget) continue;
           inlineBlocks.push(`--- ${f.path} ---\n${f.content}`);
           budget -= f.content.length;
         }
         const checkCmds = Array.isArray(task.checks) && task.checks.length
           ? task.checks.map(c => c.command).filter(Boolean).join('; ')
           : '';
+        const execProtocol = [
+          'Engineering Execution Protocol:',
+          '- Workspace files already inlined below are current — do not waste turns calling ls or read_file on unchanged inlined files.',
+          '- Contract & Edge-Case Audit first: before editing, map every public export, signature, HTTP/CLI contract, error code, immutability rule, encoding/escaping boundary, and concurrency/cleanup invariant required by the spec and existing callers.',
+          '- Batch coupled file edits cleanly; keep diffs minimal and preserve existing public interfaces and zero-dependency constraints unless told otherwise.',
+          '- Verify in one focused pass: run the workspace test command plus a concise inline check covering boundary/error paths (malformed input, edge values, special characters, concurrency/error handling) without leaving behind unrequested temporary files.',
+          '- As soon as verification passes cleanly, stop immediately with a concise summary of changes and verified results (no redundant re-runs).',
+        ].join('\n');
         workspacePreload = [
-          `Workspace files (${context.files.length}): ${fileList}`,
-          checkCmds ? `Verification command(s) G0DC0D3 will run after your turn: ${checkCmds}` : '',
+          `Workspace map (${sortedFiles.length} files): ${fileList}`,
+          checkCmds ? `Controller verification command(s): ${checkCmds}` : '',
+          execProtocol,
           inlineBlocks.length
-            ? `Preloaded file contents (skip redundant ls/read_file on these unchanged files; apply surgical edits directly, handle edge cases thoroughly, run the verification command once to confirm, and finish immediately once passing without creating unrequested extra test files or extra git status checks):\n${inlineBlocks.join('\n\n')}`
+            ? `Preloaded workspace files:\n${inlineBlocks.join('\n\n')}`
             : '',
-        ].filter(Boolean).join('\n');
+        ].filter(Boolean).join('\n\n');
       }
 
       const rawObjective = String(task.objective || '');
