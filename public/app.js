@@ -4049,7 +4049,7 @@ function conversationMessage({ role, text, time, provider, key, raw, outcome, th
   const scoreOutcomes = Array.isArray(score?.outcomes) && !score.grades?.length
     ? score.outcomes.map(o => `<div><strong>${escapeHTML(providerById(o.providerId)?.label || o.providerId)}</strong> <small>${escapeHTML(o.status || 'unknown')} · ${escapeHTML(duration(o.durationMs))}</small></div>`).join('')
     : '';
-  const scorecard = score ? `<details class="race-scorecard" data-disclosure="${escapeHTML(scoreKey)}" ${openDetails.has(scoreKey)?'open':''}><summary>${scoreTitle}</summary>${score.note ? `<p>${escapeHTML(score.note)}</p>` : `<p>Judge · ${escapeHTML(providerById(score.judgeId)?.label || score.judgeId)}</p>`}${(score.grades || []).map(g=>`<div><strong>${escapeHTML(providerById(g.providerId)?.label || g.providerId)} · ${escapeHTML(g.total)}/15${g.providerId===score.winnerId?' · selected':''}</strong><small>Fidelity ${escapeHTML(g.fidelity)} · Completeness ${escapeHTML(g.completeness)} · Clarity ${escapeHTML(g.clarity)}</small><p>${escapeHTML(g.reason)}</p></div>`).join('')}${scoreOutcomes}</details>` : '';
+  const scorecard = score ? `<details class="race-scorecard" data-disclosure="${escapeHTML(scoreKey)}" ${openDetails.has(scoreKey)?'open':''}><summary>${scoreTitle}</summary>${score.note ? `<p>${escapeHTML(score.note)}</p>` : `<p>Tastemaker Judge · ${escapeHTML(providerById(score.judgeId)?.label || score.judgeId)}</p>`}${(score.grades || []).map(g=>`<div class="scorecard-contender-row"><div class="scorecard-contender-top"><strong>${escapeHTML(providerById(g.providerId)?.label || g.providerId)} · ${escapeHTML(g.total)}/15${g.providerId===score.winnerId?' · ♛ winner':''}</strong><button type="button" class="button button-quiet race-crown-inline" data-inline-crown="${escapeHTML(g.providerId)}" data-inline-race-id="${escapeHTML(score.raceId || '')}" title="Crown this answer as your pick (+local Elo)">👑 Crown</button></div><small>Fidelity ${escapeHTML(g.fidelity)} · Completeness ${escapeHTML(g.completeness)} · Clarity ${escapeHTML(g.clarity)}</small><p>${escapeHTML(g.reason)}</p></div>`).join('')}${scoreOutcomes}</details>` : '';
   const copyBtn = text ? `<button type="button" class="copy-response" data-copy-text="${escapeHTML(text)}" title="${role === 'user' ? 'Copy message' : 'Copy response'}" aria-label="${role === 'user' ? 'Copy message' : 'Copy response'}"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="6" y="6" width="10" height="11" rx="2"/><path d="M12 6V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/></svg></button>` : '';
   const regenBtn = role === 'assistant' && Boolean(raw?.__isLatestRegeneratable)
     ? `<button type="button" class="copy-response regenerate-response" data-regenerate-last title="Regenerate response" aria-label="Regenerate response"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 10a5.5 5.5 0 1 1-1.6-3.9M15.5 4.5v3h-3"/></svg></button>`
@@ -7578,6 +7578,26 @@ document.addEventListener('click', (event) => {
     }).then(() => refresh()).catch(err => {
       toast(err.message || 'Could not continue response.');
       continueBtn.disabled = false;
+    });
+    return;
+  }
+  const inlineCrown = event.target.closest('[data-inline-crown]');
+  if (inlineCrown && selectedData?.task) {
+    const winnerId = inlineCrown.dataset.inlineCrown;
+    const raceId = inlineCrown.dataset.inlineRaceId || null;
+    inlineCrown.disabled = true;
+    api(`/api/tasks/${encodeURIComponent(selectedData.task.id)}/race-crown`, {
+      method: 'POST',
+      body: JSON.stringify({ winnerId, raceId })
+    }).then(res => {
+      const lbl = providerById(winnerId)?.label || winnerId;
+      const d = res.delta >= 0 ? `+${res.delta}` : String(res.delta);
+      toast(`👑 Crowned ${lbl} (${d} Elo → ${res.eloAfter} · ${res.tier?.label || 'Ranked'})`);
+      inlineCrown.textContent = `👑 Crowned (${d})`;
+      window.G0DConclave?.loadLeaderboard?.();
+    }).catch(err => {
+      toast(err.message || 'Could not crown contender.');
+      inlineCrown.disabled = false;
     });
     return;
   }

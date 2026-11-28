@@ -280,6 +280,7 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
       if (rosterDelMatch) return send(res, 200, await runtime.deleteConclaveAgent(decodeURIComponent(rosterDelMatch[1])));
       if(req.method==='GET' && url.pathname==='/api/conclave/formations')return send(res,200,{formations:runtime.getConclaveFormations()});
       if(req.method==='POST' && url.pathname==='/api/conclave/formations')return send(res,201,runtime.saveConclaveFormation(await readBody(req)));
+      if(req.method==='GET' && url.pathname==='/api/conclave/leaderboard')return send(res,200,runtime.getConclaveLeaderboard());
       const formDelMatch = req.method === 'DELETE' && url.pathname.match(/^\/api\/conclave\/formations\/([^/]+)$/);
       if (formDelMatch) return send(res, 200, runtime.deleteConclaveFormation(decodeURIComponent(formDelMatch[1])));
       if(req.method==='POST' && url.pathname==='/api/conclave/run') {
@@ -993,7 +994,7 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
           return send(res, 200, runtime.broker.browser.getStatus(taskId));
         }
       }
-      const match=url.pathname.match(/^\/api\/tasks\/([^/]+)(?:\/(run|pause|resume|cancel|accept|report-refusal|overseer-consult|save-skill|visualize|visualizer|visualizer-telemetry|policy|providers|answer-race|message|export|patch|execution|checks|persona|effort|prompt|apply-preview|apply-source|inspect-apply|undo-apply|source-backup|hunk|generation|rewind|plan-mode|compact|checkpoints|permissions|approval|fork|transcript|commit|title))?$/);
+      const match=url.pathname.match(/^\/api\/tasks\/([^/]+)(?:\/(run|pause|resume|cancel|accept|report-refusal|overseer-consult|save-skill|visualize|visualizer|visualizer-telemetry|policy|providers|answer-race|race-crown|message|export|patch|execution|checks|persona|effort|prompt|apply-preview|apply-source|inspect-apply|undo-apply|source-backup|hunk|generation|rewind|plan-mode|compact|checkpoints|permissions|approval|fork|transcript|commit|title))?$/);
       if(match) {
         const [,id,action]=match;
         if(mutation&&runtime.getTask(id).crewMember)throw Object.assign(new Error('Control crew workers through their parent conversation.'),{code:'CREW_MEMBER'});
@@ -1206,6 +1207,11 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
           if (!Object.hasOwn(body,'answerRace')) throw new Error('Specify the comparison or null to turn it off.');
           if (body.answerRace) await catalog.list();
           return send(res,200,{task:publicTask(runtime.setAnswerRace(id,body.answerRace),runtime)});
+        }
+        if(req.method==='POST'&&action==='race-crown') {
+          const body=await readBody(req);
+          const result=runtime.crownRaceWinner(id,{winnerId:body.winnerId,raceId:body.raceId||null});
+          return send(res,200,{...result,task:publicTask(runtime.getTask(id),runtime)});
         }
         if(req.method==='PATCH'&&action==='providers') {
           const body=await readBody(req),task=runtime.getTask(id);

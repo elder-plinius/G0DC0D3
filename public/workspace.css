@@ -9829,3 +9829,122 @@ body.visualizer-open.sidebar-collapsed .visualizer-dock { grid-column: 2; }
   border-color: #c5bcd8;
   color: #181520;
 }
+
+/* ── v0.3.1 Unified Gamified Conclave ─────────────────────────────────── */
+.conclave-synergy-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+.conclave-synergy-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: .7rem;
+  background: color-mix(in srgb, var(--panel-soft) 80%, transparent);
+  border: 1px solid var(--line);
+  color: var(--text-secondary);
+}
+.elo-tier-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: .68rem;
+  font-weight: 700;
+  letter-spacing: .02em;
+  border: 1px solid var(--line);
+}
+.elo-tier-badge.tier-plinian { background: rgba(251, 191, 36, 0.2); border-color: rgba(251, 191, 36, 0.55); color: #fde68a; }
+.elo-tier-badge.tier-solar   { background: rgba(249, 115, 22, 0.2); border-color: rgba(249, 115, 22, 0.5); color: #fed7aa; }
+.elo-tier-badge.tier-aether  { background: rgba(167, 139, 250, 0.2); border-color: rgba(167, 139, 250, 0.5); color: #ddd6fe; }
+.elo-tier-badge.tier-obsidian { background: rgba(96, 165, 250, 0.16); border-color: rgba(96, 165, 250, 0.42); color: #bfdbfe; }
+.elo-tier-badge.tier-iron    { background: rgba(148, 163, 184, 0.14); border-color: rgba(148, 163, 184, 0.34); color: #cbd5e1; }
+:root[data-theme="light"] .elo-tier-badge.tier-plinian { background: #fef3c7; color: #92400e; }
+:root[data-theme="light"] .elo-tier-badge.tier-solar   { background: #ffedd5; color: #9a3412; }
+:root[data-theme="light"] .elo-tier-badge.tier-aether  { background: #ede9fe; color: #5b21b6; }
+:root[data-theme="light"] .elo-tier-badge.tier-obsidian { background: #dbeafe; color: #1e40af; }
+:root[data-theme="light"] .elo-tier-badge.tier-iron    { background: #f1f5f9; color: #475569; }
+.conclave-race-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.conclave-ranks-view {
+  padding: 14px;
+  overflow-y: auto;
+}
+.conclave-ranks-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.conclave-ranks-head h3 { margin: 0 0 4px; font-size: 1rem; }
+.conclave-ranks-head p { margin: 0; font-size: .8rem; color: var(--text-secondary); }
+.conclave-ranks-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.conclave-ranks-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.conclave-rank-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel-soft) 72%, transparent);
+}
+.conclave-rank-pos {
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: .82rem;
+  min-width: 28px;
+  color: var(--text-secondary);
+}
+.conclave-rank-id {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.conclave-rank-id strong { font-size: .86rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conclave-rank-id small { font-size: .74rem; color: var(--text-secondary); }
+.conclave-rank-badges { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.conclave-rank-elo { font-family: var(--mono); font-size: .88rem; min-width: 40px; text-align: right; }
+.conclave-streak-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: .68rem;
+  font-weight: 600;
+  background: rgba(249, 115, 22, 0.18);
+  border: 1px solid rgba(249, 115, 22, 0.4);
+  color: #fdba74;
+}
+:root[data-theme="light"] .conclave-streak-pill { background: #ffedd5; color: #9a3412; }
+.scorecard-contender-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.race-crown-inline {
+  padding: 2px 8px;
+  font-size: .72rem;
+  min-height: 24px;
+}

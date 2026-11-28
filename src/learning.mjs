@@ -248,6 +248,123 @@ export function applyModelPreference(previous, { providerId, signal } = {}) {
   return next;
 }
 
+export function eloRankTier(elo = 1500) {
+  const v = Number(elo) || 1500;
+  if (v >= 1660) return { id: 'plinian', label: 'Plinian', sigil: '✦' };
+  if (v >= 1580) return { id: 'solar', label: 'Solar', sigil: '☀' };
+  if (v >= 1520) return { id: 'aether', label: 'Aether', sigil: '◈' };
+  if (v >= 1450) return { id: 'obsidian', label: 'Obsidian', sigil: '◆' };
+  return { id: 'iron', label: 'Iron', sigil: '◇' };
+}
+
+export function buildConclaveLeaderboard(learning, providers = null) {
+  const domainElo = learning?.domainElo && typeof learning.domainElo === 'object' ? learning.domainElo : {};
+  const byModel = new Map();
+  const domainTop = {};
+  let totalMatches = 0;
+  let totalRefusals = 0;
+
+  for (const [domain, bucket] of Object.entries(domainElo)) {
+    if (!bucket || typeof bucket !== 'object') continue;
+    let bestInDomain = null;
+    for (const [providerId, row] of Object.entries(bucket)) {
+      if (!row || typeof row !== 'object') continue;
+      const elo = Number.isFinite(row.elo) ? Math.round(row.elo) : 1500;
+      const wins = Number(row.wins || 0);
+      const losses = Number(row.losses || 0);
+      const refusals = Number(row.refusals || 0);
+      const samples = Number(row.samples || 0);
+      const streak = Number(row.streak || 0);
+      const bestStreak = Math.max(streak, Number(row.bestStreak || 0));
+      totalMatches += samples;
+      totalRefusals += refusals;
+      if (!bestInDomain || elo > bestInDomain.elo) {
+        const prov = providers?.get?.(providerId);
+        bestInDomain = {
+          providerId,
+          label: prov?.label || prov?.model || providerId,
+          elo,
+          tier: eloRankTier(elo),
+          wins,
+          losses,
+          streak,
+        };
+      }
+      const prev = byModel.get(providerId);
+      if (!prev) {
+        const prov = providers?.get?.(providerId);
+        byModel.set(providerId, {
+          providerId,
+          label: prov?.label || prov?.model || providerId,
+          eloSum: elo * Math.max(1, samples),
+          weight: Math.max(1, samples),
+          peakElo: elo,
+          wins,
+          losses,
+          refusals,
+          samples,
+          streak,
+          bestStreak,
+          domains: { [domain]: elo },
+          updatedAt: row.updatedAt || null,
+        });
+      } else {
+        const w = Math.max(1, samples);
+        prev.eloSum += elo * w;
+        prev.weight += w;
+        prev.peakElo = Math.max(prev.peakElo, elo);
+        prev.wins += wins;
+        prev.losses += losses;
+        prev.refusals += refusals;
+        prev.samples += samples;
+        prev.streak = Math.max(prev.streak, streak);
+        prev.bestStreak = Math.max(prev.bestStreak, bestStreak);
+        prev.domains[domain] = elo;
+        if (String(row.updatedAt || '') > String(prev.updatedAt || '')) prev.updatedAt = row.updatedAt;
+      }
+    }
+    if (bestInDomain) domainTop[domain] = bestInDomain;
+  }
+
+  const rankings = [...byModel.values()]
+    .map(m => {
+      const elo = Math.round(m.eloSum / Math.max(1, m.weight));
+      const gritPct = m.samples > 0 ? Math.max(0, Math.min(100, Math.round((1 - m.refusals / m.samples) * 100))) : 100;
+      const winRate = (m.wins + m.losses) > 0 ? Math.round((m.wins / (m.wins + m.losses)) * 100) : 0;
+      return {
+        providerId: m.providerId,
+        label: m.label,
+        elo,
+        peakElo: m.peakElo,
+        tier: eloRankTier(elo),
+        wins: m.wins,
+        losses: m.losses,
+        refusals: m.refusals,
+        samples: m.samples,
+        winRate,
+        gritPct,
+        streak: m.streak,
+        bestStreak: m.bestStreak,
+        domains: m.domains,
+        updatedAt: m.updatedAt,
+      };
+    })
+    .sort((a, b) => b.elo - a.elo || b.wins - a.wins || a.providerId.localeCompare(b.providerId))
+    .slice(0, 32);
+
+  const topStreak = rankings.reduce((best, r) => (r.streak > (best?.streak || 0) ? r : best), null);
+  return {
+    rankings,
+    domainTop,
+    totals: {
+      models: rankings.length,
+      matches: totalMatches,
+      refusals: totalRefusals,
+      topStreak: topStreak && topStreak.streak >= 2 ? { providerId: topStreak.providerId, label: topStreak.label, streak: topStreak.streak } : null,
+    },
+  };
+}
+
 export function providerDomainStats(learning, domain, providerId) {
   const dom = String(domain || '').trim();
   const id = String(providerId || '').trim();
@@ -260,6 +377,9 @@ export function providerDomainStats(learning, domain, providerId) {
     losses: row.losses || 0,
     refusals: row.refusals || 0,
     samples: row.samples || 0,
+    streak: row.streak || 0,
+    bestStreak: row.bestStreak || 0,
+    tier: eloRankTier(Number.isFinite(row.elo) ? row.elo : 1500),
     updatedAt: row.updatedAt || null
   };
 }
@@ -290,8 +410,8 @@ export function applyDomainOutcome(previous, { domain, providerId, outcome, oppo
   const ensure = key => {
     const cur = bucket[key];
     return cur && typeof cur === 'object'
-      ? { elo: Number.isFinite(cur.elo) ? cur.elo : 1500, wins: cur.wins || 0, losses: cur.losses || 0, refusals: cur.refusals || 0, samples: cur.samples || 0, updatedAt: cur.updatedAt || now }
-      : { elo: 1500, wins: 0, losses: 0, refusals: 0, samples: 0, updatedAt: now };
+      ? { elo: Number.isFinite(cur.elo) ? cur.elo : 1500, wins: cur.wins || 0, losses: cur.losses || 0, refusals: cur.refusals || 0, samples: cur.samples || 0, streak: cur.streak || 0, bestStreak: cur.bestStreak || 0, updatedAt: cur.updatedAt || now }
+      : { elo: 1500, wins: 0, losses: 0, refusals: 0, samples: 0, streak: 0, bestStreak: 0, updatedAt: now };
   };
   const clampElo = v => Math.max(1150, Math.min(1950, Math.round(v)));
   const a = ensure(id);
@@ -303,30 +423,30 @@ export function applyDomainOutcome(previous, { domain, providerId, outcome, oppo
     const k = Math.min(36, Math.max(18, 22 + Math.min(10, Math.abs(Number(margin) || 1) * 2)));
     const delta = k * (1 - expectedA);
     a.elo = clampElo(a.elo + delta);
-    a.wins += 1; a.samples += 1; a.updatedAt = now;
+    a.wins += 1; a.samples += 1; a.streak = (a.streak || 0) + 1; a.bestStreak = Math.max(a.bestStreak || 0, a.streak); a.updatedAt = now;
     b.elo = clampElo(b.elo - delta);
-    b.losses += 1; b.samples += 1; b.updatedAt = now;
+    b.losses += 1; b.samples += 1; b.streak = 0; b.updatedAt = now;
     bucket[id] = a;
     bucket[oppId] = b;
   } else if (outcome === 'win') {
     a.elo = clampElo(a.elo + 10);
-    a.wins += 1; a.samples += 1; a.updatedAt = now;
+    a.wins += 1; a.samples += 1; a.streak = (a.streak || 0) + 1; a.bestStreak = Math.max(a.bestStreak || 0, a.streak); a.updatedAt = now;
     bucket[id] = a;
   } else if (outcome === 'loss') {
     a.elo = clampElo(a.elo - 10);
-    a.losses += 1; a.samples += 1; a.updatedAt = now;
+    a.losses += 1; a.samples += 1; a.streak = 0; a.updatedAt = now;
     bucket[id] = a;
   } else if (outcome === 'refusal') {
     a.elo = clampElo(a.elo - 20);
-    a.refusals += 1; a.losses += 1; a.samples += 1; a.updatedAt = now;
+    a.refusals += 1; a.losses += 1; a.samples += 1; a.streak = 0; a.updatedAt = now;
     bucket[id] = a;
   } else if (outcome === 'prefer') {
     a.elo = clampElo(a.elo + 22);
-    a.wins += 1; a.samples += 1; a.updatedAt = now;
+    a.wins += 1; a.samples += 1; a.streak = (a.streak || 0) + 1; a.bestStreak = Math.max(a.bestStreak || 0, a.streak); a.updatedAt = now;
     bucket[id] = a;
   } else if (outcome === 'demote') {
     a.elo = clampElo(a.elo - 26);
-    a.losses += 1; a.samples += 1; a.updatedAt = now;
+    a.losses += 1; a.samples += 1; a.streak = 0; a.updatedAt = now;
     bucket[id] = a;
   }
 

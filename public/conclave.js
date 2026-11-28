@@ -17,9 +17,10 @@
   };
 
   const CONCLAVE_MODES = [
-    { id: 'parallel', label: 'Parallel Squad', hint: 'Specialists tackle distinct angles concurrently, then the lead synthesizes one cohesive deliverable.' },
-    { id: 'critique', label: 'Draft & Critique', hint: 'Lead specialist builds or drafts while reviewers stress-test edge cases, logic, and polish.' },
-    { id: 'debate',   label: 'Council Debate',  hint: 'Specialists argue competing options and tradeoffs before converging on a verified recommendation.' },
+    { id: 'parallel', label: '◈ Parallel Squad', hint: 'Specialists tackle distinct angles concurrently, then the lead synthesizes one cohesive deliverable.' },
+    { id: 'critique', label: '⚡ Draft & Critique', hint: 'Lead specialist builds or drafts while reviewers stress-test edge cases, logic, and polish.' },
+    { id: 'debate',   label: '⚖ Council Debate',  hint: 'Specialists argue competing options and tradeoffs before converging on a verified recommendation.' },
+    { id: 'race',     label: '⚔ Blind Race',      hint: 'Race 2–4 distinct model families blind head-to-head; our tastemaker Judge grades and awards local Elo.' },
   ];
 
   const LONG_FORM_TEMPLATES = [
@@ -89,7 +90,41 @@
   let formationFormOpen = false;
   let replayPlaying = false;
   let replayProgress = 100; // 0..100
+  let blindMode = false;
+  let blindRevealedRaceId = null;
+  let leaderboardData = null;
+  let crownedByRace = new Map();
   const SIGILS = ['✦', '⚡', '◈', '⛨', '⌘', 'λ', 'Ω', 'Δ'];
+
+  function rankTierForElo(elo = 1500) {
+    const v = Number(elo) || 1500;
+    if (v >= 1660) return { id: 'plinian', label: 'Plinian', sigil: '✦' };
+    if (v >= 1580) return { id: 'solar', label: 'Solar', sigil: '☀' };
+    if (v >= 1520) return { id: 'aether', label: 'Aether', sigil: '◈' };
+    if (v >= 1450) return { id: 'obsidian', label: 'Obsidian', sigil: '◆' };
+    return { id: 'iron', label: 'Iron', sigil: '◇' };
+  }
+
+  function playTactileCue(kind = 'completed') {
+    try {
+      const cfg = window.G0DAlerts?.getSettings?.();
+      if (cfg && cfg.soundsEnabled && !cfg.muted) {
+        window.G0DAlerts.playSound(kind, { force: false });
+      }
+    } catch {}
+  }
+
+  function computeSquadSynergy(slugs) {
+    const allAgents = rosterData?.agents?.length ? rosterData.agents : DEFAULT_STARTER_AGENTS;
+    const picked = [...slugs].map(s => allAgents.find(a => a.slug === s)).filter(Boolean);
+    if (!picked.length) return { ovr: 0, tier: rankTierForElo(1500), families: 0, specs: [], hint: 'Pick 1–4 specialists' };
+    const specs = [...new Set(picked.map(a => String(a.primarySpecialty || 'general').replace(/_/g, ' ')))];
+    const engines = new Set(picked.map(a => a.engineLabel || a.resolvedProviderId || a.slug));
+    const avgOvr = Math.round(picked.reduce((s, a) => s + Number(a.stats?.overall || 86), 0) / picked.length);
+    const estElo = 1380 + Math.round((avgOvr - 70) * 10);
+    const diversityBonus = engines.size >= 3 ? '+3 Family Synergy' : engines.size === 2 ? '+2 Dual-Family' : 'Single Engine';
+    return { ovr: avgOvr, tier: rankTierForElo(estElo), families: engines.size, specs, diversityBonus };
+  }
 
   const esc = (s) => String(s ?? '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -172,6 +207,7 @@
             <button type="button" class="conclave-lens" role="tab" aria-selected="false" data-conclave-lens="cards">▤ Cards</button>
             <button type="button" class="conclave-lens" role="tab" aria-selected="false" data-conclave-lens="timeline">◫ Timeline</button>
             <button type="button" class="conclave-lens" role="tab" aria-selected="false" data-conclave-lens="roster">⛨ Roster</button>
+            <button type="button" class="conclave-lens" role="tab" aria-selected="false" data-conclave-lens="ranks">🏆 Ranks</button>
           </div>
           <button type="button" class="icon-button conclave-expand-btn" id="conclave-expand" title="Expand or restore Conclave stage" aria-label="Expand Conclave stage" aria-pressed="false">⤢</button>
           <button type="button" class="icon-button" id="conclave-close" title="Close Conclave" aria-label="Close Conclave">×</button>
@@ -223,6 +259,7 @@
             <div class="clp-row">
               <div class="clp-section-label"><span>Team</span><span class="clp-team-meta" id="conclave-team-meta">Auto-matched</span></div>
               <div class="clp-team-pills" id="conclave-team-pills" role="group" aria-label="Select specialists"></div>
+              <div class="conclave-synergy-bar" id="conclave-synergy-bar" aria-live="polite"></div>
             </div>
             <div class="clp-row">
               <div class="clp-section-label"><span>How they work</span></div>
@@ -259,6 +296,7 @@
           <div class="conclave-timeline-empty hidden" id="conclave-timeline-empty">No worker runs recorded yet. Launch a squad or click <strong>Preview Swarm</strong> above.</div>
         </section>
         <section class="conclave-view conclave-roster-view hidden" id="conclave-view-roster" role="tabpanel"></section>
+        <section class="conclave-view conclave-ranks-view hidden" id="conclave-view-ranks" role="tabpanel"></section>
       </div>
       <section class="conclave-inspector hidden" id="conclave-inspector" aria-label="Worker inspector">
         <header class="conclave-inspector-head">
@@ -288,6 +326,25 @@
       if (e.target.closest('#conclave-demo-btn')) { forceShowLaunchpad = false; toggleDemo(); return; }
       if (e.target.closest('#conclave-new-mission-btn')) { forceShowLaunchpad = !forceShowLaunchpad; setLens('stage'); renderAll(); if (forceShowLaunchpad) document.getElementById('conclave-mission-input')?.focus(); return; }
       if (e.target.closest('#conclave-replay-toggle')) { toggleReplay(); return; }
+      if (e.target.closest('[data-conclave-blind-toggle]')) {
+        blindMode = !blindMode;
+        if (!blindMode && data?.arena?.raceId) blindRevealedRaceId = data.arena.raceId;
+        renderCards();
+        return;
+      }
+      const crownBtn = e.target.closest('[data-conclave-crown]');
+      if (crownBtn) {
+        crownContender(crownBtn.dataset.conclaveCrown, crownBtn.dataset.conclaveRaceId || null);
+        return;
+      }
+      if (e.target.closest('[data-conclave-copy-match]')) {
+        copyMatchCard();
+        return;
+      }
+      if (e.target.closest('#conclave-ranks-refresh')) {
+        loadLeaderboard();
+        return;
+      }
       const preset = e.target.closest('[data-conclave-preset]');
       if (preset) { triggerPreset(preset.dataset.conclavePreset); return; }
       const tplBtn = e.target.closest('[data-conclave-template]');
@@ -728,7 +785,7 @@
   }
 
   function setLens(lens) {
-    activeLens = ['stage', 'cards', 'timeline', 'roster'].includes(lens) ? lens : 'stage';
+    activeLens = ['stage', 'cards', 'timeline', 'roster', 'ranks'].includes(lens) ? lens : 'stage';
     const dock = dockEl();
     if (!dock) return;
     dock.querySelectorAll('[data-conclave-lens]').forEach(btn => {
@@ -740,10 +797,12 @@
     dock.querySelector('#conclave-view-cards')?.classList.toggle('hidden', activeLens !== 'cards');
     dock.querySelector('#conclave-view-timeline')?.classList.toggle('hidden', activeLens !== 'timeline');
     dock.querySelector('#conclave-view-roster')?.classList.toggle('hidden', activeLens !== 'roster');
+    dock.querySelector('#conclave-view-ranks')?.classList.toggle('hidden', activeLens !== 'ranks');
     if (activeLens === 'stage') { drawStage(); startLoop(); }
     if (activeLens === 'cards') renderCards();
     if (activeLens === 'timeline') drawTimeline();
     if (activeLens === 'roster') loadRoster();
+    if (activeLens === 'ranks') loadLeaderboard();
     updateReplayBar();
   }
 
@@ -1096,6 +1155,31 @@
     stopDemo();
     const slugs = [...launchTeam];
     const chosenMode = launchMode;
+    playTactileCue('conclave');
+    if (chosenMode === 'race') {
+      try {
+        await fetch('/api/router', {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json', 'x-g0d-request': '1' },
+          body: JSON.stringify({ mode: 'auto_arena' }),
+        });
+      } catch {}
+      const composer = document.getElementById('composer-input');
+      if (composer) {
+        if (isExpanded) toggleExpand();
+        forceShowLaunchpad = false;
+        composer.value = mission;
+        composer.dispatchEvent(new Event('input', { bubbles: true }));
+        if (autoSend) {
+          const form = document.getElementById('composer-form');
+          if (form?.requestSubmit) form.requestSubmit();
+        }
+        if (input) input.value = '';
+        launchMission = '';
+        if (typeof window.toast === 'function') window.toast('⚔ Blind Conclave Race launched!');
+        return;
+      }
+    }
     if (autoSend && typeof window.launchNativeConclave === 'function') {
       const btn = document.getElementById('conclave-launch-btn');
       if (btn) { btn.disabled = true; btn.textContent = '✦ Convening council…'; }
@@ -1165,6 +1249,17 @@
     if (metaEl) {
       const tag = launchReasonLabel || (launchManualTeam ? 'Custom' : 'Auto-matched');
       metaEl.textContent = `${launchTeam.size} selected · ${tag}`;
+    }
+    const synergyEl = document.getElementById('conclave-synergy-bar');
+    if (synergyEl) {
+      if (launchMode === 'race') {
+        const raceHtml = `<span class="elo-tier-badge tier-aether">⚔ Blind Race</span><span class="conclave-synergy-pill">Auto-selects 2–4 distinct model families</span><span class="conclave-synergy-pill">Tastemaker Judge + Local Elo</span>`;
+        if (synergyEl.dataset.lastHtml !== raceHtml) { synergyEl.dataset.lastHtml = raceHtml; synergyEl.innerHTML = raceHtml; }
+      } else {
+        const syn = computeSquadSynergy(launchTeam);
+        const synHtml = `<span class="elo-tier-badge tier-${esc(syn.tier.id)}">${esc(syn.tier.sigil)} ${esc(syn.tier.label)} · OVR ${esc(syn.ovr)}</span><span class="conclave-synergy-pill">${esc(syn.diversityBonus)}</span>${syn.specs.slice(0, 3).map(s => `<span class="conclave-synergy-pill">✓ ${esc(s)}</span>`).join('')}`;
+        if (synergyEl.dataset.lastHtml !== synHtml) { synergyEl.dataset.lastHtml = synHtml; synergyEl.innerHTML = synHtml; }
+      }
     }
     const modeObj = CONCLAVE_MODES.find(m => m.id === launchMode) || CONCLAVE_MODES[0];
     if (modeHintEl) modeHintEl.textContent = modeObj.hint;
@@ -1373,22 +1468,37 @@
     };
     if (data?.mode === 'arena' && data?.arena) {
       const arena = data.arena;
-      commitCards(`<div class="conclave-cards-grid">${(arena.contenders || []).map(c => `
-        <article class="conclave-card ${c.isWinner ? 'is-winner' : ''}">
+      const raceId = arena.raceId || '';
+      const hideNames = blindMode && blindRevealedRaceId !== raceId;
+      const crownedId = crownedByRace.get(raceId) || arena.crownedWinnerId || null;
+      const effectiveWinner = crownedId || arena.winnerId || null;
+      const hasFinished = (arena.contenders || []).some(c => c.status === 'completed' || c.grade);
+      const toolbarHtml = `<div class="conclave-race-toolbar">
+        <button type="button" class="button button-quiet" data-conclave-blind-toggle>${hideNames ? '👁 Reveal Models' : '🙈 Blind Mode'}</button>
+        ${hasFinished ? '<button type="button" class="button button-quiet conclave-match-card-btn" data-conclave-copy-match>📋 Copy Match Card</button>' : ''}
+      </div>`;
+      commitCards(`${toolbarHtml}<div class="conclave-cards-grid">${(arena.contenders || []).map(c => {
+        const isWinner = effectiveWinner ? c.providerId === effectiveWinner : Boolean(c.isWinner);
+        const isCrowned = crownedId && c.providerId === crownedId;
+        const displayName = hideNames ? `Contender ${c.slot}` : c.label;
+        const canCrown = Boolean(currentTaskId && c.providerId && (c.status === 'completed' || c.grade));
+        return `<article class="conclave-card ${isWinner ? 'is-winner' : ''}">
           <header class="conclave-card-head">
             <span class="conclave-role-chip">Contender ${esc(c.slot)}</span>
-            <span class="conclave-status-pill tone-${c.isWinner ? 'gold' : c.status === 'completed' ? 'sage' : 'violet'}">${esc(c.isWinner ? '♛ Winner' : c.status)}</span>
+            <span class="conclave-status-pill tone-${isWinner ? 'gold' : c.status === 'completed' ? 'sage' : 'violet'}">${esc(isCrowned ? '👑 Crowned' : isWinner ? '♛ Winner' : c.status)}</span>
           </header>
-          <strong class="conclave-card-model">${esc(c.label)}</strong>
+          <strong class="conclave-card-model">${esc(displayName)}</strong>
           <p class="conclave-card-meta">${fmtMs(c.durationMs)}${c.grade ? ` · Score ${c.grade.total}/15 (F${c.grade.fidelity} C${c.grade.completeness} L${c.grade.clarity})` : ''}</p>
           ${c.grade?.reason ? `<p class="conclave-card-tail">${esc(c.grade.reason)}</p>` : ''}
-        </article>`).join('')}${arena.judge ? `
+          ${canCrown ? `<footer class="conclave-card-foot"><button type="button" class="button ${isCrowned ? 'button-primary' : 'button-secondary'} race-crown-btn" data-conclave-crown="${esc(c.providerId)}" data-conclave-race-id="${esc(raceId)}">${isCrowned ? '👑 Crowned (+Elo)' : '👑 Crown Winner'}</button></footer>` : ''}
+        </article>`;
+      }).join('')}${arena.judge ? `
         <article class="conclave-card">
           <header class="conclave-card-head">
-            <span class="conclave-role-chip">Blind Judge</span>
+            <span class="conclave-role-chip">Tastemaker Judge</span>
             <span class="conclave-status-pill tone-amber">${esc(arena.judge.status)}</span>
           </header>
-          <strong class="conclave-card-model">${esc(arena.judge.label)}</strong>
+          <strong class="conclave-card-model">${esc(hideNames ? 'Blind Judge' : arena.judge.label)}</strong>
           <p class="conclave-card-tail">${esc(arena.note || 'Evaluates drafts blindly for fidelity, completeness, and clarity.')}</p>
         </article>` : ''}</div>`);
       return;
@@ -1725,6 +1835,29 @@
       }
       ctx.restore();
     });
+
+    // Draw Peer Clash Arcs during Round 2+ Critique / Debate sessions
+    const cs = viewData?.conclaveSession;
+    if (cs && (cs.mode === 'critique' || cs.mode === 'debate') && (Number(cs.round || 1) >= 2 || (cs.blackboard || []).some(b => Number(b.round || 1) >= 2)) && workers.length >= 2) {
+      ctx.save();
+      for (let i = 0; i < workers.length; i++) {
+        const a = coords.get(workers[i].workerId);
+        const b = coords.get(workers[(i + 1) % workers.length].workerId);
+        if (!a || !b) continue;
+        const midX = (a.x + b.x) / 2 + (cx - (a.x + b.x) / 2) * 0.25;
+        const midY = (a.y + b.y) / 2 + (cy - (a.y + b.y) / 2) * 0.25;
+        ctx.strokeStyle = cs.mode === 'debate' ? pal.amber : pal.gold;
+        ctx.lineWidth = 1.6;
+        ctx.globalAlpha = 0.52 + 0.25 * Math.sin(animPhase * 3.5 + i);
+        ctx.setLineDash([4, 4]);
+        ctx.lineDashOffset = -animPhase * 22;
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.quadraticCurveTo(midX, midY, b.x, b.y);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
 
     // Draw Central Orchestrator Nucleus
     const coreR = 40;
@@ -2970,6 +3103,107 @@
     });
   }
 
+  async function crownContender(providerId, raceId = null) {
+    if (!currentTaskId || !providerId) return;
+    try {
+      const res = await fetch(`/api/tasks/${encodeURIComponent(currentTaskId)}/race-crown`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-g0d-request': '1' },
+        body: JSON.stringify({ winnerId: providerId, raceId }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Could not crown contender.');
+      if (json.raceId) crownedByRace.set(json.raceId, providerId);
+      blindRevealedRaceId = json.raceId || blindRevealedRaceId;
+      playTactileCue('conclave');
+      const deltaTxt = json.delta >= 0 ? `+${json.delta}` : String(json.delta);
+      const label = (data?.arena?.contenders || []).find(c => c.providerId === providerId)?.label || providerId;
+      if (typeof window.toast === 'function') {
+        window.toast(`👑 Crowned ${label} (${deltaTxt} Elo → ${json.eloAfter} · ${json.tier?.label || 'Ranked'})`);
+      }
+      renderCards();
+      loadLeaderboard();
+    } catch (err) {
+      if (typeof window.toast === 'function') window.toast(err.message || 'Crown failed.');
+    }
+  }
+
+  function copyMatchCard() {
+    const arena = data?.arena;
+    if (!arena?.contenders?.length) return;
+    const lines = [
+      `## ✦ G0DM0D3 Conclave Match Card`,
+      `**Judge:** ${arena.judge?.label || 'Blind Judge'}`,
+      '',
+      '| Slot | Model | Score | Fidelity | Complete | Clarity | Latency |',
+      '|---|---|---:|---:|---:|---:|---:|',
+      ...arena.contenders.map(c => {
+        const crown = (crownedByRace.get(arena.raceId || '') || arena.winnerId) === c.providerId ? ' 👑' : '';
+        const g = c.grade;
+        return `| ${c.slot} | ${c.label}${crown} | ${g ? `${g.total}/15` : c.status} | ${g ? g.fidelity : '—'} | ${g ? g.completeness : '—'} | ${g ? g.clarity : '—'} | ${fmtMs(c.durationMs)} |`;
+      }),
+    ];
+    const md = lines.join('\n');
+    navigator.clipboard?.writeText(md).then(
+      () => { if (typeof window.toast === 'function') window.toast('📋 Copied Conclave Match Card to clipboard.'); },
+      () => { if (typeof window.toast === 'function') window.toast('Clipboard unavailable.'); }
+    );
+  }
+
+  async function loadLeaderboard() {
+    const el = document.getElementById('conclave-view-ranks');
+    if (el && !leaderboardData) {
+      el.innerHTML = '<div class="conclave-empty-cards"><p>Loading local Elo leaderboard…</p></div>';
+    }
+    try {
+      const res = await fetch('/api/conclave/leaderboard', { headers: { 'x-g0d-request': '1' } });
+      if (!res.ok) throw new Error('Could not load leaderboard.');
+      leaderboardData = await res.json();
+      renderRanksView();
+    } catch (err) {
+      if (el) el.innerHTML = `<div class="conclave-empty-cards"><p>${esc(err.message || 'Leaderboard unavailable.')}</p></div>`;
+    }
+  }
+
+  function renderRanksView() {
+    const el = document.getElementById('conclave-view-ranks');
+    if (!el) return;
+    const lb = leaderboardData || { rankings: [], domainTop: {}, totals: { models: 0, matches: 0, refusals: 0, topStreak: null } };
+    const rows = lb.rankings || [];
+    const streakBanner = lb.totals?.topStreak
+      ? `<span class="conclave-streak-pill">🔥 ${esc(lb.totals.topStreak.label)} · ${esc(lb.totals.topStreak.streak)}W streak</span>`
+      : '';
+    const html = `
+      <div class="conclave-ranks-head">
+        <div>
+          <h3>🏆 Local Conclave Ranks</h3>
+          <p>Real Elo, Grit (non-refusal), and streaks computed purely from your local runs — zero telemetry.</p>
+        </div>
+        <div class="conclave-ranks-actions">
+          ${streakBanner}
+          <button type="button" class="button button-quiet" id="conclave-ranks-refresh">Refresh</button>
+        </div>
+      </div>
+      ${rows.length ? `<ol class="conclave-ranks-list">${rows.map((r, i) => `
+        <li class="conclave-rank-row">
+          <span class="conclave-rank-pos">#${i + 1}</span>
+          <div class="conclave-rank-id">
+            <strong>${esc(r.label)}</strong>
+            <small>${esc(`${r.wins}W – ${r.losses}L · ${r.winRate}% win · Grit ${r.gritPct}%`)}</small>
+          </div>
+          <div class="conclave-rank-badges">
+            ${r.streak >= 2 ? `<span class="conclave-streak-pill">🔥 ${esc(r.streak)}W</span>` : ''}
+            <span class="elo-tier-badge tier-${esc(r.tier?.id || 'obsidian')}">${esc(r.tier?.sigil || '◆')} ${esc(r.tier?.label || 'Obsidian')}</span>
+            <strong class="conclave-rank-elo">${esc(r.elo)}</strong>
+          </div>
+        </li>`).join('')}</ol>` : '<div class="conclave-empty-cards"><p>Run a <strong>⚔ Blind Race</strong>, <strong>Conclave Squad</strong>, or <strong>North Star</strong> hill-climb to populate your personal local Elo leaderboard.</p></div>'}
+    `;
+    if (el.dataset.lastHtml !== html) {
+      el.dataset.lastHtml = html;
+      el.innerHTML = html;
+    }
+  }
+
   window.G0DConclave = {
     open,
     close,
@@ -2979,6 +3213,8 @@
     ingestStreamEvent,
     loadSnapshot,
     loadRoster,
+    loadLeaderboard,
+    crownContender,
     openBuilder,
     startDemo,
     stopDemo,

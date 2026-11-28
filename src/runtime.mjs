@@ -14,7 +14,7 @@ import { Broker, snapshotWorkspace, sha256, taskTools, conversationWithoutChecks
 import { BrowserPool, DEFAULT_BROWSER_SETTINGS, normalizeBrowserSettings, findChromiumBinary } from './browser-env.mjs';
 import { validateTool } from './tool-schema.mjs';
 import { diagnoseIncident, detectRefusal, rankCandidates, providerIdentity, candidateEligibility, requestProfile, providerTier } from './routing.mjs';
-import { learningContext, inferModelFamily, bestStrategyForFamily, extractDeclineSignature, providerObservedStats } from './learning.mjs';
+import { learningContext, inferModelFamily, bestStrategyForFamily, extractDeclineSignature, providerObservedStats, buildConclaveLeaderboard, eloRankTier, providerDomainStats } from './learning.mjs';
 import {
   AUTOTUNE_MODES,
   PROFILE_BY_ID,
@@ -3997,6 +3997,60 @@ export class Runtime {
     } catch {
       return computeXpLevel(null);
     }
+  }
+  getConclaveLeaderboard() {
+    return buildConclaveLeaderboard(this.getLearning(), this.providers);
+  }
+  crownRaceWinner(id, { winnerId = '', raceId = null } = {}) {
+    if (this.closed) throw fault('RUNTIME_CLOSED', 'Runtime is closed.');
+    const task = this.getTask(id);
+    const cleanWinner = String(winnerId || '').trim();
+    if (!cleanWinner) throw fault('INVALID_CROWN', 'Choose a contender to crown.');
+    const events = this.getEvents(id);
+    const targetEv = [...events].reverse().find(e =>
+      e.type === 'model.response'
+      && e.data?.scorecard
+      && (!raceId || e.data.scorecard.raceId === raceId)
+    );
+    const sc = targetEv?.data?.scorecard || null;
+    if (!sc) throw fault('RACE_NOT_FOUND', 'No Conclave race scorecard found for this conversation.');
+    const contenderIds = [...new Set([
+      ...(Array.isArray(sc.grades) ? sc.grades.map(g => g.providerId) : []),
+      ...(Array.isArray(sc.outcomes) ? sc.outcomes.map(o => o.providerId) : []),
+      sc.winnerId,
+    ].filter(Boolean))];
+    if (!contenderIds.includes(cleanWinner)) {
+      throw fault('INVALID_CROWN', 'That model was not a contender in this Conclave race.');
+    }
+    const domain = sc.domain || task.routing?.domain || 'fast_general';
+    const beforeStats = providerDomainStats(this.getLearning(), domain, cleanWinner);
+    const eloBefore = beforeStats?.elo ?? 1500;
+    const opponents = contenderIds.filter(pid => pid !== cleanWinner);
+    if (opponents.length) {
+      for (const opponentId of opponents) {
+        this.store.recordDomainOutcome({ domain, providerId: cleanWinner, opponentId, outcome: 'race_win', margin: 4 });
+      }
+    } else {
+      this.store.recordDomainOutcome({ domain, providerId: cleanWinner, outcome: 'prefer' });
+    }
+    const afterStats = providerDomainStats(this.getLearning(), domain, cleanWinner);
+    const eloAfter = afterStats?.elo ?? eloBefore;
+    const delta = eloAfter - eloBefore;
+    const tier = eloRankTier(eloAfter);
+    const payload = {
+      raceId: sc.raceId || null,
+      winnerId: cleanWinner,
+      previousWinnerId: sc.winnerId || null,
+      domain,
+      eloBefore,
+      eloAfter,
+      delta,
+      tier,
+      source: 'owner',
+    };
+    this.store.appendEvent(id, 'race.crowned', payload);
+    this._emitStream(id, { type: 'race.crowned', ...payload });
+    return { ok: true, ...payload };
   }
   getConclaveFormations() {
     const savedRaw = this.store.getLocalState('conclave_formations', []);
