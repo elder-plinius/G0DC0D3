@@ -133,6 +133,8 @@ function renderConversationControls(task) {
   $('#composer-parameters').disabled = isCancelled;
   const count = Object.keys(task?.generation || (!task ? generationDefaults() : {})).length;
   $('#composer-parameters').textContent = count ? `Model controls · ${count}` : 'Model controls';
+  const controlsBar = document.querySelector('.conversation-controls');
+  if (controlsBar) controlsBar.classList.toggle('is-idle', !queued && count === 0);
 }
 generationControls=window.ModelParameterControls($('#generation-dialog .generation-fields'));
 $('#composer-delivery').addEventListener('change', renderComposer);

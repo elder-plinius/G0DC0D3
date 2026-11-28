@@ -752,6 +752,11 @@ function renderRecoveryControl(task, loading = false) {
     : ultraOn
       ? (task?.blocker?.message || (view.enabled ? 'G0DM0D3 + Ultra-Plinian · parallel writers with adaptive recovery fallback' : 'Ultra-Plinian · two writers and a judge'))
       : view.detail);
+  const recoveryStrip = document.querySelector('.recovery-strip');
+  if (recoveryStrip) {
+    const showStrip = Boolean(task && (ACTIVE.has(task.status) || task.blocker?.message || (task.recoveries || 0) > 0));
+    recoveryStrip.classList.toggle('is-idle', !showStrip);
+  }
   $('#composer-ultra').setAttribute('aria-checked', String(view.enabled));
   $('#composer-ultra').classList.toggle('enabled', view.enabled);
   const setupLock = view.locked ? (ACTIVE.has(task?.status) ? 'Wait for this response to finish or pause before changing the outage backup.' : modelSelectionLock(task)) : '';
@@ -8299,6 +8304,10 @@ function renderEffortPopover() {
     </div>
     <div class="effort-pop-list" role="radiogroup" aria-label="Thinking effort level">
       ${entries.map(([id, meta]) => `<button type="button" class="ultra-pop-card effort-pop-card${current === id ? ' active' : ''}" role="radio" aria-checked="${current === id}" data-effort-choice="${id}" ${effortBusy ? 'disabled' : ''}><strong><span aria-hidden="true">${meta.icon}</span><span>${meta.label}</span></strong><span>${meta.desc}</span></button>`).join('')}
+    </div>
+    <div class="ultra-popover-foot">
+      <button type="button" class="button button-quiet effort-open-params" data-effort-open-params>Sampling &amp; Model controls…</button>
+      <button type="button" class="button button-quiet" data-effort-open-hypertuner>HyperTuner</button>
     </div>`;
   positionEffortPopover();
 }
@@ -8321,6 +8330,16 @@ $('#composer-effort')?.addEventListener('click', event => {
 
 $('#effort-popover')?.addEventListener('click', async event => {
   if (event.target.closest('[data-close-effort-popover]')) { closeEffortPopover(); return; }
+  if (event.target.closest('[data-effort-open-params]')) {
+    closeEffortPopover();
+    $('#composer-parameters')?.click();
+    return;
+  }
+  if (event.target.closest('[data-effort-open-hypertuner]')) {
+    closeEffortPopover();
+    if (typeof openSettings === 'function') openSettings('hypertuner');
+    return;
+  }
   const btn = event.target.closest('[data-effort-choice]');
   if (!btn) return;
   const level = btn.dataset.effortChoice;
