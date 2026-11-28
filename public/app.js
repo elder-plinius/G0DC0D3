@@ -3875,7 +3875,7 @@ function eventDescription(event) {
     'tool.started': (() => { const s = humanizeToolStep({ type: 'tool.started', data }); return [s.verb, '⌁', 'tool', s.target]; })(),
     'tool.completed': (() => { const s = humanizeToolStep({ type: 'tool.completed', data }); return [s.verb, '⌁', s.isErr ? 'error' : 'tool', s.target]; })(),
     'tool.failed': (() => { const s = humanizeToolStep({ type: 'tool.failed', data }); return [s.verb, '!', 'error', s.target || data.error?.message || data.message || '']; })(),
-    'autotune.selected': ['AutoTune', '◈', 'info', `${data.profileLabel || data.profileId || 'Focused'}${data.applied?.temperature !== undefined ? ` (T=${data.applied.temperature})` : ''} · ${data.domain || 'general'} · ${data.winRatePct ?? 0}%`],
+    'autotune.selected': ['HyperTuner', '◈', 'info', `${data.profileLabel || data.profileId || 'Focused'}${data.applied?.temperature !== undefined ? ` (T=${data.applied.temperature})` : ''} · ${data.domain || 'general'} · ${data.winRatePct ?? 0}%`],
     'recovery.started': ['Recovery initiated', '↻', 'warning', data.incident?.message ?? data.reason ?? data.diagnosis ?? data.strategy ?? data.message ?? 'Resuming G0DM0D3 recovery.'],
     'routing.retry_scheduled': ['Retry scheduled', '↻', 'warning', `Attempt ${data.retry} of ${data.maxRetries}. Waiting until ${new Date(data.retryAt).toLocaleTimeString()}.`],
     'routing.profile_changed': ['Output allowance adjusted', '↻', 'warning', `${data.before?.maxOutputTokens} → ${data.requestProfile?.maxOutputTokens} tokens.`],

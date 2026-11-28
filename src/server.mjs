@@ -5,7 +5,7 @@ import { parameterLimits, intersectParameterLimits } from './conversation-contro
 import http from 'node:http';
 import { createPromptCommands, revisePromptCommand } from './prompt-commands.mjs';
 import { WorktreeProjects } from './worktree-projects.mjs';
-import { promises as fs } from 'node:fs';
+import { promises as fs, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Runtime } from './runtime.mjs';
@@ -47,8 +47,8 @@ export const capabilities = [
   'Brokered file, search, patch, browser, memory, and sandboxed command tools',
   'ACP v1 persistent multi-harness coordination with live token & thinking streaming',
   'Conclave 2.0 multi-round councils, Brain 2.0 auto-memory/skills, and Live Browser 2.0 takeover + Auto-QA',
-  'Live Sidecar Visualizer (✦ Visualize) in a strict CSP-sandboxed dock with real-time SSE telemetry',
-  'AutoTune passive Empirical-Bayes hyperparameter optimization per model × domain × effort',
+  'Live Sidecar Visualizer (◈ Visualize) in a strict CSP-sandboxed dock with real-time SSE telemetry',
+  'HyperTuner passive Empirical-Bayes hyperparameter optimization per model × domain × effort',
   'Scoped macOS Seatbelt and Linux bubblewrap (bwrap) sandboxing + Hardened/Lockdown zero-telemetry privacy'
 ];
 export const limitations = [
@@ -56,7 +56,7 @@ export const limitations = [
   'Command execution requires macOS Seatbelt or Linux bubblewrap (bwrap) and an explicit owner grant.',
   'Scripted tests validate controller behavior, not universal model performance.',
   'Owner-configured checks establish only their recorded coverage; test success does not prove every requirement.',
-  'Provider capabilities and sampling parameter locks vary by model; AutoTune automatically skips locked parameters.',
+  'Provider capabilities and sampling parameter locks vary by model; HyperTuner automatically skips locked parameters.',
   'Local raw task history may contain source or secrets; diagnostic export redaction is best-effort.'
 ];
 
@@ -1287,7 +1287,13 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
   };
 }
 
-if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)) {
+const isDirectMain = (argv1, metaUrl) => {
+  if (!argv1) return false;
+  const selfPath = fileURLToPath(metaUrl);
+  try { return realpathSync(argv1) === realpathSync(selfPath); }
+  catch { return path.resolve(argv1) === path.resolve(selfPath); }
+};
+if(isDirectMain(process.argv[1], import.meta.url)) {
   const envFile=path.join(path.dirname(fileURLToPath(import.meta.url)),'..', '.env');
   try{const lines=await fs.readFile(envFile,'utf8');for(const raw of lines.split(/\r?\n/)){const m=raw.match(/^\s*([A-Z_][A-Z0-9_]*)=(.*)$/);if(m&&!(m[1] in process.env)){let v=m[2].trim();if((v.startsWith('"')&&v.endsWith('"'))||(v.startsWith("'")&&v.endsWith("'")))v=v.slice(1,-1);process.env[m[1]]=v;}}}catch{}
   const dataDir = path.resolve(process.env.G0D_DATA_DIR || path.join(projectDir, '.g0dc0d3'));

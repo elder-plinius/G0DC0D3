@@ -14,7 +14,7 @@
  *   - Reproducible artifacts: `bakeoff-report.json`, `SCOREBOARD.md`, and offline `scoreboard.html`
  */
 
-import { promises as fs } from 'node:fs';
+import { promises as fs, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawn, execFile } from 'node:child_process';
@@ -868,7 +868,8 @@ function parseCliArgs(argv) {
   return opts;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+const isDirectBakeoff = process.argv[1] && (() => { const s = fileURLToPath(import.meta.url); try { return realpathSync(process.argv[1]) === realpathSync(s); } catch { return path.resolve(process.argv[1]) === path.resolve(s); } })();
+if (isDirectBakeoff) {
   const opts = parseCliArgs(process.argv.slice(2));
   if (opts.help) {
     console.log(`G0DC0D3 Head-to-Head Harness Bakeoff (v${APP_VERSION})

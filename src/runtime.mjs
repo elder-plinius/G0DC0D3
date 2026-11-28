@@ -1447,7 +1447,7 @@ export class Runtime {
   updateAutoTune({ mode, pin, unpin } = {}) {
     const state = this._getAutoTuneRaw();
     if (mode !== undefined) {
-      if (!AUTOTUNE_MODES.includes(mode)) throw fault('INVALID_AUTOTUNE', `Invalid AutoTune mode "${mode}". Choose off, passive, or active.`);
+      if (!AUTOTUNE_MODES.includes(mode)) throw fault('INVALID_AUTOTUNE', `Invalid HyperTuner mode "${mode}". Choose off, passive, or active.`);
       state.mode = mode;
     }
     if (pin && typeof pin === 'object' && pin.modelKey && pin.domain && PROFILE_BY_ID.has(pin.profileId)) {
