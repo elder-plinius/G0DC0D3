@@ -1,7 +1,7 @@
 'use strict';
 
 let promptLibrary = [], promptRevision = '', commandBeingEdited = null;
-let libraryRequest = 0, writingCommand = false, revisionRequest = 0;
+let libraryRequest = 0, writingCommand = false, revisionRequest = 0, proposing = false;
 const commandTagPattern = /^(![A-Z][A-Z0-9_-]{0,30}\+?)(?:\s+([\s\S]*))?$/i;
 function expandPromptCommand(message, limit) {
   const match = commandTagPattern.exec(message);
@@ -40,6 +40,7 @@ function insertPromptTag(tag) {
 }
 function editPrompt(command) {
   revisionRequest++;
+  proposing = false;
   commandBeingEdited = command || null;
   $('#prompt-library').hidden = true;
   $('#prompt-new').hidden = true;
@@ -56,6 +57,7 @@ function editPrompt(command) {
 }
 function closePromptEditor() {
   revisionRequest++;
+  proposing = false;
   commandBeingEdited = null;
   $('#prompt-library').hidden = false;
   $('#prompt-editor').hidden = true;
@@ -65,12 +67,14 @@ function closePromptEditor() {
 }
 async function savePrompt(remove) {
   if (writingCommand) return;
+  if (remove && !commandBeingEdited) return;
   const tag = remove ? commandBeingEdited.tag : $('#prompt-tag').value.trim().toUpperCase();
   const data = {tag, originalTag:commandBeingEdited?.tag || tag, version:commandBeingEdited?.version ?? null, prompt:$('#prompt-body').value};
   if (remove && !confirm('Delete '+tag+' from your command library?')) return;
   writingCommand = true;
+  revisionRequest++;
+  proposing = false;
   const controls = $$('#prompt-editor input, #prompt-editor textarea, #prompt-editor button');
-  const disabled = controls.map(el=>el.disabled);
   controls.forEach(el=>el.disabled=true);
   try {
     const saved = await api('/api/prompt-commands',{method:remove?'DELETE':'PUT',body:JSON.stringify(data)});
@@ -79,7 +83,7 @@ async function savePrompt(remove) {
     closePromptEditor();
     settingsFeedback(tag + (remove ? ' deleted.' : ' saved.'));
   } catch (error) { settingsFeedback(error.message,true); }
-  finally { writingCommand=false; controls.forEach((el,i)=>el.disabled=disabled[i]); }
+  finally { writingCommand=false; controls.forEach(el=>{ el.disabled = el.id === 'prompt-propose' ? proposing : false; }); }
 }
 $('#prompt-search').addEventListener('input',renderPromptList);
 $('#prompt-new').addEventListener('click',()=>editPrompt(null));
@@ -95,6 +99,7 @@ $('#prompt-propose').addEventListener('click',async()=>{
   const prompt = $('#prompt-body').value, instruction = $('#prompt-request').value;
   if (!prompt.trim() || !instruction.trim()) { settingsFeedback('Enter instructions and describe the revision first.',true); return; }
   const request = ++revisionRequest;
+  proposing = true;
   $('#prompt-propose').disabled = true;
   $('#prompt-proposal').hidden = true;
   settingsFeedback('Drafting with Venice…');
@@ -107,7 +112,7 @@ $('#prompt-propose').addEventListener('click',async()=>{
     settingsFeedback('Review the suggestion from '+result.model+'.');
     $('#prompt-proposed').focus();
   } catch(error) { if(request===revisionRequest)settingsFeedback(error.message,true); }
-  finally { if(request===revisionRequest)$('#prompt-propose').disabled=false; }
+  finally { if(request===revisionRequest){ proposing = false; $('#prompt-propose').disabled=false; } }
 });
 $('#prompt-accept').addEventListener('click',()=>{
   $('#prompt-body').value=$('#prompt-proposed').value;

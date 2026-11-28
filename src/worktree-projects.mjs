@@ -4,18 +4,30 @@ import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { readBoundedFile, scopedPath, sha256 } from './broker.mjs';
+import { neutralizeRepoGitConfigFlags } from './git.mjs';
 import { patchRequestBody } from './providers.mjs';
 import { prepareOutboundRequest } from './privacy.mjs';
 import { runCommand } from './runner.mjs';
 
-function git(cwd, args, input) {
+async function git(cwd, args, input) {
+  const extraFlags = cwd ? await neutralizeRepoGitConfigFlags(cwd) : [];
   return new Promise((resolve, reject) => {
     const child = execFile(
       '/usr/bin/git',
-      ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '--literal-pathspecs', ...args],
+      [
+        '-c', 'core.hooksPath=/dev/null',
+        '-c', 'core.fsmonitor=false',
+        '-c', 'core.pager=cat',
+        '-c', 'diff.external=false',
+        '-c', 'core.attributesfile=/dev/null',
+        '-c', 'core.sshCommand=/usr/bin/false',
+        ...extraFlags,
+        '--literal-pathspecs',
+        ...args,
+      ],
       {
         cwd,
-        env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_NOSYSTEM: '1' },
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' },
         encoding: 'utf8',
         timeout: 60000,
         maxBuffer: 16 * 1024 * 1024,
@@ -174,11 +186,13 @@ export class WorktreeProjects {
     await fs.mkdir(this.directory, { recursive: true, mode: 0o700 });
     const root = path.join(await fs.realpath(this.directory), id);
     const project = { id, repository: top, base, branch, root, candidates: [], ...(chatId ? { chatId } : {}) };
-    await git(top, ['worktree', 'add', '-b', branch, '--', root, base]);
     try {
+      await git(top, ['worktree', 'add', '-b', branch, '--', root, base]);
       this.save(project, 'code.attached');
     } catch (error) {
       await git(top, ['worktree', 'remove', '--force', '--', root]).catch(() => {});
+      await fs.rm(root, { recursive: true, force: true }).catch(() => {});
+      await git(top, ['worktree', 'prune']).catch(() => {});
       await git(top, ['branch', '-D', '--', branch]).catch(() => {});
       throw error;
     }
@@ -381,16 +395,30 @@ export class WorktreeProjects {
       // Git refuses dirty worktrees unless force is explicitly confirmed. The named branch and commits survive removal.
       const exists = await fs.access(project.root).then(() => true, () => false);
       if (exists) {
-        await git(project.repository, ['worktree', 'remove', ...(force ? ['--force'] : []), '--', project.root]);
+        try {
+          await git(project.repository, ['worktree', 'remove', ...(force ? ['--force'] : []), '--', project.root]);
+        } catch (err) {
+          if (!force) throw err;
+          // Repo moved/deleted or worktree detached: safely remove managed directory inside this.directory.
+          const managedBase = await fs.realpath(this.directory).catch(() => null);
+          const rootReal = await fs.realpath(project.root).catch(() => null);
+          if (managedBase && rootReal && rootReal.startsWith(managedBase + path.sep)) {
+            await fs.rm(rootReal, { recursive: true, force: true });
+          }
+          await git(project.repository, ['worktree', 'prune']).catch(() => {});
+        }
       } else {
         await git(project.repository, ['worktree', 'prune']).catch(() => {});
       }
       const forget = () => this.db.prepare('DELETE FROM desktop_worktrees WHERE id = ?').run(id);
-      if (project.chatId) this.store.updateTask(project.chatId, task => {
+      if (project.chatId && this.store.getTask(project.chatId)) {
+        this.store.updateTask(project.chatId, task => {
+          forget();
+          delete task.codeWorkspace;
+        }, 'code.removed', { branch: project.branch });
+      } else {
         forget();
-        delete task.codeWorkspace;
-      }, 'code.removed', { branch: project.branch });
-      else forget();
+      }
       return { branch: project.branch };
     }, { checkBranch: false });
   }

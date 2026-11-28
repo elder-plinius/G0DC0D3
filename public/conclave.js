@@ -2321,7 +2321,7 @@
       renderAll();
       return;
     }
-    if (delta.type === 'conclave.update' || delta.type === 'race.dispatched' || delta.type === 'race.result' || delta.type === 'race.completed' || delta.type === 'permission.requested') {
+    if (delta.type === 'conclave.update' || delta.type === 'conclave.steered' || delta.type === 'race.dispatched' || delta.type === 'race.result' || delta.type === 'race.completed' || delta.type === 'permission.requested') {
       loadSnapshot(currentTaskId);
     }
   }
@@ -2425,20 +2425,27 @@
     });
   }
 
+  let rosterLoadInFlight = null;
   async function loadRoster(force = false) {
     if (rosterData && !force) {
       renderRosterView();
       return true;
     }
-    try {
-      const res = await fetch('/api/conclave/roster');
-      if (!res.ok) return false;
-      rosterData = await res.json();
-      renderRosterView();
-      return true;
-    } catch {
-      return false;
-    }
+    if (rosterLoadInFlight && !force) return rosterLoadInFlight;
+    rosterLoadInFlight = (async () => {
+      try {
+        const res = await fetch('/api/conclave/roster');
+        if (!res.ok) return false;
+        rosterData = await res.json();
+        renderRosterView();
+        return true;
+      } catch {
+        return false;
+      } finally {
+        rosterLoadInFlight = null;
+      }
+    })();
+    return rosterLoadInFlight;
   }
 
   function openBuilder(slug = null) {
@@ -2789,6 +2796,8 @@
     const archetypes = rosterData.archetypes || [];
     const domainOpts = (selected) => domains.map(d => `<option value="${esc(d.id)}" ${d.id === selected ? 'selected' : ''}>${esc(d.shortLabel)}</option>`).join('');
 
+    if (builderOpen && builderDraft) syncDraftTextFieldsFromDom();
+
     const currentEngineVal = builderDraft
       ? (builderDraft.engineType === 'custom_cli' ? 'custom_cli' : builderDraft.engineType === 'harness' && builderDraft.harnessId ? `harness::${builderDraft.harnessId}` : builderDraft.providerId ? `api::${builderDraft.providerId}` : '')
       : '';
@@ -2867,7 +2876,6 @@
         </form>
       </section>` : '';
 
-    if (builderOpen && builderDraft) syncDraftTextFieldsFromDom();
     const prevRfName = document.getElementById('rf-name')?.value ?? null;
     const prevRfGoal = document.getElementById('rf-goal')?.value ?? null;
     const formations = rosterData.formations || [];

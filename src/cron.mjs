@@ -80,7 +80,7 @@ function parseCronField(field, min, max, { names = null, allowSevenAsZero = fals
   const raw = String(field || '').trim();
   if (!raw) throw cronError('Cron expression is missing a field.');
   const values = new Set();
-  const isWildcard = raw === '*';
+  const isWildcard = raw === '*' || raw === '*/1';
   for (const part of raw.split(',')) {
     const trimmed = part.trim();
     if (!trimmed) throw cronError(`Empty list item in cron field "${field}".`);
@@ -106,7 +106,7 @@ function parseCronField(field, min, max, { names = null, allowSevenAsZero = fals
       const endRaw = endTok.trim().toLowerCase();
       const start = parseFieldAtom(startTok, min, max, names, allowSevenAsZero);
       let end;
-      if (allowSevenAsZero && (endRaw === '7' || (endRaw === 'sun' && start > 0))) {
+      if (allowSevenAsZero && (endRaw === '7' || ((endRaw === 'sun' || endRaw === '0') && start > 0))) {
         end = 7;
       } else {
         end = parseFieldAtom(endTok, min, max, names, allowSevenAsZero);
@@ -170,13 +170,11 @@ function dayMatches(parsed, date) {
 
 export function nextCronTime(expression, fromDate = new Date()) {
   const parsed = typeof expression === 'string' ? parseCron(expression) : expression;
-  const start = new Date(fromDate instanceof Date ? fromDate.getTime() : Number(fromDate));
+  const start = fromDate instanceof Date ? new Date(fromDate.getTime()) : new Date(fromDate);
   if (Number.isNaN(start.getTime())) throw cronError('Invalid reference timestamp.');
 
-  // Strictly after start, aligned to next whole minute
-  const cursor = new Date(start.getTime());
-  cursor.setSeconds(0, 0);
-  cursor.setMinutes(cursor.getMinutes() + 1);
+  // Strictly after start, aligned to next whole minute in UTC epoch ms (immune to DST fall-back snap-back)
+  const cursor = new Date(Math.floor(start.getTime() / 60_000) * 60_000 + 60_000);
 
   const maxYear = cursor.getFullYear() + 4;
   let guard = 0;
@@ -212,12 +210,16 @@ export function nextCronTime(expression, fromDate = new Date()) {
     if (!parsed.minute.values.has(minute)) {
       const nextMinute = parsed.minute.sorted.find(m => m > minute);
       if (nextMinute !== undefined) {
-        cursor.setMinutes(nextMinute, 0, 0);
+        // Advance by epoch delta so ambiguous DST fall-back hours never snap backwards
+        cursor.setTime(cursor.getTime() + (nextMinute - minute) * 60_000);
       } else {
-        // Advance by epoch minutes so DST fall-back repeated hours are never skipped
+        // Advance by epoch minutes so DST fall-back repeated hours are never skipped or rewound
         cursor.setTime(cursor.getTime() + (60 - minute) * 60_000);
-        cursor.setSeconds(0, 0);
       }
+      continue;
+    }
+    if (cursor.getTime() <= start.getTime()) {
+      cursor.setTime(start.getTime() + 60_000);
       continue;
     }
     return new Date(cursor.getTime());
@@ -436,11 +438,13 @@ export function renderLaunchdPlist(job, { nodePath = process.execPath, cliPath =
   };
 
   let intervalXml = '';
+  let needsDueOnly = false;
   if (job.kind === 'once' && job.runAt) {
     const dt = new Date(job.runAt);
     if (!Number.isNaN(dt.getTime())) {
       const dict = buildDict({ m: dt.getMinutes(), h: dt.getHours(), d: dt.getDate(), mo: dt.getMonth() + 1 });
       intervalXml = `  <key>StartCalendarInterval</key>\n${dict.replace(/^    /gm, '  ')}`;
+      needsDueOnly = true; // StartCalendarInterval lacks a Year key; guard against year-early execution
     }
   } else if (job.kind === 'cron' && job.expression) {
     try {
@@ -455,6 +459,7 @@ export function renderLaunchdPlist(job, { nodePath = process.execPath, cliPath =
         const entries = [];
         if (bothRestricted) {
           // Standard POSIX OR semantics: emit separate DOM-only and DOW-only calendar dicts
+          needsDueOnly = true; // Deduplicate days matching both DOM and DOW (e.g. Friday the 13th)
           const total = mins.length * hrs.length * mons.length * (parsed.dom.sorted.length + parsed.dow.sorted.length);
           if (total > 0 && total <= 48) {
             for (const m of mins) for (const h of hrs) for (const mo of mons) {
@@ -482,8 +487,11 @@ export function renderLaunchdPlist(job, { nodePath = process.execPath, cliPath =
   }
   if (!intervalXml) {
     // Complex cron (>48 calendar entries): poll every minute with --due-only so CLI checks exact cron match
-    args.push('--due-only');
+    needsDueOnly = true;
     intervalXml = `  <key>StartInterval</key>\n  <integer>60</integer>`;
+  }
+  if (needsDueOnly && !args.includes('--due-only')) {
+    args.push('--due-only');
   }
 
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -676,6 +684,10 @@ export class CronScheduler {
         this.store.putScheduledJob({ ...job, enabled: stillEnabled, nextRunAt, updatedAt: now.toISOString() });
         if (job.overlapPolicy === 'queue') {
           this._queued.add(job.id);
+          if (job.kind === 'once') {
+            this._queuedOnce ||= new Set();
+            this._queuedOnce.add(job.id);
+          }
         } else {
           this.store.putScheduledRun({
             id: `srun_${randomUUID().slice(0, 12)}`,
@@ -819,9 +831,10 @@ export class CronScheduler {
       this._running.delete(job.id);
       if (!this._closed && this._queued.has(job.id) && !this.store.closed) {
         this._queued.delete(job.id);
+        const wasQueuedOnce = Boolean(this._queuedOnce?.delete(job.id));
         try {
           const queuedJob = this.store.getScheduledJob(job.id);
-          if (queuedJob && queuedJob.enabled) {
+          if (queuedJob && (queuedJob.enabled || wasQueuedOnce)) {
             this._dispatch(queuedJob, 'queued').promise.catch(() => {});
           }
         } catch {}

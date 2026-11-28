@@ -114,6 +114,7 @@ async function synthesizeVerdict({ runtime, task, mission, mode, formationName, 
           tools: [],
         }, { signal, ...outbound, onDelta });
       }
+      if (signal?.aborted) throw Object.assign(new Error('Conclave cancelled.'), { code: 'cancelled' });
       if (res && res.type === 'message' && typeof res.text === 'string' && res.text.trim()) {
         return { text: res.text.trim(), providerId: provider.id, modelLabel: provider.label || provider.model || provider.id, usage: res.usage || null };
       }
@@ -122,6 +123,7 @@ async function synthesizeVerdict({ runtime, task, mission, mode, formationName, 
     }
   }
 
+  if (signal?.aborted) throw Object.assign(new Error('Conclave cancelled.'), { code: 'cancelled' });
   return { text: buildFallbackDigest(mission, mode, blackboard), providerId: candidates[0]?.id || task.providerId || null, modelLabel: candidates[0]?.label || null };
 }
 
@@ -346,6 +348,9 @@ export async function runConclaveSession({
           durationMs: res?.durationMs || 0,
           createdAt: new Date().toISOString(),
         };
+        if (signal?.aborted || res?.code === 'SUBAGENT_CANCELLED' || res?.code === 'HARNESS_CANCELLED') {
+          throw Object.assign(new Error('Conclave cancelled.'), { code: 'cancelled' });
+        }
         blackboard.push(entry);
         runtime.store.appendEvent(taskId, 'subagent.completed', {
           workerId, callId: workerId, round, roundLabel, conclaveRunId, ...res,
@@ -461,6 +466,7 @@ export async function runConclaveSession({
       })),
     };
 
+    if (signal?.aborted) throw Object.assign(new Error('Conclave cancelled.'), { code: 'cancelled' });
     runtime.store.appendEvent(taskId, 'conclave.completed', summaryData);
     runtime.store.appendEvent(taskId, 'model.response', {
       providerId: synth.providerId || task.providerId || null,

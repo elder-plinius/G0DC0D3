@@ -17,7 +17,7 @@ function decodeText(bytes) {
   try { return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes); }
   catch { return null; }
 }
-const excluded = new Set(['.git', '.g0dc0d3', 'node_modules']);
+const excluded = new Set(['.git', '.g0dc0d3', '.claude', 'node_modules']);
 const error = (code, message) => Object.assign(new Error(message), { code });
 const activeStates = new Set(['running', 'recovering', 'verifying']);
 export const READ_ONLY_TOOLS = new Set(['repo.list', 'repo.read', 'repo.search', 'repo.glob', 'git.diff', 'git.log', 'task.history', 'memory.search', 'web.fetch', 'web.search', 'browser.snapshot', 'browser.screenshot']);
@@ -29,8 +29,66 @@ export const taskTools = task => task?.crewMember?.role === 'challenger' ? TOOLS
   : task?.planMode === true ? TOOLS.filter(tool => PLAN_MODE_TOOLS.has(tool.name))
     : conversationWithoutChecks(task) ? TOOLS.filter(tool => tool.name !== 'check.run') : TOOLS;
 
-function escapeRegexLiteral(ch) {
-  return /[.+^$()|[\]\\]/.test(ch) ? '\\' + ch : ch;
+function tokenizeGlob(pattern) {
+  const tokens = [];
+  for (let i = 0; i < pattern.length; i++) {
+    if (pattern.slice(i, i + 3) === '**/') {
+      tokens.push({ kind: 'globstar_dir' });
+      i += 2;
+    } else if (pattern.slice(i, i + 2) === '**') {
+      tokens.push({ kind: 'globstar' });
+      i += 1;
+    } else if (pattern[i] === '*') {
+      tokens.push({ kind: 'star' });
+    } else if (pattern[i] === '?') {
+      tokens.push({ kind: 'qmark' });
+    } else {
+      tokens.push({ kind: 'lit', ch: pattern[i] });
+    }
+  }
+  return tokens;
+}
+
+function matchGlobTokens(tokens, candidate) {
+  const n = candidate.length;
+  let dp = new Uint8Array(n + 1);
+  dp[0] = 1;
+  for (const tok of tokens) {
+    const next = new Uint8Array(n + 1);
+    if (tok.kind === 'lit') {
+      for (let j = 0; j < n; j++) {
+        if (dp[j] && candidate[j] === tok.ch) next[j + 1] = 1;
+      }
+    } else if (tok.kind === 'qmark') {
+      for (let j = 0; j < n; j++) {
+        if (dp[j] && candidate[j] !== '/') next[j + 1] = 1;
+      }
+    } else if (tok.kind === 'star') {
+      for (let j = 0; j <= n; j++) {
+        if (dp[j]) next[j] = 1;
+        else if (j > 0 && next[j - 1] && candidate[j - 1] !== '/') next[j] = 1;
+      }
+    } else if (tok.kind === 'globstar') {
+      let seen = false;
+      for (let j = 0; j <= n; j++) {
+        if (dp[j]) seen = true;
+        if (seen) next[j] = 1;
+      }
+    } else if (tok.kind === 'globstar_dir') {
+      let earliest = -1;
+      for (let j = 0; j <= n; j++) {
+        if (dp[j]) {
+          next[j] = 1;
+          if (earliest === -1) earliest = j;
+        }
+        if (earliest !== -1 && j > earliest + 1 && candidate[j - 1] === '/') {
+          next[j] = 1;
+        }
+      }
+    }
+    dp = next;
+  }
+  return dp[n] === 1;
 }
 
 export function compileGlob(pattern) {
@@ -42,23 +100,21 @@ export function compileGlob(pattern) {
   }
   const normalized = pattern.replace(/(?:\*\*\/)+/g, '**/').replace(/\*{3,}/g, '**');
   let wildcardCount = 0;
-  const convertSegment = (segment, allowBraces) => {
-    let re = '';
+  const validateSegment = (segment, allowBraces) => {
     for (let i = 0; i < segment.length; i++) {
       const ch = segment[i];
       if (segment.slice(i, i + 3) === '**/') {
         if (++wildcardCount > 12) throw error('INVALID_TOOL', 'Glob pattern contains too many wildcard segments.');
-        re += '(?:.+/)?'; i += 2; continue;
+        i += 2; continue;
       }
       if (segment.slice(i, i + 2) === '**') {
         if (++wildcardCount > 12) throw error('INVALID_TOOL', 'Glob pattern contains too many wildcard segments.');
-        re += '.*'; i += 1; continue;
+        i += 1; continue;
       }
       if (ch === '*') {
         if (++wildcardCount > 12) throw error('INVALID_TOOL', 'Glob pattern contains too many wildcard segments.');
-        re += '[^/]*'; continue;
+        continue;
       }
-      if (ch === '?') { re += '[^/]'; continue; }
       if (ch === '{') {
         if (!allowBraces) throw error('INVALID_TOOL', 'Nested brace expressions are not supported in glob patterns.');
         const close = segment.indexOf('}', i + 1);
@@ -67,17 +123,36 @@ export function compileGlob(pattern) {
         if (inner.includes('{')) throw error('INVALID_TOOL', 'Nested brace expressions are not supported in glob patterns.');
         const parts = inner.split(',');
         if (parts.length > 20 || parts.some(part => !part.length)) throw error('INVALID_TOOL', 'Brace expression must contain 1–20 non-empty alternatives.');
-        re += `(?:${parts.map(part => convertSegment(part, false)).join('|')})`;
+        for (const part of parts) validateSegment(part, false);
         i = close;
         continue;
       }
       if (ch === '}') throw error('INVALID_TOOL', 'Unmatched closing brace in glob pattern.');
-      re += escapeRegexLiteral(ch);
     }
-    return re;
   };
-  const regex = new RegExp(`^${convertSegment(normalized, true)}$`);
-  return candidate => regex.test(candidate);
+  validateSegment(normalized, true);
+
+  // Bounded brace expansion into linear-time DP token matchers (eliminates RegExp ReDoS).
+  let expanded = [''];
+  for (let i = 0; i < normalized.length; i++) {
+    if (normalized[i] === '{') {
+      const close = normalized.indexOf('}', i + 1);
+      const parts = normalized.slice(i + 1, close).split(',');
+      const next = [];
+      for (const prefix of expanded) {
+        for (const part of parts) {
+          if (next.length >= 128) throw error('INVALID_TOOL', 'Glob brace expansion exceeds maximum alternatives.');
+          next.push(prefix + part);
+        }
+      }
+      expanded = next;
+      i = close;
+    } else {
+      for (let k = 0; k < expanded.length; k++) expanded[k] += normalized[i];
+    }
+  }
+  const compiled = expanded.map(tokenizeGlob);
+  return candidate => typeof candidate === 'string' && compiled.some(tokens => matchGlobTokens(tokens, candidate));
 }
 
 async function globWorkspace(workspace, matcher, { limit = 200, maxFileBytes = 256 * 1024, expectedRoot } = {}) {
@@ -152,6 +227,14 @@ export async function readBoundedFile(target, maxBytes = 256 * 1024, limitCode =
   try {
     const stat = await handle.stat();
     if (!stat.isFile()) throw error('PATH_DENIED', 'Only regular files are supported.');
+    // Re-verify canonical realpath + inode identity after open to defeat intermediate-dir symlink TOCTOU.
+    const [realAfterOpen, lstatAfterOpen] = await Promise.all([
+      fs.realpath(target).catch(() => null),
+      fs.lstat(target).catch(() => null),
+    ]);
+    if (!realAfterOpen || realAfterOpen !== path.resolve(target) || !lstatAfterOpen || lstatAfterOpen.dev !== stat.dev || lstatAfterOpen.ino !== stat.ino) {
+      throw error('SYMLINK_DENIED', 'Path changed or traversed a symlink during open.');
+    }
     if (expectedIdentity && (stat.dev !== expectedIdentity.dev || stat.ino !== expectedIdentity.ino || (expectedIdentity.size !== undefined && stat.size !== expectedIdentity.size) || (expectedIdentity.mtimeMs !== undefined && stat.mtimeMs !== expectedIdentity.mtimeMs))) throw error('FILE_CHANGED_DURING_READ', 'Opened file does not match the previously inspected inode.');
     if (stat.size > maxBytes) throw error(limitCode, `File exceeds the ${maxBytes}-byte limit.`);
     const buffer = Buffer.alloc(Math.min(stat.size, maxBytes) + 1);
@@ -213,6 +296,7 @@ export async function scopedPath(workspace, relative, { writing = false, withSta
   if (path.resolve(workspace) !== root) throw error('WORKSPACE_CHANGED', 'Canonical task workspace was replaced or redirected.');
   let current = root;
   let finalStat;
+  let deepestExisting = root;
   for (let i = 0; i < components.length; i++) {
     current = path.join(current, components[i]);
     try {
@@ -220,6 +304,7 @@ export async function scopedPath(workspace, relative, { writing = false, withSta
       if (stat.isSymbolicLink()) throw error('SYMLINK_DENIED', 'Symbolic links are not supported by scoped tools.');
       if (i < components.length - 1 && !stat.isDirectory()) throw error('PATH_DENIED', 'A parent path is not a directory.');
       if (i === components.length - 1 && !stat.isFile()) throw error('PATH_DENIED', 'Target must be a regular file.');
+      deepestExisting = current;
       if (i === components.length - 1) finalStat = stat;
     } catch (cause) {
       if (cause.code !== 'ENOENT') throw cause;
@@ -227,6 +312,10 @@ export async function scopedPath(workspace, relative, { writing = false, withSta
     }
   }
   if (!current.startsWith(root + path.sep)) throw error('PATH_DENIED', 'Path escapes workspace.');
+  const realDeepest = await fs.realpath(deepestExisting);
+  if (realDeepest !== deepestExisting || (realDeepest !== root && !realDeepest.startsWith(root + path.sep))) {
+    throw error('SYMLINK_DENIED', 'An ancestor directory was redirected via symbolic link.');
+  }
   return withStat ? { target: current, stat: finalStat } : current;
 }
 
@@ -289,6 +378,12 @@ export class Broker {
     const execution = previous.catch(() => {}).then(() => this._executeReadBatch(taskId, calls, options));
     this.locks.set(taskId, execution);
     try { return await execution; } finally { if (this.locks.get(taskId) === execution) this.locks.delete(taskId); }
+  }
+  async serialize(taskId, fn) {
+    const previous = this.locks.get(taskId) || Promise.resolve();
+    const run = previous.catch(() => {}).then(() => fn());
+    this.locks.set(taskId, run);
+    try { return await run; } finally { if (this.locks.get(taskId) === run) this.locks.delete(taskId); }
   }
   async _runReadOnly(task, taskId, call, { signal, outbound } = {}) {
     if (call.name === 'repo.list') {
@@ -412,9 +507,9 @@ export class Broker {
     const task = this.assertCurrent(taskId, epoch, signal);
     if (!Array.isArray(calls) || !calls.length) return [];
     const allowed = new Set(taskTools(task).map(tool => tool.name));
-    const entries = [];
+    // Pass 1: pure validation over all calls before mutating durable state or reconciling.
+    const planned = [];
     const batchSeen = new Map();
-    let hasFresh = false;
     for (const call of calls) {
       if (!call || typeof call.id !== 'string' || !call.id || call.id.length > 240 || !READ_ONLY_TOOLS.has(call.name) || !call.args || typeof call.args !== 'object' || Array.isArray(call.args)) {
         throw error('INVALID_TOOL', 'Read batch accepts valid read-only tool calls only.');
@@ -426,36 +521,43 @@ export class Broker {
       if (batchSeen.has(id)) {
         const prev = batchSeen.get(id);
         if (prev.name !== call.name || prev.argsHash !== argsHash) throw error('OPERATION_ID_COLLISION', 'A tool call ID was reused with different arguments.');
-        entries.push({ call, id, argsHash, aliasOf: prev });
+        planned.push({ call, id, argsHash, aliasOf: prev });
         continue;
       }
-      let operation = this.store.getOperation(id);
-      if (operation) {
-        if (operation.name !== call.name || operation.argsHash !== argsHash) throw error('OPERATION_ID_COLLISION', 'A tool call ID was reused with different arguments.');
+      const existing = this.store.getOperation(id);
+      if (existing && (existing.name !== call.name || existing.argsHash !== argsHash)) {
+        throw error('OPERATION_ID_COLLISION', 'A tool call ID was reused with different arguments.');
+      }
+      const entry = { call, id, argsHash, existing, reused: false, operation: null, result: null };
+      batchSeen.set(id, { name: call.name, argsHash, entry });
+      planned.push(entry);
+    }
+    // Pass 2: settle cached/reconciled entries and check unresolved task operations.
+    let hasFresh = false;
+    for (const entry of planned) {
+      if (entry.aliasOf) continue;
+      if (entry.existing) {
+        let operation = entry.existing;
         if (operation.status === 'succeeded' || operation.status === 'failed') {
-          this.store.appendEvent(taskId, 'tool.reused', { operationId: id, status: operation.status });
-          const entry = { call, id, argsHash, reused: true, result: operation.result };
-          batchSeen.set(id, { name: call.name, argsHash, entry });
-          entries.push(entry);
+          this.store.appendEvent(taskId, 'tool.reused', { operationId: entry.id, status: operation.status });
+          entry.reused = true;
+          entry.result = operation.result;
           continue;
         }
         operation = await this.reconcile(operation);
         if (operation.status === 'succeeded' || operation.status === 'failed') {
-          const entry = { call, id, argsHash, reused: true, result: operation.result };
-          batchSeen.set(id, { name: call.name, argsHash, entry });
-          entries.push(entry);
+          entry.reused = true;
+          entry.result = operation.result;
           continue;
         }
         throw error('OUTCOME_UNKNOWN', 'A previous tool operation has an unresolved outcome.');
       }
       hasFresh = true;
-      const entry = { call, id, argsHash, reused: false, operation: null };
-      batchSeen.set(id, { name: call.name, argsHash, entry });
-      entries.push(entry);
     }
     if (hasFresh && this.store.getOperations(taskId).some(other => !['succeeded', 'failed'].includes(other.status))) {
       throw error('OUTCOME_UNKNOWN', 'Resolve this task’s pending or uncertain tool effects before dispatching another operation.');
     }
+    const entries = planned;
     const freshEntries = entries.filter(entry => !entry.reused && !entry.aliasOf);
     for (const entry of freshEntries) {
       entry.operation = { id: entry.id, taskId, callId: entry.call.id, name: entry.call.name, args: entry.call.args, argsHash: entry.argsHash, epoch, status: 'prepared', createdAt: new Date().toISOString() };
@@ -472,7 +574,20 @@ export class Broker {
         return { entry, ok: false, cause };
       }
     }));
-    let fatalCause = null;
+    const fatalCause = outcomes.find(o => !o.ok && (o.cause?.code === 'STALE_RUN' || o.cause?.simulateCrash))?.cause || null;
+    if (fatalCause) {
+      if (!fatalCause.simulateCrash) {
+        for (const entry of freshEntries) this.store.deletePreparedOperation?.(entry.id);
+      }
+      throw fatalCause;
+    }
+    // Re-check epoch/signal before durably committing read results from a potentially superseded epoch.
+    try {
+      this.assertCurrent(taskId, epoch, signal);
+    } catch (staleErr) {
+      for (const entry of freshEntries) this.store.deletePreparedOperation?.(entry.id);
+      throw staleErr;
+    }
     for (const outcome of outcomes) {
       const { entry } = outcome;
       if (outcome.ok) {
@@ -488,10 +603,8 @@ export class Broker {
         entry.operation.finishedAt = new Date().toISOString();
         this.store.putOperation(entry.operation, 'tool.completed', { operationId: entry.id, name: entry.operation.name, status: entry.operation.status, result: entry.operation.result });
         entry.result = entry.operation.result;
-        if (!fatalCause && (cause.code === 'STALE_RUN' || cause.simulateCrash)) fatalCause = cause;
       }
     }
-    if (fatalCause) throw fatalCause;
     return entries.map(entry => entry.aliasOf ? entry.aliasOf.entry.result : entry.result);
   }
   async _execute(taskId, call, { epoch, signal, expectedHash, onOutput, outbound } = {}) {
@@ -551,14 +664,25 @@ export class Broker {
           }
           const hunks = hasEdits ? call.args.edits : [{ oldText: call.args.oldText, newText: call.args.newText }];
           if (!hunks.length) throw error('INVALID_TOOL', 'edits must contain at least one hunk.');
-          content = text;
+          // Locate every hunk against the original file text so chained/swapped hunks never corrupt each other.
+          const spans = [];
           for (let i = 0; i < hunks.length; i++) {
             const hunk = hunks[i];
-            const index = content.indexOf(hunk.oldText);
-            if (index < 0 || content.indexOf(hunk.oldText, index + 1) >= 0) {
+            const index = text.indexOf(hunk.oldText);
+            if (index < 0 || text.indexOf(hunk.oldText, index + 1) >= 0) {
               throw error('PATCH_AMBIGUOUS', hasEdits ? `edits[${i}].oldText must occur exactly once in the current file.` : 'oldText must occur exactly once in the current file.');
             }
-            content = content.slice(0, index) + hunk.newText + content.slice(index + hunk.oldText.length);
+            spans.push({ start: index, end: index + hunk.oldText.length, newText: hunk.newText });
+          }
+          spans.sort((a, b) => a.start - b.start);
+          for (let i = 1; i < spans.length; i++) {
+            if (spans[i - 1].end > spans[i].start) {
+              throw error('PATCH_OVERLAP', 'Patch edits overlap in the target file.');
+            }
+          }
+          content = text;
+          for (let i = spans.length - 1; i >= 0; i--) {
+            content = content.slice(0, spans[i].start) + spans[i].newText + content.slice(spans[i].end);
           }
           if (content.includes('\0')) throw error('INVALID_TOOL', 'Patched file cannot contain NUL bytes.');
           if (Buffer.byteLength(content) > 256 * 1024) throw error('INVALID_TOOL', 'Patched file exceeds 256 KiB.');
@@ -614,7 +738,14 @@ export class Broker {
         if (call.args.from === call.args.to) throw error('INVALID_TOOL', 'Source and destination paths must differ.');
         const src = await scopedPath(task.workspace, call.args.from, { withStat: true });
         const dst = await scopedPath(task.workspace, call.args.to, { writing: true, withStat: true });
-        if (dst.stat) throw error('PATH_EXISTS', 'Destination file already exists.');
+        const isCaseOnlyRename = Boolean(
+          dst.stat && src.stat
+          && dst.stat.dev === src.stat.dev
+          && dst.stat.ino === src.stat.ino
+          && call.args.from.toLowerCase() === call.args.to.toLowerCase()
+          && path.dirname(src.target) === path.dirname(dst.target)
+        );
+        if (dst.stat && !isCaseOnlyRename) throw error('PATH_EXISTS', 'Destination file already exists.');
         const previous = await readBoundedFile(src.target, 256 * 1024, 'READ_LIMIT', { expectedIdentity: src.stat });
         const preHash = sha256(previous);
         if (call.args.expectedHash !== preHash) throw error('PREIMAGE_MISMATCH', 'Source file changed since the expected snapshot; read it again.');
@@ -626,7 +757,13 @@ export class Broker {
         await fs.mkdir(path.dirname(dst.target), { recursive: true });
         const srcBefore = await scopedPath(task.workspace, call.args.from, { withStat: true });
         const dstBefore = await scopedPath(task.workspace, call.args.to, { writing: true, withStat: true });
-        if (dstBefore.stat) throw error('PATH_EXISTS', 'Destination file appeared during move preparation.');
+        const sameInodeBefore = Boolean(
+          isCaseOnlyRename
+          && dstBefore.stat && srcBefore.stat
+          && dstBefore.stat.dev === srcBefore.stat.dev
+          && dstBefore.stat.ino === srcBefore.stat.ino
+        );
+        if (dstBefore.stat && !sameInodeBefore) throw error('PATH_EXISTS', 'Destination file appeared during move preparation.');
         const srcData = await readBoundedFile(srcBefore.target, 256 * 1024, 'READ_LIMIT', { expectedIdentity: srcBefore.stat });
         if (sha256(srcData) !== preHash) throw error('PREIMAGE_MISMATCH', 'Source file changed during move preparation.');
         this.assertCurrent(taskId, epoch, signal);
@@ -678,7 +815,11 @@ export class Broker {
         }
       } else if (call.name === 'memory.delete') {
         this.assertCurrent(taskId, epoch, signal);
-        result = this.memory.deleteMemory(call.args.id);
+        if (outbound?.privacy?.ephemeralSession) {
+          result = { ok: false, error: { code: 'EPHEMERAL_SESSION', message: 'Ephemeral / Burn Bag mode is active — cross-session memory deletions are paused.' } };
+        } else {
+          result = this.memory.deleteMemory(call.args.id);
+        }
       } else if (call.name === 'browser.open') {
         this.assertCurrent(taskId, epoch, signal);
         const res = await this.browser.open(taskId, call.args, outbound || {}, { signal });
@@ -762,15 +903,30 @@ export class Broker {
       try {
         const src = await scopedPath(task.workspace, operation.args.from, { writing: true, withStat: true });
         const dst = await scopedPath(task.workspace, operation.args.to, { writing: true, withStat: true });
-        const srcData = await readBoundedFile(src.target, 256 * 1024, 'READ_LIMIT', { expectedIdentity: src.stat }).catch(cause => { if (cause.code === 'ENOENT') return null; throw cause; });
-        const dstData = await readBoundedFile(dst.target, 256 * 1024, 'READ_LIMIT', { expectedIdentity: dst.stat }).catch(cause => { if (cause.code === 'ENOENT') return null; throw cause; });
-        if (srcData === null && dstData !== null && sha256(dstData) === operation.postHash) {
-          operation.status = 'succeeded';
-          operation.result = { ok: true, from: operation.args.from, to: operation.args.to, sha256: operation.postHash, bytes: operation.bytes ?? dstData.length, reconciled: true };
-        } else if (srcData !== null && sha256(srcData) === operation.preHash && dstData === null) {
-          operation.status = 'failed';
-          operation.result = { ok: false, error: { code: 'INTERRUPTED_BEFORE_EFFECT', message: 'Expected move did not occur; a new explicit attempt may be scheduled.' }, reconciled: true };
-        } else operation.status = 'outcome_unknown';
+        const caseOnly = operation.args.from.toLowerCase() === operation.args.to.toLowerCase() && path.dirname(src.target) === path.dirname(dst.target);
+        if (caseOnly) {
+          const dirEntries = await fs.readdir(path.dirname(src.target));
+          const hasSrcName = dirEntries.includes(path.basename(src.target));
+          const hasDstName = dirEntries.includes(path.basename(dst.target));
+          const data = dst.stat ? await readBoundedFile(dst.target, 256 * 1024, 'READ_LIMIT', { expectedIdentity: dst.stat }).catch(() => null) : null;
+          if (!hasSrcName && hasDstName && data && sha256(data) === operation.postHash) {
+            operation.status = 'succeeded';
+            operation.result = { ok: true, from: operation.args.from, to: operation.args.to, sha256: operation.postHash, bytes: operation.bytes ?? data.length, reconciled: true };
+          } else if (hasSrcName && !hasDstName && data && sha256(data) === operation.preHash) {
+            operation.status = 'failed';
+            operation.result = { ok: false, error: { code: 'INTERRUPTED_BEFORE_EFFECT', message: 'Expected move did not occur; a new explicit attempt may be scheduled.' }, reconciled: true };
+          } else operation.status = 'outcome_unknown';
+        } else {
+          const srcData = await readBoundedFile(src.target, 256 * 1024, 'READ_LIMIT', { expectedIdentity: src.stat }).catch(cause => { if (cause.code === 'ENOENT') return null; throw cause; });
+          const dstData = await readBoundedFile(dst.target, 256 * 1024, 'READ_LIMIT', { expectedIdentity: dst.stat }).catch(cause => { if (cause.code === 'ENOENT') return null; throw cause; });
+          if (srcData === null && dstData !== null && sha256(dstData) === operation.postHash) {
+            operation.status = 'succeeded';
+            operation.result = { ok: true, from: operation.args.from, to: operation.args.to, sha256: operation.postHash, bytes: operation.bytes ?? dstData.length, reconciled: true };
+          } else if (srcData !== null && sha256(srcData) === operation.preHash && dstData === null) {
+            operation.status = 'failed';
+            operation.result = { ok: false, error: { code: 'INTERRUPTED_BEFORE_EFFECT', message: 'Expected move did not occur; a new explicit attempt may be scheduled.' }, reconciled: true };
+          } else operation.status = 'outcome_unknown';
+        }
       } catch { operation.status = 'outcome_unknown'; }
     } else if ((operation.name === 'process.run' || operation.customCommands) && operation.status !== 'prepared') {
       operation.status = 'outcome_unknown';

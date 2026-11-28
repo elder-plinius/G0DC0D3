@@ -5,7 +5,7 @@ import { parameterLimits, intersectParameterLimits } from './conversation-contro
 import http from 'node:http';
 import { createPromptCommands, revisePromptCommand } from './prompt-commands.mjs';
 import { WorktreeProjects } from './worktree-projects.mjs';
-import { promises as fs } from 'node:fs';
+import { promises as fs, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Runtime } from './runtime.mjs';
@@ -47,8 +47,8 @@ export const capabilities = [
   'Brokered file, search, patch, browser, memory, and sandboxed command tools',
   'ACP v1 persistent multi-harness coordination with live token & thinking streaming',
   'Conclave 2.0 multi-round councils, Brain 2.0 auto-memory/skills, and Live Browser 2.0 takeover + Auto-QA',
-  'Live Sidecar Visualizer (✦ Visualize) in a strict CSP-sandboxed dock with real-time SSE telemetry',
-  'AutoTune passive Empirical-Bayes hyperparameter optimization per model × domain × effort',
+  'Live Sidecar Visualizer (◈ Visualize) in a strict CSP-sandboxed dock with real-time SSE telemetry',
+  'HyperTuner passive Empirical-Bayes hyperparameter optimization per model × domain × effort',
   'Scoped macOS Seatbelt and Linux bubblewrap (bwrap) sandboxing + Hardened/Lockdown zero-telemetry privacy'
 ];
 export const limitations = [
@@ -56,7 +56,7 @@ export const limitations = [
   'Command execution requires macOS Seatbelt or Linux bubblewrap (bwrap) and an explicit owner grant.',
   'Scripted tests validate controller behavior, not universal model performance.',
   'Owner-configured checks establish only their recorded coverage; test success does not prove every requirement.',
-  'Provider capabilities and sampling parameter locks vary by model; AutoTune automatically skips locked parameters.',
+  'Provider capabilities and sampling parameter locks vary by model; HyperTuner automatically skips locked parameters.',
   'Local raw task history may contain source or secrets; diagnostic export redaction is best-effort.'
 ];
 
@@ -286,13 +286,14 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
         let taskId = typeof body.taskId === 'string' && body.taskId.trim() ? body.taskId.trim() : null;
         let recordUserMessage = true;
         if (!taskId) {
+          const cleanMission = String(body.mission || '').trim();
+          if (!cleanMission) throw Object.assign(new Error('Conclave mission prompt is required.'), { code: 'INVALID_CONCLAVE', status: 400 });
           const requestedIds = Array.isArray(body.providerIds) && body.providerIds.length
             ? body.providerIds
             : [...providers.values()].filter(p => p.available !== false && p.kind !== 'scripted').map(p => p.id);
           const fallbackIds = requestedIds.length ? requestedIds : [...providers.values()].filter(p => p.available !== false).map(p => p.id);
           if (!fallbackIds.length) throw Object.assign(new Error('Connect at least one AI provider in Settings → Models before launching a Conclave.'), { code: 'NO_PROVIDER', status: 400 });
           await loadSelected(fallbackIds);
-          const cleanMission = String(body.mission || '').trim();
           const title = (body.formationName ? `${body.formationName}: ` : '✦ Conclave: ') + (cleanMission.slice(0, 56) || 'Multi-Agent Mission');
           const created = await createConversationTask(runtime, dataDir, {
             title,
@@ -435,6 +436,9 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
       }
       const memoryDeleteMatch=url.pathname.match(/^\/api\/memory\/([^/]+)$/);
       if(memoryDeleteMatch && req.method==='DELETE') {
+        if (runtime.getPrivacy().settings.ephemeralSession === true) {
+          return send(res, 403, { error: 'Ephemeral engagement mode is active; persistent memory mutations are paused.', code: 'EPHEMERAL_SESSION' });
+        }
         const result=runtime.memory.deleteMemory(decodeURIComponent(memoryDeleteMatch[1]));
         if(!result.deleted)return send(res,404,{error:'Memory not found',code:'MEMORY_NOT_FOUND'});
         return send(res,200,result);
@@ -451,6 +455,9 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
         return send(res,200,{ok:true,skills});
       }
       if(req.method==='POST' && url.pathname==='/api/skills') {
+        if (runtime.getPrivacy().settings.ephemeralSession === true) {
+          return send(res, 403, { error: 'Ephemeral engagement mode is active; persistent skill saves are paused.', code: 'EPHEMERAL_SESSION' });
+        }
         const body=await readBody(req);
         const skill=await saveUserSkill(dataDir,{name:body.name,description:body.description,body:body.body,mode:body.mode});
         return send(res,201,{ok:true,skill});
@@ -1124,8 +1131,10 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
           await readBody(req);
           if (worktrees.attachments.has(id) || worktrees.list().some(project => project.chatId === id))
             throw Object.assign(new Error('Remove this chat’s GodCode worktree before deleting the chat.'), { status: 409 });
+          const result = await runtime.purgeTask(id);
+          previews.revokeTask(id);
           for (const client of [...sseClients]) if (client.taskId === id) client.close();
-          return send(res,200,await runtime.purgeTask(id));
+          return send(res,200,result);
         }
         if(req.method==='PATCH'&&action==='policy')return send(res,200,{task:publicTask(runtime.updatePolicy(id,await readBody(req)),runtime)});
         if(req.method==='POST'&&action==='visualize') {
@@ -1287,7 +1296,13 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
   };
 }
 
-if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)) {
+const isDirectMain = (argv1, metaUrl) => {
+  if (!argv1) return false;
+  const selfPath = fileURLToPath(metaUrl);
+  try { return realpathSync(argv1) === realpathSync(selfPath); }
+  catch { return path.resolve(argv1) === path.resolve(selfPath); }
+};
+if(isDirectMain(process.argv[1], import.meta.url)) {
   const envFile=path.join(path.dirname(fileURLToPath(import.meta.url)),'..', '.env');
   try{const lines=await fs.readFile(envFile,'utf8');for(const raw of lines.split(/\r?\n/)){const m=raw.match(/^\s*([A-Z_][A-Z0-9_]*)=(.*)$/);if(m&&!(m[1] in process.env)){let v=m[2].trim();if((v.startsWith('"')&&v.endsWith('"'))||(v.startsWith("'")&&v.endsWith("'")))v=v.slice(1,-1);process.env[m[1]]=v;}}}catch{}
   const dataDir = path.resolve(process.env.G0D_DATA_DIR || path.join(projectDir, '.g0dc0d3'));

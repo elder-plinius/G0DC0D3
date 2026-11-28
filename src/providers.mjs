@@ -2583,7 +2583,15 @@ export class AntigravityCliProvider extends CodexProvider {
               result = await invokeViaAcp(false, remainingMs);
             }
           } else {
-            result = await invokeViaAcp(false);
+            try {
+              result = await invokeViaAcp(false);
+            } catch (err) {
+              if (canManageSession) {
+                this.sessions.delete(taskId);
+                await this.acpPool.drop(`task:${taskId}`).catch(() => {});
+              }
+              throw err;
+            }
           }
         } catch (acpErr) {
           if (acpErr?.code === 'cancelled' || acpErr?.code === 'PROVIDER_CLOSED' || acpErr?.code === 'ETIMEDOUT' || acpErr?.code === 'quota_exhausted' || acpErr?.code === 'rate_limit' || signal?.aborted || this.closed) {
@@ -2853,7 +2861,6 @@ export class AcpHarnessProvider {
         effort: task.effort || this.cliSettings?.reasoningEffort || null,
         objective: task.objective || '',
         constraints: task.constraints || [],
-        contractVersion: task.contractVersion || 1,
       })).digest('hex');
 
       let entry = isEphemeral ? null : this.acpPool.get(effectiveKey);
@@ -2878,11 +2885,13 @@ export class AcpHarnessProvider {
           const mode = (!this.delegated || planMode)
             ? 'plan'
             : (execution?.enabled && hasExplicitWildcardAllow ? 'auto' : 'default');
+          const modelHasEffortSuffix = /-(?:low|medium|high|xhigh)$/i.test(String(this.model || ''));
+          const explicitEffort = this.cliSettings?.reasoningEffort || (task.effort && (!modelHasEffortSuffix || task.effort !== 'medium') ? task.effort : null);
           const sess = await client.createSession({
             cwd: effectiveCwd,
             model: this.model,
             mode,
-            effort: task.effort || this.cliSettings?.reasoningEffort,
+            effort: explicitEffort,
             signal,
           });
           if (this.closed || signal?.aborted) {
@@ -2911,14 +2920,60 @@ export class AcpHarnessProvider {
 
       const followups = Array.isArray(task.followups) ? task.followups : [];
       const newFollowups = followups.slice(entry.followupsCount || 0).map(f => String(f?.message || '')).filter(Boolean);
+      const failingChecks = Array.isArray(task.verification?.checks)
+        ? task.verification.checks.filter(c => c && c.status !== 'pass')
+        : [];
+      const verificationFeedback = failingChecks.length
+        ? [
+            'Verification failed on the previous attempt. Fix the root cause of every failing check below and re-run tests:',
+            ...failingChecks.slice(0, 6).map(c => {
+              const out = String(c.stderr || c.stdout || c.detail || '').trim().slice(0, 800);
+              return `- ${c.name || 'Check'} (${c.status}): ${out}`;
+            }),
+          ].join('\n')
+        : '';
+
+      // Pre-index workspace files on Turn 1 (bounded 28 KiB) so delegated ACP harnesses
+      // skip blind directory discovery & redundant read_file turns.
+      let workspacePreload = '';
+      if (entry.turnCount === 0 && this.delegated && workspace && Array.isArray(context.files) && context.files.length > 0) {
+        const fileList = context.files.slice(0, 120).map(f => f.path).join(', ');
+        const inlineBlocks = [];
+        let budget = 28 * 1024;
+        for (const f of context.files) {
+          if (budget <= 512) break;
+          if (typeof f?.content !== 'string' || !f.path) continue;
+          if (/(?:^|\/)(?:package-lock\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock)$/.test(f.path)) continue;
+          if (f.content.length > 10 * 1024 || f.content.length > budget) continue;
+          inlineBlocks.push(`--- ${f.path} ---\n${f.content}`);
+          budget -= f.content.length;
+        }
+        const checkCmds = Array.isArray(task.checks) && task.checks.length
+          ? task.checks.map(c => c.command).filter(Boolean).join('; ')
+          : '';
+        workspacePreload = [
+          `Workspace files (${context.files.length}): ${fileList}`,
+          checkCmds ? `Verification command(s) G0DC0D3 will run after your turn: ${checkCmds}` : '',
+          inlineBlocks.length
+            ? `Preloaded file contents (skip redundant ls/read_file on these unchanged files; apply surgical edits directly, handle edge cases thoroughly, run the verification command once to confirm, and finish immediately once passing without creating unrequested extra test files or extra git status checks):\n${inlineBlocks.join('\n\n')}`
+            : '',
+        ].filter(Boolean).join('\n');
+      }
+
+      const rawObjective = String(task.objective || '');
+      const hasConstraintsInObjective = /\bConstraints:\n/i.test(rawObjective);
       const promptText = entry.turnCount === 0
         ? [
-            task.objective || '',
-            task.constraints?.length ? `Constraints:\n- ${task.constraints.join('\n- ')}` : '',
+            rawObjective,
+            !hasConstraintsInObjective && task.constraints?.length ? `Constraints:\n- ${task.constraints.join('\n- ')}` : '',
+            workspacePreload,
+            ...(followups.length ? ['Follow-up instructions:', ...followups.map((f, i) => `${i + 1}. ${String(f?.message || '').trim()}`).filter(Boolean)] : []),
+            verificationFeedback,
             task.overseerGuidance ? `Overseer Guidance: ${task.overseerGuidance}` : '',
           ].filter(Boolean).join('\n\n')
         : [
-            newFollowups.length ? newFollowups.join('\n\n') : 'Continue and complete the objective.',
+            newFollowups.length ? newFollowups.join('\n\n') : (verificationFeedback || 'Continue and complete the objective.'),
+            newFollowups.length && verificationFeedback ? verificationFeedback : '',
             task.overseerGuidance ? `Overseer Guidance: ${task.overseerGuidance}` : '',
           ].filter(Boolean).join('\n\n');
 

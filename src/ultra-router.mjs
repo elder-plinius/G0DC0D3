@@ -280,7 +280,9 @@ export function matchBenchmarkEntry(candidate, matrix = loadBenchmarkMatrix()) {
   };
 }
 
-export function scoreCandidateForTask({ candidate, classification, matrix, learning, settings }) {
+export function scoreCandidateForTask({ candidate = {}, classification = {}, matrix, learning, settings } = {}) {
+  candidate = candidate && typeof candidate === 'object' ? candidate : {};
+  classification = classification && typeof classification === 'object' ? classification : {};
   const cfg = normalizeRouterSettings(settings || DEFAULT_ROUTER_SETTINGS);
   const primary = classification.primaryDomain || 'swe_coding';
   const secondary = classification.secondaryDomain;
@@ -370,8 +372,11 @@ export function routeUltraPlinian({ objective = '', files = [], attachments = []
   const matrix = loadBenchmarkMatrix(cfg.customBenchmarks);
   const classification = classifyPromptDomain(objective, { files, attachments, history });
   classification.needsTools = promptNeedsLiveTools(objective);
-  const ranked = (candidates || [])
-    .filter(c => c && c.id && c.available !== false && !c.closed && c.kind !== 'scripted')
+  const validCandidates = Array.isArray(candidates)
+    ? candidates.filter(c => c && typeof c.id === 'string' && c.id && c.available !== false && !c.closed && c.kind !== 'scripted')
+    : [];
+  const byId = new Map(validCandidates.map(c => [c.id, c]));
+  const ranked = validCandidates
     .map(candidate => scoreCandidateForTask({ candidate, classification, matrix, learning, settings: cfg }))
     .sort((a, b) => b.totalScore - a.totalScore || b.benchmarkPrior - a.benchmarkPrior || a.id.localeCompare(b.id));
 
@@ -388,7 +393,7 @@ export function routeUltraPlinian({ objective = '', files = [], attachments = []
   if (topUncensored) waterfallIds.push(topUncensored.id);
 
   // For Auto-Arena: pick up to cfg.arenaSize (2..4) distinct-family contenders across connected HTTP & Venice catalog models + an independent Judge
-  const draftCapable = ranked.filter(r => r.id.startsWith('venice-catalog:') || candidates.find(c => c.id === r.id)?.kind === 'http');
+  const draftCapable = ranked.filter(r => r.id.startsWith('venice-catalog:') || byId.get(r.id)?.kind === 'http');
   const pool = draftCapable;
   let arenaModels = null;
   let judgeId = null;

@@ -212,9 +212,11 @@ async function callSingleOverseer({ provider, system, user, privacy = DEFAULT_PR
     const ceilings = [maxTokens, provider.maxOutputTokensCeiling, limitMaxTokens].filter(v => Number.isInteger(v) && v > 0);
     const clampedTokens = ceilings.length ? Math.min(...ceilings) : maxTokens;
     const tempField = limits?.fields?.temperature;
-    const tempParams = tempField
+    const modelBase = String(provider?.model || provider?.id || '').toLowerCase().split('/').pop();
+    const reasoningLocked = /^(?:o1|o3|o4|gpt-[56])(?:$|[.-])/.test(modelBase);
+    const tempParams = (!reasoningLocked && tempField && tempField.supported !== false)
       ? { temperature: Math.min(tempField.max ?? 2, Math.max(tempField.min ?? 0, 0.2)) }
-      : { temperature: 0.2 };
+      : {};
     const outOpts = { privacy, onOutbound, ...(extraSecrets ? { extraSecrets } : {}) };
     if (typeof provider.draft === 'function') {
       const res = await provider.draft(
@@ -336,7 +338,7 @@ export async function judgeAmbiguousReply({ provider, backupProviders = [], obje
   const rawConf = Number(res.json.confidence);
   const confidence = Number.isFinite(rawConf) ? Math.max(0, Math.min(1, rawConf)) : (isRefusal ? 0.85 : 0.9);
   const rawSig = typeof res.json.extractedSignature === 'string' ? res.json.extractedSignature.trim().toLowerCase() : '';
-  const extractedSignature = isRefusal && rawSig.length >= 12 && rawSig.length <= 120 && !/[`{}[\]]/.test(rawSig)
+  const extractedSignature = isRefusal && rawSig.length >= 20 && rawSig.length <= 120 && !/[`{}[\]]/.test(rawSig)
     ? rawSig
     : null;
   return {
@@ -407,7 +409,7 @@ export async function adviseUnblock({
     id: c.id,
     ...(c.label ? { label: c.label } : {}),
     ...(c.tier ? { tier: c.tier } : {}),
-    ...(Number.isFinite(c.score) ? { score: Math.round(c.score) } : {}),
+    ...(Number.isFinite(c.score) ? { score: Number(c.score.toFixed(3)) } : {}),
     ...(c.observed ? { winRate: c.observed.winRate, refusals: c.observed.refusals } : {})
   }));
   const system = buildOverseerSystem([

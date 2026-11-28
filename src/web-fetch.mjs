@@ -3,7 +3,7 @@ import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
 import zlib from 'node:zlib';
-import { DEFAULT_PRIVACY_SETTINGS, checkTargetScope } from './privacy.mjs';
+import { DEFAULT_PRIVACY_SETTINGS, checkTargetScope, environmentSecrets, redactOutboundText } from './privacy.mjs';
 import { APP_VERSION } from './version.mjs';
 
 const MAX_REDIRECTS = 3;
@@ -57,15 +57,14 @@ export function decodeMappedIpv4(ip) {
   if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0xffff && g5 === 0) {
     return groupsToIpv4(g6, g7);
   }
-  // 64:ff9b::/96 (NAT64 well-known)
-  if (g0 === 0x0064 && g1 === 0xff9b && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0) {
-    return groupsToIpv4(g6, g7);
-  }
+  // 64:ff9b::/96 (NAT64 well-known) is blocked unconditionally in isPrivateIp below.
   return null;
 }
 
 export function isPrivateIp(ip) {
   const raw = String(ip || '').toLowerCase().replace(/^\[|\]$/g, '');
+  const groupsPre = parseIpv6Groups(raw);
+  if (groupsPre && groupsPre[0] === 0x0064 && groupsPre[1] === 0xff9b) return true; // NAT64 well-known & local-use
   const mapped = decodeMappedIpv4(raw);
   const cleaned = mapped || raw;
   if (net.isIPv4(cleaned)) {
@@ -84,17 +83,17 @@ export function isPrivateIp(ip) {
     if (a >= 224) return true; // Multicast / reserved
     return false;
   }
-  const groups = parseIpv6Groups(raw);
+  const groups = groupsPre;
   if (groups) {
     const [g0, g1, g2, g3, g4, g5, g6, g7] = groups;
     if (groups.every(g => g === 0)) return true; // ::
     if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0 && g6 === 0 && g7 === 1) return true; // ::1
-    if (g0 === 0x0064 && g1 === 0xff9b) return true; // NAT64 well-known & local-use (64:ff9b::/96, 64:ff9b:1::/48)
     if (g0 === 0x0100 && g1 === 0 && g2 === 0 && g3 === 0) return true; // RFC 6666 discard-only 100::/64
     if (g0 === 0x2002) return true; // RFC 3056 6to4 (embeds arbitrary IPv4)
-    if (g0 === 0x2001 && (g1 === 0x0db8 || g1 === 0x0000)) return true; // Documentation / Teredo
+    if (g0 === 0x2001 && (g1 === 0x0db8 || g1 === 0x0000 || g1 === 0x0002 || (g1 >= 0x0010 && g1 <= 0x002f))) return true; // Documentation / Teredo / Benchmarking / ORCHID
     if ((g0 & 0xfe00) === 0xfc00) return true; // ULA fc00::/7
     if ((g0 & 0xffc0) === 0xfe80) return true; // Link-local fe80::/10
+    if ((g0 & 0xffc0) === 0xfec0) return true; // Deprecated site-local fec0::/10
     if ((g0 & 0xff00) === 0xff00) return true; // Multicast ff00::/8
     return false;
   }
@@ -323,7 +322,22 @@ export async function safeWebFetch({ url, maxChars = DEFAULT_MAX_CHARS } = {}, {
     onOutbound?.({ providerId: 'web.fetch', host: initialParsed.hostname, protocol: initialParsed.protocol.replace(':', ''), zdrClass: 'web-fetch', zdrFlags: ['scope-guard'], secretsRedacted: 0, blocked: true, reason: initialScope.message });
     throw fault(initialScope.code, initialScope.message);
   }
+  const assertResolvedScopeAllowed = (validatedUrl) => {
+    const denyOnly = Array.isArray(privacy?.scopeDeny) && privacy.scopeDeny.length ? { scopeAllow: [], scopeDeny: privacy.scopeDeny } : null;
+    if (!denyOnly) return;
+    const addrs = Array.isArray(validatedUrl?._validatedAddresses)
+      ? validatedUrl._validatedAddresses.map(r => r?.address).filter(Boolean)
+      : (validatedUrl?._validatedAddress ? [validatedUrl._validatedAddress] : []);
+    for (const addr of addrs) {
+      const ipScope = checkTargetScope(addr, denyOnly);
+      if (!ipScope.allowed) {
+        onOutbound?.({ providerId: 'web.fetch', host: validatedUrl.hostname, protocol: validatedUrl.protocol.replace(':', ''), zdrClass: 'web-fetch', zdrFlags: ['scope-guard', 'dns-ip-deny'], secretsRedacted: 0, blocked: true, reason: ipScope.message });
+        throw fault(ipScope.code, ipScope.message);
+      }
+    }
+  };
   let currentUrl = await validateSafePublicUrl(initialParsed.href, lookup);
+  assertResolvedScopeAllowed(currentUrl);
   const timeout = AbortSignal.timeout(15000);
   const combinedSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
   const reqHeaders = { 'user-agent': `G0DC0D3/${APP_VERSION} (research-harness)`, 'accept': 'text/markdown, text/plain, text/html, application/json;q=0.9' };
@@ -353,13 +367,15 @@ export async function safeWebFetch({ url, maxChars = DEFAULT_MAX_CHARS } = {}, {
     if ([301, 302, 303, 307, 308].includes(status)) {
       const location = respHeaders.get('location');
       if (!location || hop === MAX_REDIRECTS) throw fault('TOO_MANY_REDIRECTS', 'Redirect limit exceeded.');
-      const nextParsed = new URL(location, currentUrl);
+      let nextParsed;
+      try { nextParsed = new URL(location, currentUrl); } catch { throw fault('INVALID_URL', 'Malformed redirect Location URL.'); }
       const hopScope = checkTargetScope(nextParsed.href, privacy);
       if (!hopScope.allowed) {
         onOutbound?.({ providerId: 'web.fetch', host: nextParsed.hostname, protocol: nextParsed.protocol.replace(':', ''), zdrClass: 'web-fetch', zdrFlags: ['scope-guard'], secretsRedacted: 0, blocked: true, reason: hopScope.message });
         throw fault(hopScope.code, hopScope.message);
       }
       currentUrl = await validateSafePublicUrl(nextParsed.href, lookup);
+      assertResolvedScopeAllowed(currentUrl);
       continue;
     }
     const contentType = String(respHeaders.get('content-type') || 'text/plain').toLowerCase();
@@ -439,12 +455,20 @@ export async function safeWebSearch({ query, limit = 6 } = {}, { privacy = DEFAU
     onOutbound?.({ providerId: 'web.search', host: 'html.duckduckgo.com', protocol: 'https', zdrClass: 'web-search', zdrFlags: [], secretsRedacted: 0, blocked: true, reason: 'Blocked by Local-Only privacy mode.' });
     throw fault('PRIVACY_LOCAL_ONLY', 'Local-only inference is enabled; outbound web.search is blocked.');
   }
-  const endpoint = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`;
+  const scopeCheck = checkTargetScope('https://html.duckduckgo.com/html/', privacy);
+  if (!scopeCheck.allowed) {
+    onOutbound?.({ providerId: 'web.search', host: 'html.duckduckgo.com', protocol: 'https', zdrClass: 'web-search', zdrFlags: ['scope-guard'], secretsRedacted: 0, blocked: true, reason: scopeCheck.message });
+    throw fault(scopeCheck.code, scopeCheck.message);
+  }
+  const redactedQ = privacy?.redactOutboundSecrets !== false ? redactOutboundText(q, environmentSecrets()) : { text: q, count: 0 };
+  const safeQuery = redactedQ.text;
+  const endpoint = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(safeQuery)}`;
   const timeout = AbortSignal.timeout(15000);
   const combinedSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
-  onOutbound?.({ providerId: 'web.search', host: 'html.duckduckgo.com', protocol: 'https', zdrClass: 'web-search', zdrFlags: ['zero-tracking-search'], secretsRedacted: 0, blocked: false });
+  onOutbound?.({ providerId: 'web.search', host: 'html.duckduckgo.com', protocol: 'https', zdrClass: 'web-search', zdrFlags: ['zero-tracking-search'], secretsRedacted: redactedQ.count, blocked: false });
   const res = await fetchImpl(endpoint, {
     method: 'GET',
+    redirect: 'manual',
     signal: combinedSignal,
     headers: { 'user-agent': `G0DC0D3/${APP_VERSION} (research-harness)`, 'accept': 'text/html' }
   });
@@ -456,14 +480,13 @@ export async function safeWebSearch({ query, limit = 6 } = {}, { privacy = DEFAU
 }
 
 function unescapePdfLiteral(str) {
-  return str
-    .replace(/\\n/g, '\n')
-    .replace(/\\r/g, '\r')
-    .replace(/\\t/g, '\t')
-    .replace(/\\\(/g, '(')
-    .replace(/\\\)/g, ')')
-    .replace(/\\\\/g, '\\')
-    .replace(/\\([0-7]{1,3})/g, (_, oct) => String.fromCharCode(parseInt(oct, 8)));
+  return str.replace(/\\([nrt()\\]|[0-7]{1,3})/g, (_, tok) => {
+    if (tok === 'n') return '\n';
+    if (tok === 'r') return '\r';
+    if (tok === 't') return '\t';
+    if (tok === '(' || tok === ')' || tok === '\\') return tok;
+    return String.fromCharCode(parseInt(tok, 8));
+  });
 }
 
 function extractTextOps(chunk) {
@@ -533,7 +556,13 @@ export function extractPdfText(buffer, maxChars = 48000) {
           decoded = inflated.toString('latin1');
         } catch (err2) {
           if (err2?.code === 'ERR_BUFFER_TOO_LARGE') totalDecompressed += MAX_DECOMPRESSED_STREAM;
-          else decoded = rawSlice.length <= MAX_DECOMPRESSED_STREAM ? rawSlice : null;
+          else if (rawSlice.length <= MAX_DECOMPRESSED_STREAM && totalDecompressed + rawSlice.length <= MAX_TOTAL_DECOMPRESSED) {
+            totalDecompressed += rawSlice.length;
+            decoded = rawSlice;
+          } else {
+            totalDecompressed += Math.min(rawSlice.length, MAX_DECOMPRESSED_STREAM);
+            decoded = null;
+          }
         }
       }
     }

@@ -99,7 +99,7 @@ const hash=content=>createHash('sha256').update(content).digest('hex');
 export function publishablePath(relative) {
   if (typeof relative !== 'string' || !relative || path.isAbsolute(relative) || relative.includes('\\') || /[\x00-\x1f\x7f]/.test(relative)) return false;
   const parts = relative.split('/');
-  if (parts.some(name => !name || name.startsWith('.') || excludedDirs.has(name) || /(?:^|[._-])(?:secret|secrets|credentials|private[-_]?key)(?:[._-]|$)/i.test(name) || /\.(?:pem|key|p12|pfx|sqlite|db)$/i.test(name))) return false;
+  if (parts.some(name => !name || name.startsWith('.') || excludedDirs.has(name.toLowerCase()) || /(?:^|[._-])(?:secret|secrets|credentials|private[-_]?key)(?:[._-]|$)/i.test(name) || /\.(?:pem|key|p12|pfx|sqlite|db)$/i.test(name))) return false;
   return sourceExtensions.has(path.extname(parts.at(-1)).toLowerCase()) || specialNames.has(parts.at(-1));
 }
 
@@ -177,12 +177,13 @@ export async function previewWorkspace(sourcePath,{includeContent=false}={}) {
       if(++entries>10000)throw new Error('Project scan exceeds 10,000 entries; choose a smaller source directory');
       const rel=relative?`${relative}/${name}`:name,full=path.join(directory,name);
       const omit=reason=>omitted.push({path:rel,reason});
-      if(name.startsWith('.')||excludedDirs.has(name)){omit('hidden, dependency, or generated path');continue;}
+      if(name.startsWith('.')||excludedDirs.has(name.toLowerCase())){omit('hidden, dependency, or generated path');continue;}
       if(/(?:^|[._-])(?:secret|secrets|credentials|private[-_]?key)(?:[._-]|$)/i.test(name)||/\.(?:pem|key|p12|pfx|sqlite|db)$/i.test(name)){omit('credential or local-state filename');continue;}
       const before=await fs.lstat(full);
       if(before.isSymbolicLink()){omit('symlink');continue;}
       if(before.isDirectory()){if(depth>=16)omit('directory depth limit');else await walk(full,rel,depth+1);continue;}
       if(!before.isFile()){omit('special file');continue;}
+      if(before.nlink!==1){omit('hard link');continue;}
       if(!sourceExtensions.has(path.extname(name).toLowerCase())&&!specialNames.has(name)){omit('unrecognized source extension');continue;}
       if(before.size>256*1024){omit('file exceeds 256 KiB');continue;}
       if(files.length>=200||totalBytes+before.size>2*1024*1024){omit('copy size limit');continue;}
@@ -193,7 +194,8 @@ export async function previewWorkspace(sourcePath,{includeContent=false}={}) {
       if(bytes.length>256*1024||totalBytes+bytes.length>2*1024*1024){omit('copy size limit');continue;}
       let content;try{content=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(bytes);}catch{omit('non-UTF-8 content');continue;}
       if(content.includes('\0')){omit('binary content');continue;}
-      const file={path:rel,bytes:bytes.length,sha256:hash(bytes)};if(includeContent)file.content=content;
+      const executable = Boolean(before.mode & 0o111);
+      const file={path:rel,bytes:bytes.length,sha256:hash(bytes),...(executable ? { executable: true } : {})};if(includeContent)file.content=content;
       if(CHECK_MANIFEST_PATHS.has(rel))checkCandidates.push({path:rel,content});
       files.push(file);totalBytes+=bytes.length;
     }
@@ -209,12 +211,12 @@ export async function previewWorkspace(sourcePath,{includeContent=false}={}) {
 export async function createImportedTask(runtime,dataDir,input) {
   if(typeof input.objective!=='string'||!input.objective.trim())throw new Error('Describe the change to make');
   const providerIds=input.providerIds||[];
-  if(!providerIds.length||providerIds.some(id=>!runtime.providers.has(id)||runtime.providers.get(id).kind==='scripted'))throw new Error('Choose a configured live provider for your project');
+  if(!Array.isArray(providerIds)||!providerIds.length||providerIds.some(id=>{const p=typeof id==='string'&&runtime.providers.get(id);return !p||p.kind==='scripted'||p.available===false||p.closed;}))throw new Error('Choose a configured live provider for your project');
   const capture=await previewWorkspace(input.sourcePath,{includeContent:true});
   if(input.previewHash&&input.previewHash!==capture.snapshotHash)throw new Error('Source files changed since preview; preview the copy again');
   const workspace=path.join(path.resolve(dataDir),'workspaces',randomUUID());await fs.mkdir(workspace,{recursive:true,mode:0o700});
   try {
-    for(const file of capture.files){const full=path.join(workspace,file.path);await fs.mkdir(path.dirname(full),{recursive:true});await fs.writeFile(full,file.content,{mode:0o600});}
+    for(const file of capture.files){const full=path.join(workspace,file.path);await fs.mkdir(path.dirname(full),{recursive:true});await fs.writeFile(full,file.content,{mode:file.executable?0o700:0o600});}
     try { await gitInit(workspace); } catch {}
     const manifest={...capture,files:capture.files.map(({content,...file})=>file)};
     const task=await runtime.createTask({title:input.title||path.basename(capture.sourcePath),objective:input.objective,workspace,providers:providerIds,policy:input.policy,execution:input.execution,checks:input.checks,persona:input.persona,...(input.effort !== undefined ? { effort: input.effort } : {}),planMode:Boolean(input.planMode),

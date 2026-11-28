@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { constants as fsConstants, promises as fs } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { readBoundedFile, scopedPath, sha256 } from './broker.mjs';
 import { APP_VERSION } from './version.mjs';
 import { evaluatePermission, HARD_DENY_SHELL_RULES, STRICT_DEFAULT_PRESET } from './permissions.mjs';
@@ -204,8 +205,14 @@ function extractAcpPaths(toolCall = {}) {
     if (typeof val === 'string' && val.trim()) {
       const trimmed = val.trim();
       let cleaned = trimmed;
-      if (trimmed.startsWith('file://')) {
-        try { cleaned = decodeURIComponent(trimmed.slice(7)); } catch { return; }
+      if (/^file:/i.test(trimmed)) {
+        try {
+          const parsed = new URL(trimmed);
+          if (parsed.hostname && parsed.hostname !== 'localhost') return;
+          cleaned = fileURLToPath(parsed);
+        } catch {
+          return;
+        }
       }
       if (cleaned) found.push(cleaned);
     }
@@ -427,16 +434,25 @@ export function createAcpPermissionHandler({
     }
 
     const args = toolCall.rawInput || toolCall.args || {};
-    let normalizedArgs = {};
+    let verdict;
     if (mappedTool === 'process.run') {
-      normalizedArgs = { command: String(args.command || args.CommandLine || toolCall.title || '') };
+      const baseCmd = String(args.command || args.CommandLine || toolCall.title || '').trim();
+      const extraArgs = Array.isArray(args.args) ? args.args : Array.isArray(args.argv) ? args.argv : [];
+      const combined = extraArgs.length ? `${baseCmd} ${extraArgs.map(a => String(a)).join(' ')}` : baseCmd;
+      const vCombined = evaluatePermission(rules, 'process.run', { command: combined });
+      const vHardDeny = evaluatePermission(HARD_DENY_SHELL_RULES, 'process.run', { command: combined });
+      verdict = vHardDeny.action === 'deny' ? vHardDeny : vCombined;
     } else if (mappedTool === 'repo.move') {
-      normalizedArgs = { from: resolvedRels[0] || '', to: resolvedRels[1] || resolvedRels[0] || '' };
+      verdict = evaluatePermission(rules, 'repo.move', { from: resolvedRels[0] || '', to: resolvedRels[1] || resolvedRels[0] || '' });
     } else if (resolvedRels.length) {
-      normalizedArgs = { path: resolvedRels[0] };
+      verdict = { action: 'allow', reason: 'allowed' };
+      for (const rel of resolvedRels) {
+        const v = evaluatePermission(rules, mappedTool, { path: rel });
+        if (v.action !== 'allow') { verdict = v; break; }
+      }
+    } else {
+      verdict = evaluatePermission(rules, mappedTool, {});
     }
-
-    const verdict = evaluatePermission(rules, mappedTool, normalizedArgs);
     const allowed = verdict.action === 'allow';
     const outcome = selectPermissionOption(options, allowed);
     onPermissionDecision?.({ allowed, reason: verdict.reason || verdict.action, tool: mappedTool, targetPaths: resolvedRels, toolCall });
@@ -594,10 +610,11 @@ export function createAcpSandboxHandlers({
         ? `${shellQuote(cmdRaw)} ${argsList.map(shellQuote).join(' ')}`
         : cmdRaw;
 
-      // Evaluate permissions against BOTH unquoted and shell-quoted forms so HARD_DENY_SHELL_RULES can never be evaded.
+      // Evaluate user rules against unquoted command (so prefix rules like `npm test*` match cleanly),
+      // and always enforce HARD_DENY_SHELL_RULES against both unquoted and shell-quoted forms.
       const v1 = evaluatePermission(rules, 'process.run', { command: unquotedCommand });
-      const v2 = evaluatePermission(rules, 'process.run', { command: fullCommand });
-      if (v1.action !== 'allow' || v2.action !== 'allow') {
+      const vHardQuoted = evaluatePermission(HARD_DENY_SHELL_RULES, 'process.run', { command: fullCommand });
+      if (v1.action !== 'allow' || vHardQuoted.action === 'deny') {
         throw Object.assign(new Error('Permission denied for command.'), { code: -32003 });
       }
 
@@ -749,7 +766,7 @@ export class AcpClient {
     permissionHandler = null,
     sandboxHandlers = null,
     rpcTimeoutMs = DEFAULT_RPC_TIMEOUT_MS,
-    initTimeoutMs = 5000,
+    initTimeoutMs = 8000,
   } = {}) {
     this.binary = binary;
     this.args = Array.isArray(args) ? [...args] : [];
@@ -880,9 +897,10 @@ export class AcpClient {
         if (['cancelled', 'PROVIDER_CLOSED', 'quota_exhausted', 'rate_limit', 'provider_configuration'].includes(err?.code)) {
           throw err;
         }
+        const isTimeout = err?.code === 'ETIMEDOUT';
         throw Object.assign(new Error(`ACP initialize handshake failed (${err?.message || 'unknown'})`), {
-          code: 'acp_init_failed',
-          retryable: false,
+          code: isTimeout ? 'acp_init_timeout' : 'acp_init_failed',
+          retryable: isTimeout,
         });
       }
     })();

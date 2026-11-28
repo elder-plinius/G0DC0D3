@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync, chmodSync, openSync, closeSync, writeFileSync, readFileSync, unlinkSync, fsyncSync, linkSync } from 'node:fs';
+import { mkdirSync, chmodSync, openSync, closeSync, writeFileSync, readFileSync, unlinkSync, fsyncSync, linkSync, realpathSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -14,15 +14,15 @@ const safeParse = row => {
 
 export class Store {
   constructor(dataDir) {
-    this.dataDir = resolve(dataDir);
-    mkdirSync(this.dataDir, { recursive: true, mode: 0o700 });
+    mkdirSync(resolve(dataDir), { recursive: true, mode: 0o700 });
+    this.dataDir = realpathSync(resolve(dataDir));
     try { chmodSync(this.dataDir, 0o700); } catch {}
     this.lockPath = join(this.dataDir, 'owner.lock');
     this.ownerToken = randomUUID();
     this._acquireOwnership();
     try {
       this.db = new DatabaseSync(join(this.dataDir, 'state.sqlite'));
-      this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
+      this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000; PRAGMA secure_delete=ON;
       CREATE TABLE IF NOT EXISTS tasks(id TEXT PRIMARY KEY, data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, seq INTEGER NOT NULL, data TEXT NOT NULL, UNIQUE(task_id,seq));
       CREATE TABLE IF NOT EXISTS operations(id TEXT PRIMARY KEY, task_id TEXT NOT NULL, data TEXT NOT NULL);
@@ -42,7 +42,23 @@ export class Store {
       CREATE INDEX IF NOT EXISTS scheduled_runs_job ON scheduled_runs(job_id, started_at DESC);`);
       this.hasMemoryFts = false;
       try {
-        this.db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(id UNINDEXED, scope, title, content, tags);`);
+        const existingFts = this.db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='memories_fts'").get();
+        if (existingFts?.sql && !/scope\s+UNINDEXED/i.test(existingFts.sql)) {
+          this.db.exec('DROP TABLE IF EXISTS memories_fts;');
+        }
+        this.db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(id UNINDEXED, scope UNINDEXED, title, content, tags);`);
+        const memCount = Number(this.db.prepare('SELECT COUNT(*) AS n FROM memories').get()?.n || 0);
+        const ftsCount = Number(this.db.prepare('SELECT COUNT(*) AS n FROM memories_fts').get()?.n || 0);
+        if (memCount !== ftsCount) {
+          this.db.exec('DELETE FROM memories_fts;');
+          const rows = this.db.prepare('SELECT id, scope, title, content, tags FROM memories').all();
+          const ins = this.db.prepare('INSERT INTO memories_fts(id, scope, title, content, tags) VALUES(?, ?, ?, ?, ?)');
+          for (const r of rows) {
+            let tagText = '';
+            try { const arr = JSON.parse(r.tags); if (Array.isArray(arr)) tagText = arr.join(' '); } catch {}
+            ins.run(r.id, r.scope, r.title, r.content, tagText);
+          }
+        }
         this.hasMemoryFts = true;
       } catch {
         this.hasMemoryFts = false;
@@ -245,6 +261,24 @@ export class Store {
       return this.getTask(child.id);
     });
   }
+  reserveCrewSubagentCall(taskId) {
+    return this.transaction(() => {
+      const child = this.getTask(taskId);
+      if (!child?.crewMember) return false;
+      const crew = this.getCrew(child.crewMember.runId);
+      const parent = crew && this.getTask(crew.parentId);
+      if (!crew || !parent || !['running', 'verifying'].includes(crew.status) || parent.epoch !== crew.parentEpoch || !Object.values(crew.members).includes(child.id)) return false;
+      if (Date.now() >= crew.deadlineAt) return false;
+      if (crew.calls >= crew.maxCalls || parent.calls >= parent.policy.maxCalls || child.calls >= child.policy.maxCalls) return false;
+      child.calls += 1;
+      parent.calls += 1;
+      crew.calls += 1;
+      this._writeTask(child);
+      this._writeTask(parent);
+      this._writeCrew(crew);
+      return true;
+    });
+  }
   recordProviderDelay(taskId, providerKey, retryAt) {
     return this.transaction(() => {
       const task = this.requireTask(taskId);
@@ -272,7 +306,9 @@ export class Store {
   }
   adoptCrew(crewId, workspace, verification) {
     return this.transaction(() => {
-      const crew = this.getCrew(crewId), parent = this.requireTask(crew.parentId);
+      const crew = this.getCrew(crewId);
+      if (!crew) throw Object.assign(new Error('Crew not found.'), { code: 'CREW_STALE_PARENT' });
+      const parent = this.requireTask(crew.parentId);
       if (crew.status !== 'applying' || parent.epoch !== crew.parentEpoch || parent.workspace !== crew.originalWorkspace || parent.contractVersion !== crew.contractVersion) throw Object.assign(new Error('Task changed before candidate adoption.'), { code: 'CREW_STALE_PARENT' });
       parent.workspace = workspace; parent.epoch += 1; parent.status = 'completed'; parent.completionKind = 'verified';
       parent.verification = verification; parent.blocker = null; parent.completedAt = new Date().toISOString();
@@ -398,21 +434,38 @@ export class Store {
       return operation;
     });
   }
+  deletePreparedOperation(id) {
+    return this.transaction(() => {
+      this.db.prepare("DELETE FROM operations WHERE id=? AND json_extract(data,'$.status')='prepared'").run(id);
+    });
+  }
+  _purgeSingleTaskRows(taskId) {
+    const apps = this.db.prepare('SELECT id FROM source_applications WHERE task_id=?').all(taskId);
+    for (const row of apps) {
+      this.db.prepare('DELETE FROM source_application_backups WHERE id=?').run(row.id);
+    }
+    this.db.prepare('DELETE FROM source_applications WHERE task_id=?').run(taskId);
+    this.db.prepare('DELETE FROM crews WHERE parent_id=?').run(taskId);
+    this.db.prepare('DELETE FROM operations WHERE task_id=?').run(taskId);
+    this.db.prepare('DELETE FROM events WHERE task_id=?').run(taskId);
+    this.db.prepare('DELETE FROM tasks WHERE id=?').run(taskId);
+  }
   purgeTask(taskId) {
     return this.transaction(() => {
       const task = this.getTask(taskId);
       if (!task) return { deleted: false, task: null };
-      const apps = this.db.prepare('SELECT id FROM source_applications WHERE task_id=?').all(taskId);
-      for (const row of apps) {
-        this.db.prepare('DELETE FROM source_application_backups WHERE id=?').run(row.id);
+      // Recursively purge any child crew worker tasks so transcripts never orphan in SQLite.
+      const children = this.db.prepare("SELECT id FROM tasks WHERE json_extract(data,'$.crewMember.parentId')=?").all(taskId);
+      for (const child of children) {
+        if (child?.id && child.id !== taskId) this._purgeSingleTaskRows(child.id);
       }
-      this.db.prepare('DELETE FROM source_applications WHERE task_id=?').run(taskId);
-      this.db.prepare('DELETE FROM crews WHERE parent_id=?').run(taskId);
-      this.db.prepare('DELETE FROM operations WHERE task_id=?').run(taskId);
-      this.db.prepare('DELETE FROM events WHERE task_id=?').run(taskId);
-      this.db.prepare('DELETE FROM tasks WHERE id=?').run(taskId);
+      this._purgeSingleTaskRows(taskId);
       return { deleted: true, task };
     });
+  }
+  shredAndCompact() {
+    if (this.closed) return;
+    try { this.db.exec('PRAGMA wal_checkpoint(TRUNCATE); VACUUM; PRAGMA wal_checkpoint(TRUNCATE);'); } catch {}
   }
   listScheduledJobs() {
     return this.db.prepare('SELECT data FROM scheduled_jobs ORDER BY rowid DESC').all().map(safeParse).filter(Boolean);
@@ -444,5 +497,5 @@ export class Store {
       return run;
     });
   }
-  close() { if (!this.closed) { this.db.close(); this.closed = true; this._releaseOwnership(); } }
+  close() { if (!this.closed) { try { this.db.close(); } finally { this.closed = true; this._releaseOwnership(); } } }
 }

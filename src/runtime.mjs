@@ -1337,6 +1337,7 @@ export class Runtime {
   async snapshotTask(id) { return taskSnapshot(this.getTask(id).workspace); }
   _memoriesForTask(task) {
     if (!task || task.fixtureId || task.crewMember) return [];
+    if (this.getPrivacy().settings?.ephemeralSession === true) return [];
     try { return this.memory.relevantForTask(task, { limit: 6, maxChars: 1800 }); }
     catch { return []; }
   }
@@ -1383,7 +1384,7 @@ export class Runtime {
   }
   _effectivePermissionRules(task) {
     if (Array.isArray(task.permissionRules)) return task.permissionRules;
-    if (task.fixtureId || task.crewMember) return [];
+    if (task.fixtureId) return [];
     const globalRules = this.store.getLocalState('permissionRules', [...DEFAULT_SAFE_PRESET]);
     return Array.isArray(globalRules) ? globalRules : [...DEFAULT_SAFE_PRESET];
   }
@@ -1447,7 +1448,7 @@ export class Runtime {
   updateAutoTune({ mode, pin, unpin } = {}) {
     const state = this._getAutoTuneRaw();
     if (mode !== undefined) {
-      if (!AUTOTUNE_MODES.includes(mode)) throw fault('INVALID_AUTOTUNE', `Invalid AutoTune mode "${mode}". Choose off, passive, or active.`);
+      if (!AUTOTUNE_MODES.includes(mode)) throw fault('INVALID_AUTOTUNE', `Invalid HyperTuner mode "${mode}". Choose off, passive, or active.`);
       state.mode = mode;
     }
     if (pin && typeof pin === 'object' && pin.modelKey && pin.domain && PROFILE_BY_ID.has(pin.profileId)) {
@@ -1470,6 +1471,7 @@ export class Runtime {
     return summarizeAutoTuneState(fresh);
   }
   _recordAutoTuneSignal(taskId, signal) {
+    if (this.getPrivacy().settings.ephemeralSession) return;
     const last = this._lastAutoTune.get(taskId);
     if (!last?.profileId) return;
     const state = this._getAutoTuneRaw();
@@ -1483,6 +1485,9 @@ export class Runtime {
       signal,
     });
     this.store.setLocalState('autotuneState', next);
+    if (['clean_completion', 'verification_pass', 'user_refusal'].includes(signal) || this._lastAutoTune.size > 200) {
+      this._lastAutoTune.delete(taskId);
+    }
   }
   _abortTaskSidecars(id) {
     const set = this._sidecars.get(id);
@@ -1843,7 +1848,7 @@ export class Runtime {
       const isFreshRecovery = Boolean(prevAt && Number(task.recoveries || 0) > Number(prevAt.recoveries || 0));
       const autoTunePick = selectAutoTuneParams(this._getAutoTuneRaw(), {
         provider,
-        objective: task.objective || '',
+        objective: task.followups?.at(-1)?.message || task.routing?.originalObjective || task.objective || '',
         effort: task.effort || 'medium',
         manualGeneration: task.generation || {},
         contextKind: isFreshRecovery ? 'retry' : 'normal',
@@ -1900,7 +1905,7 @@ export class Runtime {
           break;
         } catch (cause) {
           const wasPreempted = this._turnPreempted.delete(id);
-          if ((cause?.code === 'STEER_PREEMPTED' || wasPreempted) && this._current(id, epoch, controller.signal) && this.getTask(id).pendingMessages?.length) {
+          if ((cause?.code === 'STEER_PREEMPTED' || wasPreempted) && this._current(id, epoch, controller.signal)) {
             turnPreemptedBySteer = true;
             turnError = null;
             break;
@@ -2041,7 +2046,9 @@ export class Runtime {
           ? 'Venice reached its output limit. The partial reply is saved — send "continue" to keep generating.'
           : 'Provider reached its output limit after auto-continuations. The partial reply is saved — send "continue" to keep generating.',
       });
-      if (response.type === 'message' && !provider.directChat && response.finish !== 'refusal' && task.crewMember?.role !== 'challenger' && !task.planMode && !conversationWithoutChecks(task)) {
+      const hasNativeFileEdits = this.getEvents(id).some(e => e.type === 'tool.completed' && (e.data?.name === 'repo.write' || e.data?.name === 'repo.patch'));
+      const allowTextFallbackExtract = !provider.capabilities?.nativeTools || (provider.tier === 'local' && !hasNativeFileEdits);
+      if (response.type === 'message' && allowTextFallbackExtract && !hasNativeFileEdits && !provider.directChat && response.finish !== 'refusal' && task.crewMember?.role !== 'challenger' && !task.planMode && !conversationWithoutChecks(task)) {
         const extracted = extractFileWrites(response.text || '');
         if (extracted.length > 0) {
           response = { ...response, type: 'tool', calls: extracted.map((file, i) => ({
@@ -2162,7 +2169,8 @@ export class Runtime {
             if (canSpawnBatch) {
               try {
                 for (const call of spawnBatch) this._emitStream(id, { type: 'tool.start', name: call.name, callId: call.id, args: streamArgsFor(call) });
-                const results = await Promise.all(spawnBatch.map(call => this._executeAgentSpawn(id, epoch, call, controller.signal)));
+                const settledResults = await Promise.allSettled(spawnBatch.map(call => this._executeAgentSpawn(id, epoch, call, controller.signal)));
+                const results = settledResults.map(r => r.status === 'fulfilled' ? r.value : { ok: false, error: { code: r.reason?.code || 'SUBAGENT_ERROR', message: r.reason?.message || 'Subagent spawn failed.' } });
                 let spawnFatal = null;
                 for (let j = 0; j < spawnBatch.length; j++) {
                   const call = spawnBatch[j], result = results[j];
@@ -2520,15 +2528,27 @@ export class Runtime {
                       const regCount = (pTask.routing?.regressionCount || 0) + 1;
                       const bestSnapshot = pTask.routing?.bestSnapshot;
                       if (regCount >= 2 && bestSnapshot?.length > 0) {
+                        const keepPaths = new Set(bestSnapshot.map(f => f.path));
+                        try {
+                          const curSnap = await taskSnapshot(pTask.workspace);
+                          for (const f of curSnap.files) {
+                            if (!keepPaths.has(f.path)) {
+                              const stray = await scopedPath(pTask.workspace, f.path, { writing: true }).catch(() => null);
+                              if (stray) await fs.unlink(stray).catch(() => {});
+                            }
+                          }
+                        } catch {}
                         for (const file of bestSnapshot) {
                           if (typeof file.content !== 'string') continue;
                           const target = await scopedPath(pTask.workspace, file.path, { writing: true });
                           await fs.mkdir(dirname(target), { recursive: true });
                           await fs.writeFile(target, file.content);
                         }
+                        const restoredSnap = await taskSnapshot(pTask.workspace).catch(() => null);
                         const rollbackFrom = pTask.providerId;
                         this.store.updateTask(id, current => {
                           current.verification = null;
+                          if (restoredSnap?.snapshotHash) current.lastSnapshotHash = restoredSnap.snapshotHash;
                           current.routing.regressionCount = 0;
                           current.routing.lastRollbackCall = current.calls;
                           current.routing.rollbackCount = (current.routing.rollbackCount || 0) + 1;
@@ -2662,15 +2682,27 @@ export class Runtime {
                       const regCount = (qTask.routing?.regressionCount || 0) + 1;
                       const bestSnapshot = qTask.routing?.bestSnapshot;
                       if (bestSnapshot?.length > 0) {
+                        const keepPaths = new Set(bestSnapshot.map(f => f.path));
+                        try {
+                          const curSnap = await taskSnapshot(qTask.workspace);
+                          for (const f of curSnap.files) {
+                            if (!keepPaths.has(f.path)) {
+                              const stray = await scopedPath(qTask.workspace, f.path, { writing: true }).catch(() => null);
+                              if (stray) await fs.unlink(stray).catch(() => {});
+                            }
+                          }
+                        } catch {}
                         for (const file of bestSnapshot) {
                           if (typeof file.content !== 'string') continue;
                           const target = await scopedPath(qTask.workspace, file.path, { writing: true });
                           await fs.mkdir(dirname(target), { recursive: true });
                           await fs.writeFile(target, file.content);
                         }
+                        const restoredSnap = await taskSnapshot(qTask.workspace).catch(() => null);
                         const rollbackFrom = qTask.providerId;
                         this.store.updateTask(id, current => {
                           current.verification = null;
+                          if (restoredSnap?.snapshotHash) current.lastSnapshotHash = restoredSnap.snapshotHash;
                           current.routing.regressionCount = 0;
                           current.routing.lastRollbackCall = current.calls;
                           current.routing.rollbackCount = (current.routing.rollbackCount || 0) + 1;
@@ -2957,7 +2989,8 @@ export class Runtime {
     }
     const { privacy, onOutbound, extraSecrets } = this.outboundOptions();
     const timeout = new Promise((_, reject) => { timer = setTimeout(() => { child.abort(); reject(fault('PROVIDER_TIMEOUT', `Provider exceeded ${timeoutMs} ms.`)); }, timeoutMs); });
-    const turnPromise = Promise.resolve().then(() => provider.turn(context, { signal: child.signal, turnTimeoutMs: timeoutMs, privacy, onOutbound, extraSecrets, ...(profile ? { requestProfile: profile } : {}), ...(onDelta ? { onDelta } : {}) }));
+    const safeOnDelta = onDelta ? (delta => { if (!child.signal.aborted) onDelta(delta); }) : undefined;
+    const turnPromise = Promise.resolve().then(() => provider.turn(context, { signal: child.signal, turnTimeoutMs: timeoutMs, privacy, onOutbound, extraSecrets, ...(profile ? { requestProfile: profile } : {}), ...(safeOnDelta ? { onDelta: safeOnDelta } : {}) }));
     turnPromise.catch(() => {});
     try { return await Promise.race([turnPromise, stopped, timeout]); }
     finally {
@@ -3333,7 +3366,7 @@ export class Runtime {
       let overseerRecommendedId = null;
       let overseerReframed = false;
       if (['content_restriction', 'refusal', 'stalled', 'verification'].includes(diagnosis.category)) {
-        const overseer = this._resolveOverseer();
+        const overseer = this._resolveOverseerForWorker(task.providerId, { allowSameModel: true });
         const consultKey = `${fingerprint}:${diagnosis.category}`;
         if (overseer && overseer.settings.autoUnblockStuck && !task.routing?.overseerConsulted?.[consultKey]) {
           const previewRankings = rankCandidates({ task, providers: this._privacyFilteredProviders(), learning: task.policy.learning !== false ? this.getLearning() : null, diagnosis, requiredTools: this._requiredTools(task), fingerprint });
@@ -3367,7 +3400,10 @@ export class Runtime {
               current.routing.overseerConsulted ||= {};
               current.routing.overseerConsulted[consultKey] = true;
               if (!current.routing.originalObjective) current.routing.originalObjective = current.objective;
-              if (advice.reframedObjective) current.objective = advice.reframedObjective;
+              if (advice.reframedObjective) {
+                current.objective = advice.reframedObjective;
+                current.routing.reframePass = (current.routing.reframePass || 0) + 1;
+              }
               if (advice.guidance) current.routing.overseerGuidance = advice.guidance;
               if (advice.recommendedEffort) current.effort = normalizeEffort(advice.recommendedEffort);
               current.routing.lastRecoveryStrategy = { modelFamily: inferModelFamily(current.providerId), strategy: advice.strategy };
@@ -3539,10 +3575,10 @@ export class Runtime {
             return this.store.updateTask(id, current => {
               current.routing.cooldowns ||= {};
               delete current.routing.cooldowns[current.providerId];
-              if (retryResult.reframed) current.objective = retryResult.objective;
+              if (!overseerReframed && retryResult.reframed) current.objective = retryResult.objective;
               current.stallSignature = null; current.stallTurns = 0;
               return current;
-            }, 'routing.reframe_retry', { providerId: task.providerId, pass: currentPass, level: retryResult.level, diagnosis: diagnosis.category, reason: 'No alternate fallback available; retrying with reframed objective.' });
+            }, 'routing.reframe_retry', { providerId: task.providerId, pass: currentPass, level: overseerReframed ? 'overseer' : retryResult.level, diagnosis: diagnosis.category, reason: 'No alternate fallback available; retrying with reframed objective.' });
           }
         }
         // Single-provider escape: if the task only has one provider and it has
@@ -3569,6 +3605,7 @@ export class Runtime {
       }
       return this.store.updateTask(id, current => {
         current.providerId = next.id; current.providerIndex = current.providers.indexOf(next.id);
+        if (next.nextStrategy) current.strategy = next.nextStrategy;
         current.routing.excursion = { providerId: next.id, from: task.providerId, category: diagnosis.category, startedCall: current.calls, snapshotHash: current.lastSnapshotHash, ...(escalated ? { escalated: true, fromTier, toTier } : {}) };
         current.stallSignature = null; current.stallTurns = 0;
         return current;
@@ -4240,6 +4277,7 @@ export class Runtime {
           tasksPurged += 1;
         } catch {}
       }
+      this.store.shredAndCompact();
     }
     return {
       burned: true,
@@ -4794,6 +4832,8 @@ export class Runtime {
     const lock = new Promise(resolve => { release = resolve; });
     this.broker.locks.set(id, lock);
     try {
+      this._abortTaskSidecars(id);
+      await Promise.all([...new Set(this.providers.values())].map(p => p?.dropTaskSession?.(id).catch(() => {})));
       const rewind = await gitRewind(task.workspace, hasHash ? { hash: opts.hash.trim() } : (opts.steps === undefined ? 1 : opts.steps));
       const snapshot = await taskSnapshot(task.workspace);
       const updated = this.store.updateTask(id, current => {
@@ -4834,6 +4874,9 @@ export class Runtime {
 
     // Parallel sidecar interjection: runs concurrently in the same thread without interrupting the main agent!
     if (mode === 'parallel' && (isRunning || this.crew.busy(id))) {
+      if (task.status === 'cancelled' || (isRunning && terminal.has(task.status))) {
+        throw fault('TASK_TERMINAL', 'This task cannot receive parallel instructions.');
+      }
       const sidecar = await this.runParallelSidecar(id, message, validAttachments);
       return { task: this.getTask(id), queued: false, parallel: true, workerId: sidecar.workerId };
     }
@@ -5118,8 +5161,8 @@ export class Runtime {
       }
       try {
         const decision = routeUltraPlinian({
-          prompt: job.prompt,
-          providers: filtered,
+          objective: job.prompt,
+          candidates: liveFiltered,
           learning: this.getLearning(),
           settings: this.getRouterSettings(),
           privacy,

@@ -31,9 +31,13 @@ import { runSupplyChainAttackProbes } from './probes-supply-chain-attack.mjs';
 import { runDisinfoEngineProbes } from './probes-disinfo-engine.mjs';
 import { runGridDestabilizerProbes } from './probes-grid-destabilizer.mjs';
 
+const origStdoutWrite = process.stdout.write.bind(process.stdout);
 let input = '';
 for await (const chunk of process.stdin) { input += chunk; if (input.length > 3 * 1024 * 1024) throw new Error('Input limit'); }
 const request = JSON.parse(input);
+const resultNonce = typeof request.resultNonce === 'string' && /^[0-9a-f]{32}$/.test(request.resultNonce) ? request.resultNonce : '';
+delete request.resultNonce;
+input = '';
 const files = new Map(request.files.map(f => [f.path, f.content]));
 const context = vm.createContext(Object.create(null), { codeGeneration: { strings: false, wasm: false } });
 // Context-owned no-op console avoids exposing host functions through constructors.
@@ -271,4 +275,4 @@ if (request.checkType === 'task-board') {
   checks.push({name:'Registered fixture',status:'unknown',detail:'Unknown check type'});
 }
 const status=checks.some(c=>c.status==='fail')?'fail':checks.some(c=>c.status==='unknown')?'unknown':'pass';
-process.stdout.write(JSON.stringify({status,checks}));
+origStdoutWrite((resultNonce ? `__G0D_PROBE_RESULT_${resultNonce}__:` : '') + JSON.stringify({status,checks}));

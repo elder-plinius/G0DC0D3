@@ -250,12 +250,21 @@ export function bwrapWorkerArgs({ nodeFile, files = [], systemEntries = [], entr
   return args;
 }
 
+function sbRegexEscape(value) {
+  return String(value).replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
+}
+
 /** A deny-by-default Seatbelt profile. Grants contain only canonical task/runtime paths. */
-export function sandboxProfile({ workspace, scratch, nodeFile, npmRoot = null, runtimeFiles = [], toolchainRoots = [], network = false }) {
+export function sandboxProfile({ workspace, scratch, homeDir = null, tmpDir = null, nodeFile, npmRoot = null, runtimeFiles = [], toolchainRoots = [], network = false }) {
   const readRoots = ['/System/Library', '/System/Cryptexes', '/usr/bin', '/usr/lib', '/usr/libexec', '/usr/share', '/bin', '/sbin', '/Library/Apple', ...(npmRoot ? [npmRoot] : []), ...toolchainRoots, workspace, scratch];
   if (typeof nodeFile !== 'string' || !path.isAbsolute(nodeFile)) throw fault('ISOLATION_UNAVAILABLE', 'A canonical Node executable is required.');
   const ancestors = new Set(); for (const root of [...readRoots, nodeFile, ...runtimeFiles]) { let part = path.dirname(root); while (part !== path.dirname(part)) { ancestors.add(part); part = path.dirname(part); } }
-  return `(version 1)\n(deny default)\n(allow process-exec process-fork)\n(allow signal (target self))\n(allow sysctl-read)\n(allow mach-lookup (global-name "com.apple.system.logger"))\n(allow file-read-metadata ${[...ancestors].map(root => `(literal ${sbQuote(root)})`).join(' ')})\n(allow file-read* file-map-executable ${[nodeFile, ...runtimeFiles].map(file => `(literal ${sbQuote(file)})`).join(' ')} ${readRoots.map(root => `(subpath ${sbQuote(root)})`).join(' ')})\n(allow file-read* (literal "/") (literal "/dev/null") (literal "/dev/urandom") (literal "/dev/random") (literal "/private/var/select/sh") (literal "/private/etc/localtime") (literal "/private/etc/hosts") (literal "/private/etc/resolv.conf") (literal "/private/var/run/resolv.conf"))\n(allow file-write* (subpath ${sbQuote(workspace)}) (subpath ${sbQuote(scratch)}) (literal "/dev/null"))\n(deny file-read* file-write* (subpath ${sbQuote(path.join(workspace, '.git'))}) (subpath ${sbQuote(path.join(workspace, '.g0dc0d3'))}))\n${network ? '(allow network*)' : '(deny network*)'}\n`;
+  const writeRoots = homeDir && tmpDir ? [workspace, homeDir, tmpDir] : [workspace, scratch];
+  const wsEsc = sbRegexEscape(workspace.replace(/\/+$/, ''));
+  // Case-insensitive SBPL regexes block .git / .g0dc0d3 AND uppercase variants (.GIT, .G0DC0D3) on case-insensitive APFS.
+  const gitCaseRegex = `^${wsEsc}/\\.[gG][iI][tT](/|$)`;
+  const g0dCaseRegex = `^${wsEsc}/\\.[gG]0[dD][cC]0[dD]3(/|$)`;
+  return `(version 1)\n(deny default)\n(allow process-exec process-fork)\n(allow signal (target self))\n(allow sysctl-read)\n(allow mach-lookup (global-name "com.apple.system.logger"))\n(allow file-read-metadata ${[...ancestors].map(root => `(literal ${sbQuote(root)})`).join(' ')})\n(allow file-read* file-map-executable ${[nodeFile, ...runtimeFiles].map(file => `(literal ${sbQuote(file)})`).join(' ')} ${readRoots.map(root => `(subpath ${sbQuote(root)})`).join(' ')})\n(allow file-read* (literal "/") (literal "/dev/null") (literal "/dev/urandom") (literal "/dev/random") (literal "/private/var/select/sh") (literal "/private/etc/localtime") (literal "/private/etc/hosts") (literal "/private/etc/resolv.conf") (literal "/private/var/run/resolv.conf"))\n(allow file-write* ${writeRoots.map(root => `(subpath ${sbQuote(root)})`).join(' ')} (literal "/dev/null"))\n(deny file-read* file-write* (subpath ${sbQuote(path.join(workspace, '.git'))}) (subpath ${sbQuote(path.join(workspace, '.g0dc0d3'))}) (regex #${sbQuote(gitCaseRegex)}) (regex #${sbQuote(g0dCaseRegex)}))\n${network ? '(allow network*)' : '(deny network*)'}\n`;
 }
 
 /** Grant the exact executable and the verified npm package, never its install
@@ -362,8 +371,8 @@ async function spawnBounded(executable, args, { cwd, env, timeoutMs, signal, inp
     let child, timer, grace, monitor, sampling = false, detachedObserved = false, drainUncertain = false, settled = false, timedOut = false, cancelled = false;
     const stdoutBuf = boundedStreamBuffer(maxOutputBytes);
     const stderrBuf = boundedStreamBuffer(Math.max(16384, Math.floor(maxOutputBytes / 2)));
-    const observed = new Set();
-    const kill = () => { for (const pid of observed) { try { process.kill(pid, 'SIGKILL'); } catch {} } if (child?.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch {} try { child.kill('SIGKILL'); } catch {} } };
+    const observed = new Map(); // pid -> lstart string (prevents killing unrelated processes on PID reuse)
+    const kill = () => { for (const pid of observed.keys()) { try { process.kill(pid, 'SIGKILL'); } catch {} } if (child?.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch {} try { child.kill('SIGKILL'); } catch {} } };
     const finish = (cause, code = null, sig = null) => {
       if (settled) return; settled = true; clearTimeout(timer); clearTimeout(grace); clearInterval(monitor); signal?.removeEventListener('abort', abort); kill();
       if (cause) reject(cause); else resolve({ ok: true, exitCode: code, signal: sig, stdout: stdoutBuf.toString(), stderr: stderrBuf.toString(), timedOut, cancelled, truncated: stdoutBuf.truncated || stderrBuf.truncated, detachedObserved, drainUncertain, durationMs: Date.now() - started });
@@ -377,15 +386,43 @@ async function spawnBounded(executable, args, { cwd, env, timeoutMs, signal, inp
     if (psBin) {
       const sample = () => {
         if (sampling || settled || !child.pid) return; sampling = true;
-        const ps = spawn(psBin, ['-axo', 'pid=,ppid=,pgid='], { env: { PATH: '/usr/bin:/bin' }, stdio: ['ignore', 'pipe', 'ignore'] });
+        const ps = spawn(psBin, ['-axo', 'pid=,ppid=,pgid=,lstart='], { env: { PATH: '/usr/bin:/bin' }, stdio: ['ignore', 'pipe', 'ignore'] });
         let listing = ''; ps.stdout.on('data', bytes => { if (listing.length < 1024 * 1024) listing += bytes; });
         ps.on('error', () => { sampling = false; });
         ps.on('close', () => {
           sampling = false; if (settled) return;
-          const rows = listing.trim().split('\n').map(line => line.trim().split(/\s+/).map(Number));
-          const family = new Set([child.pid, ...observed]); let added = true;
-          while (added) { added = false; for (const [pid, ppid] of rows) if (family.has(ppid) && !family.has(pid)) { family.add(pid); observed.add(pid); added = true; } }
-          for (const [pid, , pgid] of rows) if (observed.has(pid) && pgid !== child.pid) { detachedObserved = true; try { process.kill(pid, 'SIGKILL'); } catch {} }
+          const rows = [];
+          const liveByPid = new Map();
+          for (const line of listing.split('\n')) {
+            const m = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.+)$/.exec(line);
+            if (!m) continue;
+            const pid = Number(m[1]), ppid = Number(m[2]), pgid = Number(m[3]), lstart = m[4].trim();
+            rows.push([pid, ppid, pgid, lstart]);
+            liveByPid.set(pid, lstart);
+          }
+          // Prune exited PIDs and any PID whose lstart changed (recycled by the OS to an unrelated process).
+          for (const [pid, prevStart] of [...observed.entries()]) {
+            const curStart = liveByPid.get(pid);
+            if (!curStart || curStart !== prevStart) observed.delete(pid);
+          }
+          const family = new Set([child.pid, ...observed.keys()]); let added = true;
+          while (added) {
+            added = false;
+            for (const [pid, ppid, , lstart] of rows) {
+              if (family.has(ppid) && !family.has(pid)) {
+                family.add(pid);
+                observed.set(pid, lstart);
+                added = true;
+              }
+            }
+          }
+          for (const [pid, , pgid] of rows) {
+            if (observed.has(pid) && pgid !== child.pid) {
+              detachedObserved = true;
+              try { process.kill(pid, 'SIGKILL'); } catch {}
+              observed.delete(pid);
+            }
+          }
         });
       };
       sample(); monitor = setInterval(sample, 25); monitor.unref();
@@ -491,15 +528,28 @@ export async function runCommand(task, { command, cwd = '.', timeoutMs } = {}, {
       await fs.writeFile(deniedFile, '', { mode: 0o000 });
       await fs.chmod(deniedDir, 0o000);
       await fs.chmod(deniedFile, 0o000);
-      const maskedDirs = [], maskedFiles = [];
+      const maskedDirs = [], maskedFiles = [], createdPlaceholders = [];
       for (const name of ['.git', '.g0dc0d3']) {
         const candidate = path.join(root, name);
         try {
           const st = await fs.lstat(candidate);
+          if (st.isSymbolicLink()) {
+            throw fault('SYMLINK_DENIED', `Protected workspace entry ${name} cannot be a symbolic link.`);
+          }
           if (st.isDirectory()) maskedDirs.push(candidate);
           else maskedFiles.push(candidate);
-        } catch {}
+        } catch (err) {
+          if (err?.code === 'SYMLINK_DENIED') throw err;
+          if (err?.code === 'ENOENT') {
+            try {
+              await fs.mkdir(candidate, { mode: 0o000 });
+              createdPlaceholders.push(candidate);
+              maskedDirs.push(candidate);
+            } catch {}
+          }
+        }
       }
+      try {
       const [systemEntries, runtimeFileEntries] = await Promise.all([
         inspectHostMountEntries(LINUX_SYSTEM_READ_CANDIDATES),
         inspectHostMountEntries(runtime.runtimeFiles),
@@ -526,9 +576,15 @@ export async function runCommand(task, { command, cwd = '.', timeoutMs } = {}, {
       const runArgs = bwrapCommandArgs({ ...common, command });
       const result = await spawnBounded(bwrap, runArgs, { cwd: directory, env, timeoutMs: Math.min(timeoutMs ?? grant.timeoutMs, grant.timeoutMs), signal, onOutput, sampleDescendants: false });
       return { ...result, executionBoundary: 'linux-bwrap', network: grant.network, lifecycleBoundary: 'linux-pid-namespace-die-with-parent' };
+      } finally {
+        for (const ph of createdPlaceholders) {
+          await fs.chmod(ph, 0o700).catch(() => {});
+          await fs.rmdir(ph).catch(() => {});
+        }
+      }
     }
 
-    const profile = sandboxProfile({ workspace: root, scratch, ...runtime, toolchainRoots, network: grant.network });
+    const profile = sandboxProfile({ workspace: root, scratch, homeDir: home, tmpDir: temporary, ...runtime, toolchainRoots, network: grant.network });
     const profileFile = path.join(scratch, 'runner.sb'); await fs.writeFile(profileFile, profile, { mode: 0o600 });
     // This is a real launch probe, not binary-existence detection. It fails
     // closed when Seatbelt cannot be entered (including nested sandbox denial).

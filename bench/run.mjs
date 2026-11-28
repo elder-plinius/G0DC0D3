@@ -1,4 +1,4 @@
-import {promises as fs} from 'node:fs';
+import {promises as fs, realpathSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
@@ -54,7 +54,8 @@ export async function runBenchmark({dataDir,onProgress}={}) {
   return report;
 }
 
-if(process.argv[1] && path.resolve(process.argv[1])===fileURLToPath(import.meta.url)) {
+const isDirectRun = process.argv[1] && (() => { const s = fileURLToPath(import.meta.url); try { return realpathSync(process.argv[1]) === realpathSync(s); } catch { return path.resolve(process.argv[1]) === path.resolve(s); } })();
+if(isDirectRun) {
   const index=process.argv.indexOf('--output');
   const output=index>=0?process.argv[index+1]:undefined;
   if(index>=0 && !output)throw new Error('--output requires a directory');

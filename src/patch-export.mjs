@@ -16,10 +16,14 @@ function lines(text) {
  * Export only; the controller never applies this patch to the original project.
  */
 export function createGitPatch(diff) {
-  return diff.map(({ path, before, after }) => {
+  return diff.map(({ path, before, after, binary }) => {
     if (typeof path !== 'string' || !path || path.startsWith('/') || path.includes('\\')
-      || path.split('/').some(part => !part || part === '.' || part === '..' || part === '.git')
+      || path.split('/').some(part => {
+        const lower = part.toLowerCase();
+        return !part || part === '.' || part === '..' || lower === '.git' || lower === '.g0dc0d3';
+      })
       || /[\x00-\x1f\x7f]/.test(path)) throw new Error('This filename cannot be exported as a safe Git patch.');
+    if (binary) throw new Error('Patch export supports UTF-8 text changes only.');
     if (![before, after].every(text => text === null || typeof text === 'string' && !text.includes('\0')))
       throw new Error('Patch export supports UTF-8 text changes only.');
     if (before === after) return '';

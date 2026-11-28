@@ -406,6 +406,7 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
 
     private func connect() {
         connectionEpoch += 1
+        webViewReady = false
         let epoch = connectionEpoch
         loadingView.isHidden = false
         webView.isHidden = true
@@ -545,8 +546,8 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
                     let url = try self.launchURL()
                     self.openWorkspace(url)
                     return
-                } catch let err as NSError where err.domain == NSCocoaErrorDomain && err.code == NSFileReadNoSuchFileError && remaining > 0 {
-                    // Session token file may still be publishing right after server.listen().
+                } catch let err as NSError where ((err.domain == NSCocoaErrorDomain && err.code == NSFileReadNoSuchFileError) || (err.domain == "G0DC0D3" && err.code == 6)) && remaining > 0 {
+                    // Session token file may still be publishing right after server.listen() or replacing a stale PID file.
                 } catch {
                     self.showError("The local session could not be opened", error.localizedDescription)
                     return
@@ -641,6 +642,7 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
         }
     }
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        webViewReady = false
         recoverWebContent()
     }
     private func recoverWebContent() {
@@ -863,7 +865,7 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
         let alert = NSAlert()
         let ver = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.3.0"
         alert.messageText = "G0DM0D3 \(ver)"
-        alert.informativeText = "Local-first AI workspace & GODCODƎ coding harness\n\nNative AppKit/WKWebView client with self-contained Node.js 22 runtime, zero telemetry, zero npm dependencies, macOS Seatbelt command sandboxing, ACP v1 multi-harness coordination, Conclave 2.0, Brain 2.0, Live Browser 2.0, and AutoTune.\n\nScripted fault checks and live model results are labeled separately."
+        alert.informativeText = "Local-first AI workspace & GODCODƎ coding harness\n\nNative AppKit/WKWebView client with self-contained Node.js 22 runtime, zero telemetry, zero npm dependencies, macOS Seatbelt command sandboxing, ACP v1 multi-harness coordination, Conclave 2.0, Brain 2.0, Live Browser 2.0, and HyperTuner.\n\nScripted fault checks and live model results are labeled separately."
         alert.beginSheetModal(for: window)
     }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showWindow(); return true }

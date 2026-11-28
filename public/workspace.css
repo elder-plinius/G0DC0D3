@@ -5626,7 +5626,7 @@ body.conclave-open.sidebar-collapsed .conclave-dock {
     box-shadow: 0 24px 68px rgba(0, 0, 0, .52);
     z-index: 75;
   }
-  #viz-expand-btn { display: none; }
+  #conclave-expand { display: none; }
 }
 .conclave-header {
   display: flex;
@@ -7340,7 +7340,7 @@ body.browser-open.sidebar-collapsed .browser-dock { grid-column: 2; }
     box-shadow: 0 24px 68px rgba(0, 0, 0, .52);
     z-index: 75;
   }
-  #viz-expand-btn { display: none; }
+  #bl-expand { display: none; }
 }
 .bl-header {
   display: flex;

@@ -1,4 +1,4 @@
-import { promises as fs } from 'node:fs';
+import { promises as fs, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -197,7 +197,8 @@ export async function runSelfOptEval() {
   };
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+const isDirectEval = process.argv[1] && (() => { const s = fileURLToPath(import.meta.url); try { return realpathSync(process.argv[1]) === realpathSync(s); } catch { return path.resolve(process.argv[1]) === path.resolve(s); } })();
+if (isDirectEval) {
   const report = await runSelfOptEval();
   console.log('\nG0DC0D3 Self-Optimization & Overseer Eval Scoreboard');
   console.log('='.repeat(68));

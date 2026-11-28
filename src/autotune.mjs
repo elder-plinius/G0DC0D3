@@ -1,5 +1,5 @@
 /**
- * G0DC0D3 AutoTune — Passive Hierarchical Empirical-Bayes Hyperparameter Layer.
+ * G0DC0D3 HyperTuner — Passive Hierarchical Empirical-Bayes Hyperparameter Layer.
  *
  * Optimizes sampling hyperparameters per (model × task domain × reasoning effort)
  * using 5 curated macro-arms clamped strictly to each provider's live supported
@@ -217,7 +217,7 @@ function isSamplingLockedModel(provider, effort = 'medium') {
   const model = String(provider?.model || provider?.id || '').toLowerCase();
   const base = model.includes('/') ? model.split('/').pop() : model;
   if (/^(?:o1|o3|o4)(?:$|-)/.test(base)) return true;
-  if (/^gpt-[56](?:$|[.-])/.test(base) && String(effort || 'medium').toLowerCase() !== 'fast') return true;
+  if (/^gpt-[56](?:$|[.-])/.test(base)) return true;
   const proto = String(provider?.protocol || '').toLowerCase();
   if (proto === 'cli' || proto.startsWith('acp')) return true;
   return false;
@@ -235,7 +235,8 @@ export function clampProfileToProvider(profile, provider, manualGeneration = {},
   const applied = {};
   const skipped = [];
   const samplingLocked = isSamplingLockedModel(provider, effort);
-  const isAnthropic = String(provider?.protocol || '').toLowerCase() === 'anthropic';
+  const modelIdLower = String(provider?.model || provider?.id || '').toLowerCase();
+  const isAnthropic = String(provider?.protocol || '').toLowerCase() === 'anthropic' || /(?:^|\/|:)claude(?:$|-|_|\.)/.test(modelIdLower);
 
   for (const [key, rawVal] of Object.entries(profile?.params || {})) {
     if (manual[key] !== undefined) {

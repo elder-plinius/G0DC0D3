@@ -3875,7 +3875,7 @@ function eventDescription(event) {
     'tool.started': (() => { const s = humanizeToolStep({ type: 'tool.started', data }); return [s.verb, '⌁', 'tool', s.target]; })(),
     'tool.completed': (() => { const s = humanizeToolStep({ type: 'tool.completed', data }); return [s.verb, '⌁', s.isErr ? 'error' : 'tool', s.target]; })(),
     'tool.failed': (() => { const s = humanizeToolStep({ type: 'tool.failed', data }); return [s.verb, '!', 'error', s.target || data.error?.message || data.message || '']; })(),
-    'autotune.selected': ['AutoTune', '◈', 'info', `${data.profileLabel || data.profileId || 'Focused'}${data.applied?.temperature !== undefined ? ` (T=${data.applied.temperature})` : ''} · ${data.domain || 'general'} · ${data.winRatePct ?? 0}%`],
+    'autotune.selected': ['HyperTuner', '◈', 'info', `${data.profileLabel || data.profileId || 'Focused'}${data.applied?.temperature !== undefined ? ` (T=${data.applied.temperature})` : ''} · ${data.domain || 'general'} · ${data.winRatePct ?? 0}%`],
     'recovery.started': ['Recovery initiated', '↻', 'warning', data.incident?.message ?? data.reason ?? data.diagnosis ?? data.strategy ?? data.message ?? 'Resuming G0DM0D3 recovery.'],
     'routing.retry_scheduled': ['Retry scheduled', '↻', 'warning', `Attempt ${data.retry} of ${data.maxRetries}. Waiting until ${new Date(data.retryAt).toLocaleTimeString()}.`],
     'routing.profile_changed': ['Output allowance adjusted', '↻', 'warning', `${data.before?.maxOutputTokens} → ${data.requestProfile?.maxOutputTokens} tokens.`],
@@ -4312,11 +4312,13 @@ function renderTimeline(events, total, task) {
       messages.push(`<details class="overseer-receipt conclave-verdict-receipt" data-disclosure="${escapeHTML(cKey)}" ${openDetails.has(cKey) ? 'open' : ''}><summary><span aria-hidden="true">✦</span><span class="overseer-receipt-title">Conclave · ${escapeHTML(cd.modeLabel || cd.mode || 'Council')} (${escapeHTML(cd.rounds || 2)} rounds)</span><span>${escapeHTML(specNames || `${entries.length} specialist contributions`)}${cd.durationMs ? ` · ${escapeHTML(duration(cd.durationMs))}` : ''}</span></summary><div class="overseer-receipt-body">${bbHtml || '<p class="field-help">No blackboard notes recorded.</p>'}</div></details>`);
     } else if (event.type === 'subagent.completed' && event.data?.ok && event.data?.summary) {
       flush();
+      lastFlushedSeq = Math.max(lastFlushedSeq, Number(event.seq || 0));
       const sa = event.data;
       const key = `subagent-${event.id ?? event.seq}`;
       messages.push(`<details class="subagent-card" data-disclosure="${escapeHTML(key)}" ${openDetails.has(key) ? 'open' : ''}><summary class="subagent-card-summary"><span class="subagent-badge">${escapeHTML(sa.role || 'explore')}</span><span class="subagent-provider">${escapeHTML(providerById(sa.providerId)?.label || sa.providerId || 'model')}</span><span class="subagent-meta">${escapeHTML(`${sa.calls || 1} call${sa.calls === 1 ? '' : 's'} · ${duration(sa.durationMs || 0)}`)}</span></summary><div class="subagent-card-body">${formatMessageBody(sa.summary, true)}</div></details>`);
     } else if (['overseer.advised', 'overseer.audited', 'overseer.coached'].includes(event.type)) {
       flush();
+      lastFlushedSeq = Math.max(lastFlushedSeq, Number(event.seq || 0));
       const description = eventDescription(event);
       const od = event.data || {};
       const oKey = `overseer-${event.id ?? event.seq}`;
@@ -4330,11 +4332,14 @@ function renderTimeline(events, total, task) {
         messages.push(`<div class="recovery-event"><span aria-hidden="true">✦</span><span><strong>${escapeHTML(description[0])}</strong> ${escapeHTML(description[3])}</span></div>`);
       }
     } else if (event.type === 'autotune.selected' && event.data) {
+      flush();
+      lastFlushedSeq = Math.max(lastFlushedSeq, Number(event.seq || 0));
       const at = event.data;
       const tTxt = at.applied?.temperature !== undefined ? `T=${at.applied.temperature}` : 'tuned';
       messages.push(`<div class="autotune-receipt"><span aria-hidden="true">◈</span><span><strong>HyperTuner</strong> · ${escapeHTML(at.profileLabel || at.profileId || 'Focused')} (${escapeHTML(tTxt)}) · ${escapeHTML(at.domain || 'general')} · ${escapeHTML(String(at.winRatePct ?? 0))}% win</span></div>`);
     } else if (['model.switched', 'providers.updated', 'routing.retry_scheduled', 'routing.strategy_changed', 'routing.profile_changed', 'routing.reframe_retry', 'overseer.judged', 'owner.refusal_reported', 'permission.auto_approved', 'hook.blocked', 'memory.auto_learned', 'skill.created'].includes(event.type)) {
       flush();
+      lastFlushedSeq = Math.max(lastFlushedSeq, Number(event.seq || 0));
       const description = eventDescription(event);
       messages.push(`<div class="recovery-event"><span aria-hidden="true">↻</span><span><strong>${escapeHTML(description[0])}</strong> ${escapeHTML(description[3])}</span></div>`);
     } else work.push(event);
@@ -4352,7 +4357,13 @@ function renderTimeline(events, total, task) {
     messages.push(`<details class="compact-summary-card" data-disclosure="${escapeHTML(compKey)}" ${openDetails.has(compKey) ? 'open' : ''}><summary><span class="compact-badge">Compacted</span><span>Fresh-eyes context summary${modCount ? ` · ${modCount} modified ${modCount === 1 ? 'file' : 'files'}` : ''}</span></summary><p class="compact-summary-note">${escapeHTML(ws.note || 'Earlier history summarized into fresh-eyes state to keep context crisp.')}</p></details>`);
   }
   if (ACTIVE.has(task.status)) {
-    const recent = [...events].reverse().find(e => ['model.request', 'tool.started', 'evaluation.started', 'routing.auto_continued'].includes(e.type));
+    const lastUserIdx = events.findLastIndex(e => ['user.message', 'user.messages.applied', 'conversation.rewound'].includes(e.type));
+    const lastUserSeq = lastUserIdx >= 0 ? Number(events[lastUserIdx]?.seq || 0) : 0;
+    const minRailSeq = Math.max(lastUserSeq, lastFlushedSeq);
+    const fullTurnEvents = lastUserIdx >= 0 ? events.slice(lastUserIdx + 1) : events;
+    const turnSlice = fullTurnEvents.filter(e => Number(e.seq || 0) > minRailSeq);
+
+    const recent = [...fullTurnEvents].reverse().find(e => ['model.request', 'tool.started', 'evaluation.started', 'routing.auto_continued'].includes(e.type));
     const activeProvLabel = providerById(task.providerId)?.label || task.providerId || '';
     const phase = task.answerRace
       ? (events.findLast(e => e.type === 'race.dispatched')?.data.stage === 'grade' ? 'Grading parallel drafts' : `Drafting with ${task.answerRace.models?.length || 2} Arena writers`)
@@ -4371,23 +4382,33 @@ function renderTimeline(events, total, task) {
     // Note: pinned #todo-strip right above the composer already displays Plan progress; keep Live Rail focused on steps.
     const planHtml = '';
 
-    const lastUserIdx = events.findLastIndex(e => ['user.message', 'user.messages.applied', 'conversation.rewound'].includes(e.type));
-    const lastUserSeq = lastUserIdx >= 0 ? Number(events[lastUserIdx]?.seq || 0) : 0;
-    const minRailSeq = Math.max(lastUserSeq, lastFlushedSeq);
-    const turnSlice = (lastUserIdx >= 0 ? events.slice(lastUserIdx + 1) : events).filter(e => Number(e.seq || 0) > minRailSeq);
     const completedWorkerIds = new Set(events.filter(e => e.type === 'subagent.completed' && e.data?.workerId).map(e => e.data.workerId));
     const runningSidecars = events.filter(e => e.type === 'subagent.started' && e.data?.workerId && !completedWorkerIds.has(e.data.workerId));
-    const allTurnSteps = turnSlice.filter(e =>
-      ['tool.completed', 'tool.failed', 'evaluation.started', 'evaluation.completed', 'model.switched', 'routing.reframe_retry', 'subagent.completed'].includes(e.type)
+    const lastEvalCompletedSeq = turnSlice.reduce((m, e) => e.type === 'evaluation.completed' ? Math.max(m, Number(e.seq || 0)) : m, 0);
+    const allTurnSteps = turnSlice.filter(e => {
+      if (e.type === 'evaluation.started') return Number(e.seq || 0) > lastEvalCompletedSeq;
+      return ['tool.completed', 'tool.failed', 'evaluation.completed', 'model.switched', 'routing.reframe_retry', 'subagent.completed'].includes(e.type);
+    });
+    const finishedOpIds = new Set(
+      turnSlice
+        .filter(e => e.type === 'tool.completed' || e.type === 'tool.failed')
+        .map(e => e.data?.operationId || e.data?.callId)
+        .filter(Boolean)
     );
-    const activeStarted = recent?.type === 'tool.started' && Number(recent.seq || 0) > lastUserSeq && !allTurnSteps.some(e => e.seq > recent.seq) ? [recent] : [];
+    const lastToolDoneSeq = turnSlice.reduce((m, e) => (e.type === 'tool.completed' || e.type === 'tool.failed') ? Math.max(m, Number(e.seq || 0)) : m, 0);
+    const activeStarted = turnSlice.filter(e => {
+      if (e.type !== 'tool.started') return false;
+      const opId = e.data?.operationId || e.data?.callId;
+      if (opId) return !finishedOpIds.has(opId);
+      return Number(e.seq || 0) > lastToolDoneSeq;
+    });
     const combinedSteps = [...allTurnSteps, ...runningSidecars, ...activeStarted];
     const olderSteps = combinedSteps.length > 6 ? combinedSteps.slice(0, -6) : [];
     const latestSteps = combinedSteps.slice(-6);
     const renderRailStep = (ev) => {
       const s = humanizeToolStep(ev);
       const isRun = ev.type.endsWith('.started');
-      const stepKey = `live-step-${ev.id ?? ev.seq}`;
+      const stepKey = `step-${ev.id ?? ev.seq}`;
       const dotCls = isRun ? 'is-running' : (s.isErr ? 'is-err' : 'is-ok');
       const dotSym = isRun ? '◐' : (s.isErr ? '!' : '✓');
       return `<details class="live-rail-step ${dotCls}" data-disclosure="${escapeHTML(stepKey)}" ${openDetails.has(stepKey) ? 'open' : ''}><summary class="live-rail-row"><span class="live-rail-dot ${dotCls}" aria-hidden="true">${dotSym}</span><span class="live-rail-verb">${escapeHTML(s.verb)}</span><span class="live-rail-target" title="${escapeHTML(s.target)}">${escapeHTML(s.target)}</span>${s.badge ? `<span class="live-rail-badge kind-${escapeHTML(s.badgeKind)}">${escapeHTML(s.badge)}</span>` : ''}</summary><pre class="live-rail-peek" tabindex="0" role="region" aria-label="Step details">${escapeHTML(pretty(ev.data ?? {}))}</pre></details>`;
@@ -4408,9 +4429,9 @@ function renderTimeline(events, total, task) {
       : '<div class="live-rail-thought hidden" id="live-rail-thought"></div>';
 
     const stepCountChip = combinedSteps.length ? `<span class="live-rail-count">${combinedSteps.length} ${combinedSteps.length === 1 ? 'step' : 'steps'}</span>` : '';
-    const parsedRecent = recent?.time ? Date.parse(recent.time) : NaN;
+    const parsedTurnStart = fullTurnEvents[0]?.time ? Date.parse(fullTurnEvents[0].time) : NaN;
     const parsedUpdated = task.updatedAt ? Date.parse(task.updatedAt) : NaN;
-    const turnAnchorTime = Number.isFinite(parsedRecent) ? parsedRecent : (streamTurnStartedAt || (Number.isFinite(parsedUpdated) ? parsedUpdated : Date.now()));
+    const turnAnchorTime = Number.isFinite(parsedTurnStart) ? parsedTurnStart : (streamTurnStartedAt || (Number.isFinite(parsedUpdated) ? parsedUpdated : Date.now()));
     const elapsedSec = Math.max(0, Math.floor((Date.now() - turnAnchorTime) / 1000));
     const elapsedLabel = elapsedSec >= 60 ? `${Math.floor(elapsedSec / 60)}m ${elapsedSec % 60}s` : `${elapsedSec}s`;
     messages.push(`<section class="live-work-rail" aria-label="Active agent progress"><div class="live-work-head"><span class="spinner" aria-hidden="true"></span><span class="activity-label"><span class="activity-phase-text is-shimmer">${escapeHTML(phase)}</span></span><div class="live-rail-head-right">${stepCountChip}<span class="live-work-elapsed" data-turn-started="${escapeHTML(String(turnAnchorTime))}">${escapeHTML(elapsedLabel)}</span><button type="button" class="button button-quiet live-viz-btn" data-open-visualizer="1" title="Generate a live visual dashboard for what the agent is doing (/visualize)"><span aria-hidden="true">◈</span><span>Visualize</span></button></div></div>${thoughtTickerHtml}${planHtml}${trailHtml}</section><div id="stream-slot">${streamTaskId === task.id ? buildStreamPreviewHtml(openDetails) : ''}</div>`);
@@ -6008,6 +6029,7 @@ function syncArtifactDockForTask(data, taskChanged) {
   if (artifactDockState.open && artifactDockState.manualOverrideForKey === artifact.artifactKey) return;
   if (artifactDismissedKeys.has(artifact.artifactKey)) return;
   if (!qolPrefs.autoOpenPreview) return;
+  if (window.G0DVisualizer?.isOpen?.() || window.G0DConclave?.isOpen?.() || window.G0DBrowserLive?.isOpen?.()) return;
   if (artifact.source === 'workspace') {
     openLivePreview({ taskId: task.id, entry: artifact.entry, title: artifact.title, artifactKey: artifact.artifactKey, auto: true });
   } else {
@@ -6366,6 +6388,7 @@ function renderSelected(data, force = false, opts = {}) {
   if (!force && signature === detailSignature) return;
   window.G0DConclave?.syncTask(task);
   window.G0DVisualizer?.onTaskChanged?.(task?.id);
+  if (window.G0DVisualizer?.isOpen?.()) window.G0DVisualizer.scheduleTelemetryPush?.();
   const oldTaskId = $('#selected-id').dataset.fullId;
   const taskChanged = oldTaskId !== task.id;
   if (taskChanged && !artifactDockState.open && !document.body.classList.contains('inspector-open') && !window.G0DConclave?.isOpen?.() && !window.G0DBrowserLive?.isOpen?.() && !window.G0DVisualizer?.isOpen?.()) {
@@ -6728,6 +6751,7 @@ async function selectTask(id) {
     splitPaneFile = null;
     diffCommentTarget = null;
     closeArtifactDock({ recordDismiss: false });
+    window.G0DVisualizer?.onTaskChanged?.(id);
     composerAutocompleteState.hide?.();
     if (typeof clearComposerAttachments === 'function') clearComposerAttachments();
   }
@@ -8977,8 +9001,12 @@ document.addEventListener('keydown', (event) => {
   if(taskMenu){taskMenu.open=false;$('summary',taskMenu)?.focus();event.preventDefault();return;}
   if (document.body.classList.contains('inspector-open')) { setInspector(false, true); event.preventDefault(); return; }
   if (narrowLayout.matches && document.body.classList.contains('sidebar-open')) { setSidebar(false); $('#sidebar-toggle').focus(); event.preventDefault(); return; }
+  const zoomOverlay = $('.preview-overlay');
+  if (zoomOverlay) { zoomOverlay.remove(); event.preventDefault(); return; }
   if (artifactDockState.open && !artifactDockState.inspectMode && !artifactDockState.fullscreen) { closeArtifactDock({ recordDismiss: true }); event.preventDefault(); return; }
   if (window.G0DVisualizer?.isOpen?.()) { window.G0DVisualizer.close(); event.preventDefault(); return; }
+  if (window.G0DConclave?.isOpen?.()) { window.G0DConclave.close(); event.preventDefault(); return; }
+  if (window.G0DBrowserLive?.isOpen?.()) { window.G0DBrowserLive.close(); event.preventDefault(); return; }
   const activeTaskNow = selectedData?.task?.id === selectedId ? selectedData.task : null;
   if (activeTaskNow && ACTIVE.has(activeTaskNow.status) && !$('#composer-input')?.value?.trim()) {
     event.preventDefault();
@@ -9843,7 +9871,12 @@ window.G0DVisualizer = (function initG0DVisualizer() {
   let isOpen = false;
   let isExpanded = false;
   let activeTaskId = null;
+  let mountedTaskId = null;
   let generating = false;
+  let genSeq = 0;
+  let genAbort = null;
+  let lastMountedUrl = '';
+  let lastMountedAt = 0;
   let telemetryTimer = null;
   let pollInterval = null;
   let versionNonce = 0;
@@ -9912,8 +9945,7 @@ window.G0DVisualizer = (function initG0DVisualizer() {
       const instr = input?.value?.trim() || '';
       const tid = activeTaskId || selectedId;
       if (!tid) { toast('Select a task first.'); return; }
-      if (input) input.value = '';
-      generate(tid, instr);
+      generate(tid, instr, input);
     });
     $('#viz-iframe')?.addEventListener('load', () => {
       pushTelemetryNow();
@@ -9948,6 +9980,21 @@ window.G0DVisualizer = (function initG0DVisualizer() {
     btn.setAttribute('aria-pressed', String(isOpen));
   }
 
+  function resetStage() {
+    mountedTaskId = null;
+    lastMountedUrl = '';
+    lastMountedAt = 0;
+    const iframe = $('#viz-iframe');
+    if (iframe) {
+      iframe.classList.add('hidden');
+      iframe.removeAttribute('srcdoc');
+      iframe.src = 'about:blank';
+    }
+    $('#viz-empty')?.classList.remove('hidden');
+    const sub = $('#viz-subtitle');
+    if (sub) sub.textContent = 'Isolated sidecar telemetry dashboard';
+  }
+
   function mountIframe(taskId, vizUrl = null) {
     const iframe = $('#viz-iframe');
     const empty = $('#viz-empty');
@@ -9955,6 +10002,9 @@ window.G0DVisualizer = (function initG0DVisualizer() {
     versionNonce += 1;
     const base = vizUrl || `/api/tasks/${encodeURIComponent(taskId)}/visualizer`;
     const sep = base.includes('?') ? '&' : '?';
+    mountedTaskId = taskId;
+    lastMountedUrl = base;
+    lastMountedAt = Date.now();
     iframe.removeAttribute('srcdoc');
     iframe.src = `${base}${sep}v=${versionNonce}`;
     iframe.classList.remove('hidden');
@@ -9962,16 +10012,17 @@ window.G0DVisualizer = (function initG0DVisualizer() {
   }
 
   async function pushTelemetryNow() {
-    if (!isOpen || !activeTaskId) return;
+    if (!isOpen || !activeTaskId || mountedTaskId !== activeTaskId) return;
     const tid = activeTaskId;
     const iframe = $('#viz-iframe');
     if (!iframe || iframe.classList.contains('hidden') || !iframe.contentWindow) return;
     try {
       const payload = await api(`/api/tasks/${encodeURIComponent(tid)}/visualizer-telemetry`);
-      if (!isOpen || activeTaskId !== tid) return;
+      if (!isOpen || activeTaskId !== tid || mountedTaskId !== tid) return;
       const iframeNow = $('#viz-iframe');
       if (payload && typeof payload === 'object' && iframeNow?.contentWindow) {
-        iframeNow.contentWindow.postMessage({ ...payload, type: 'g0d:viz' }, '*');
+        const { visualizerUrl: _omitTokenUrl, ...safePayload } = payload;
+        iframeNow.contentWindow.postMessage({ ...safePayload, type: 'g0d:viz' }, '*');
         const sub = $('#viz-subtitle');
         if (sub && payload?.task) {
           const ops = Object.values(payload.toolCounts || {}).reduce((a, b) => a + Number(b || 0), 0);
@@ -9990,36 +10041,48 @@ window.G0DVisualizer = (function initG0DVisualizer() {
     }, 350);
   }
 
-  async function generate(taskId, instruction = '') {
+  async function generate(taskId, instruction = '', refineInputEl = null) {
     if (!taskId) return;
     activeTaskId = taskId;
     if (!isOpen) await open(taskId, { autoGenerate: false });
-    if (generating) return;
+    if (mountedTaskId && mountedTaskId !== taskId) resetStage();
+    genAbort?.abort();
+    const ac = new AbortController();
+    genAbort = ac;
+    const seq = ++genSeq;
     generating = true;
+    const savedInstr = instruction;
+    if (refineInputEl && savedInstr) refineInputEl.value = '';
     setStatus(instruction ? 'Refining…' : 'Forging…', true, false);
     try {
       const res = await api(`/api/tasks/${encodeURIComponent(taskId)}/visualize`, {
         method: 'POST',
         body: JSON.stringify({ instruction }),
+        signal: ac.signal,
       });
-      if (!isOpen || activeTaskId !== taskId) return;
+      if (seq !== genSeq || !isOpen || activeTaskId !== taskId) return;
       mountIframe(taskId, res?.url || null);
       setStatus(res?.generatedBy && res.generatedBy !== 'deterministic_fallback' ? 'Live · AI' : 'Live', false, false);
     } catch (err) {
+      if (err?.name === 'AbortError' || seq !== genSeq) return;
+      if (refineInputEl && savedInstr && !refineInputEl.value) refineInputEl.value = savedInstr;
       if (isOpen && activeTaskId === taskId) {
         setStatus('Error', false, true);
         toast(err.message || 'Could not generate visualizer.');
       }
     } finally {
-      generating = false;
-      const regen = $('#viz-regen-btn');
-      if (regen) regen.disabled = false;
-      const refBtn = $('#viz-refine-submit');
-      if (refBtn) refBtn.disabled = false;
-      const refInput = $('#viz-refine-input');
-      if (refInput) refInput.disabled = false;
-      const emptyBtn = $('#viz-empty-start');
-      if (emptyBtn) { emptyBtn.disabled = false; emptyBtn.textContent = '◈ Generate Visualizer'; }
+      if (seq === genSeq) {
+        generating = false;
+        if (genAbort === ac) genAbort = null;
+        const regen = $('#viz-regen-btn');
+        if (regen) regen.disabled = false;
+        const refBtn = $('#viz-refine-submit');
+        if (refBtn) refBtn.disabled = false;
+        const refInput = $('#viz-refine-input');
+        if (refInput) refInput.disabled = false;
+        const emptyBtn = $('#viz-empty-start');
+        if (emptyBtn) { emptyBtn.disabled = false; emptyBtn.textContent = '◈ Generate Visualizer'; }
+      }
     }
   }
 
@@ -10031,6 +10094,15 @@ window.G0DVisualizer = (function initG0DVisualizer() {
     }
     ensureShell();
     closeAllRightDocks({ except: 'visualizer' });
+
+    if (mountedTaskId !== tid) {
+      genAbort?.abort();
+      genAbort = null;
+      genSeq += 1;
+      generating = false;
+      resetStage();
+      setStatus('Ready', false, false);
+    }
 
     activeTaskId = tid;
     isOpen = true;
@@ -10065,19 +10137,20 @@ window.G0DVisualizer = (function initG0DVisualizer() {
     if (autoGenerate) {
       await generate(tid, '');
     } else {
-      const iframe = $('#viz-iframe');
-      if (iframe) { iframe.classList.add('hidden'); iframe.removeAttribute('srcdoc'); iframe.src = 'about:blank'; }
-      $('#viz-empty')?.classList.remove('hidden');
-      const sub = $('#viz-subtitle');
-      if (sub) sub.textContent = 'Isolated sidecar telemetry dashboard';
+      resetStage();
       setStatus('Ready', false, false);
     }
   }
 
   function close() {
+    genAbort?.abort();
+    genAbort = null;
+    genSeq += 1;
+    generating = false;
     isOpen = false;
     isExpanded = false;
     activeTaskId = null;
+    resetStage();
     const dock = dockEl();
     if (dock) {
       dock.classList.add('hidden');
@@ -10090,8 +10163,6 @@ window.G0DVisualizer = (function initG0DVisualizer() {
       eb.title = 'Expand visualizer';
       eb.setAttribute('aria-label', 'Expand visualizer');
     }
-    const sub = $('#viz-subtitle');
-    if (sub) sub.textContent = 'Isolated sidecar telemetry dashboard';
     document.body.classList.remove('visualizer-open');
     if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
     if (telemetryTimer) { clearTimeout(telemetryTimer); telemetryTimer = null; }
@@ -10105,6 +10176,11 @@ window.G0DVisualizer = (function initG0DVisualizer() {
 
   function onReadyEvent(taskId, delta) {
     if (isOpen && activeTaskId === taskId && !generating) {
+      const nextUrl = delta?.url || `/api/tasks/${encodeURIComponent(taskId)}/visualizer`;
+      if (mountedTaskId === taskId && lastMountedUrl === nextUrl && Date.now() - lastMountedAt < 2500) {
+        scheduleTelemetryPush();
+        return;
+      }
       mountIframe(taskId, delta?.url || null);
       setStatus('Live', false, false);
     }

@@ -101,6 +101,9 @@ function normalizeScopePatterns(raw, fieldName) {
       clean = clean.replace(/:\d+$/, '');
     }
     clean = clean.replace(/\.+$/, '');
+    if (clean.includes(':') && !clean.includes('*')) {
+      try { clean = new URL(`http://[${clean}]/`).hostname.toLowerCase().replace(/^\[|\]$/g, ''); } catch {}
+    }
     if (!clean) continue;
     if (clean.length > 200 || !/^[a-z0-9*._:-]+$/.test(clean)) {
       throw Object.assign(new Error(`Invalid host pattern "${item.slice(0, 60)}" in ${fieldName}. Use hostnames or *.domain wildcards.`), { code: 'INVALID_PRIVACY', status: 400 });
@@ -118,7 +121,7 @@ function hostMatchesScopePattern(host, pattern) {
   const p = String(pattern || '').toLowerCase().replace(/^\[|\]$/g, '').replace(/\.+$/, '');
   if (!h || !p) return false;
   if (p === '*') return true;
-  if (p.startsWith('*.')) {
+  if (p.startsWith('*.') && !p.slice(2).includes('*')) {
     const suffix = p.slice(2);
     return h === suffix || h.endsWith('.' + suffix);
   }
@@ -149,7 +152,22 @@ export function checkTargetScope(rawUrl, privacy = DEFAULT_PRIVACY_SETTINGS) {
   const scopeDeny = Array.isArray(privacy?.scopeDeny) ? privacy.scopeDeny : [];
   if (!scopeAllow.length && !scopeDeny.length) return { allowed: true, code: null, message: null };
   let host = '';
-  try { host = new URL(String(rawUrl || '')).hostname.toLowerCase(); } catch { host = String(rawUrl || '').toLowerCase(); }
+  try {
+    const parsed = new URL(String(rawUrl || ''));
+    if ((parsed.protocol === 'http:' || parsed.protocol === 'https:') && parsed.hostname) {
+      host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    }
+  } catch {}
+  if (!host) {
+    let raw = String(rawUrl || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/[/?#].*$/, '');
+    const bracketed = raw.match(/^\[([^\]]+)\](?::\d+)?$/);
+    if (bracketed) raw = bracketed[1];
+    else if ((raw.match(/:/g) || []).length === 1) raw = raw.replace(/:\d+$/, '');
+    if (raw.includes(':')) {
+      try { raw = new URL(`http://[${raw}]/`).hostname.toLowerCase().replace(/^\[|\]$/g, ''); } catch {}
+    }
+    host = raw.replace(/\.+$/, '');
+  }
   for (const deny of scopeDeny) {
     if (hostMatchesScopePattern(host, deny)) {
       return {
@@ -229,20 +247,25 @@ export function normalizePrivacySettings(input = {}, base = DEFAULT_PRIVACY_SETT
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]', '0.0.0.0']);
 
+function isIpv4Loopback(host) {
+  const m = /^127\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  return Boolean(m && [m[1], m[2], m[3]].every(n => Number(n) <= 255));
+}
+
 export function extractHost(baseUrl) {
   if (!baseUrl || typeof baseUrl !== 'string') return '';
-  try { return new URL(baseUrl).hostname.toLowerCase(); } catch { return ''; }
+  try { return new URL(baseUrl).hostname.toLowerCase().replace(/\.+$/, ''); } catch { return ''; }
 }
 
 export function isLoopbackUrl(baseUrl) {
-  const host = extractHost(baseUrl);
-  return Boolean(host) && (LOOPBACK_HOSTS.has(host) || host.endsWith('.localhost'));
+  const host = extractHost(baseUrl).replace(/^\[|\]$/g, '');
+  return Boolean(host) && (LOOPBACK_HOSTS.has(host) || host.endsWith('.localhost') || isIpv4Loopback(host));
 }
 
 export function isPrivateLanHost(rawHost) {
-  const host = String(rawHost || '').toLowerCase().replace(/^\[|\]$/g, '');
+  const host = String(rawHost || '').toLowerCase().replace(/^\[|\]$/g, '').replace(/\.+$/, '');
   if (!host) return false;
-  if (LOOPBACK_HOSTS.has(host) || host.endsWith('.localhost')) return true;
+  if (LOOPBACK_HOSTS.has(host) || host.endsWith('.localhost') || isIpv4Loopback(host)) return true;
   if (host === 'host.docker.internal' || host === 'gateway.docker.internal' || host.endsWith('.local')) return true;
   const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
   if (ipv4) {
@@ -282,7 +305,7 @@ export function classifyProviderZdr(provider) {
     };
   }
   const host = extractHost(provider.baseUrl);
-  if (isLoopbackUrl(provider.baseUrl) || (provider.tier === 'local' && (!host || isLoopbackUrl(provider.baseUrl)))) {
+  if (isLoopbackUrl(provider.baseUrl)) {
     return {
       zdrClass: 'local-only',
       label: 'LOCAL ONLY',
@@ -412,24 +435,29 @@ export function applyZdrRequestPolicy(provider, body, privacy = DEFAULT_PRIVACY_
 
 // High-confidence secret patterns scrubbed from outbound cloud prompts when redactOutboundSecrets is enabled.
 const OUTBOUND_SECRET_PATTERNS = [
-  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]{16,8192}?-----END [A-Z0-9 ]*PRIVATE KEY-----/g,
-  /\bsk-ant-[A-Za-z0-9_-]{16,}\b/g,
-  /\bsk-proj-[A-Za-z0-9_-]{16,}\b/g,
-  /\bsk-or-v1-[A-Za-z0-9_-]{16,}\b/g,
-  /\bsk-[A-Za-z0-9_-]{20,}\b/g,
-  /\b(?:ghp|gho|ghu|ghs|ghr|github_pat|hf)_[A-Za-z0-9_]{16,}\b/g,
-  /\bAIza[0-9A-Za-z_-]{30,}\b/g,
-  /\bAKIA[0-9A-Z]{16}\b/g,
-  /\b(?:xoxb|xoxp|xoxa|xoxr)-[0-9A-Za-z-]{16,}\b/g,
-  /\bBearer\s+[A-Za-z0-9._~+\/-]{24,}\b/gi
+  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]{16,8192}?-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/g,
+  /\bsk-ant-[A-Za-z0-9_-]{16,}(?![A-Za-z0-9._~+\/=-])/g,
+  /\bsk-proj-[A-Za-z0-9_-]{16,}(?![A-Za-z0-9._~+\/=-])/g,
+  /\bsk-or-v1-[A-Za-z0-9_-]{16,}(?![A-Za-z0-9._~+\/=-])/g,
+  /\bsk-[A-Za-z0-9_-]{20,}(?![A-Za-z0-9._~+\/=-])/g,
+  /\b(?:ghp|gho|ghu|ghs|ghr|github_pat|hf)_[A-Za-z0-9_]{16,}(?![A-Za-z0-9._~+\/=-])/g,
+  /\bAIza[0-9A-Za-z_-]{30,}(?![A-Za-z0-9._~+\/=-])/g,
+  /\b(?:AKIA|ASIA)[0-9A-Z]{16}(?![A-Za-z0-9])/g,
+  /\b(?:xoxb|xoxp|xoxa|xoxr)-[0-9A-Za-z-]{16,}(?![A-Za-z0-9._~+\/=-])/g,
+  /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g,
+  /\bBearer\s+[A-Za-z0-9._~+\/=-]{24,}(?![A-Za-z0-9._~+\/=-])/gi,
+  /\bBasic\s+[A-Za-z0-9+\/]{16,}={0,2}(?![A-Za-z0-9+\/=])/gi,
+  /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|rediss|amqp|amqps|https?):\/\/[^\/\s:@]{1,64}:[^\/\s@]{6,}@/gi
 ];
 
 export function redactOutboundText(text, extraSecrets = []) {
   if (typeof text !== 'string' || !text) return { text: text || '', count: 0 };
   let out = text;
   let count = 0;
-  for (const secret of extraSecrets) {
-    if (typeof secret !== 'string' || secret.length < 12) continue;
+  const sortedSecrets = Array.isArray(extraSecrets)
+    ? [...new Set(extraSecrets.filter(s => typeof s === 'string' && s.length >= 8))].sort((a, b) => b.length - a.length)
+    : [];
+  for (const secret of sortedSecrets) {
     if (out.includes(secret)) {
       const parts = out.split(secret);
       count += parts.length - 1;
@@ -466,10 +494,15 @@ export function prepareOutboundRequest(provider, body, opts = {}) {
 
 export function redactOutboundValue(value, secrets = environmentSecrets()) {
   let count = 0;
+  const seen = new WeakSet();
   function walk(item) {
     if (typeof item === 'string') { const result = redactOutboundText(item, secrets); count += result.count; return result.text; }
-    if (Array.isArray(item)) return item.map(walk);
-    if (item && typeof item === 'object') return Object.fromEntries(Object.entries(item).map(([key, child]) => [key, walk(child)]));
+    if (item && typeof item === 'object') {
+      if (seen.has(item)) return '[circular]';
+      seen.add(item);
+      if (Array.isArray(item)) return item.map(walk);
+      return Object.fromEntries(Object.entries(item).map(([key, child]) => [key, walk(child)]));
+    }
     return item;
   }
   return { value: walk(value), count };
@@ -509,16 +542,23 @@ export class OutboundAuditLog {
 
 // Best-effort diagnostic export redaction. Raw local task history remains owner
 // data; this deliberately makes no claim that arbitrary source is secret-free.
-export const environmentSecrets = () => Object.entries(process.env).filter(([key, text]) => /(?:KEY|TOKEN|PASSWORD|SECRET)$/i.test(key) && text?.length >= 8).map(([, text]) => text);
-export function redactDiagnostics(value, secrets = environmentSecrets()) {
+export const environmentSecrets = () => Object.entries(process.env)
+  .filter(([key, text]) => (/(?:KEY|TOKEN|PASSWORD|SECRET|PAT)(?:_[A-Z0-9]+)?$/i.test(key) || /^(?:DATABASE|REDIS|MONGODB|POSTGRES|AMQP)_URL$/i.test(key)) && typeof text === 'string' && text.length >= 8)
+  .map(([, text]) => text);
+export function redactDiagnostics(value, secrets = environmentSecrets(), seen = new WeakSet()) {
+  const sorted = Array.isArray(secrets) ? [...new Set(secrets.filter(Boolean))].sort((a, b) => b.length - a.length) : [];
   const redact = text => {
     let result = text;
-    for (const secret of secrets) if (secret) result = result.split(secret).join('[redacted credential]');
-    return result.replace(/\b(?:sk[-_]|(?:ghp|github_pat|hf)_)[A-Za-z0-9_-]{12,}\b/g, '[redacted credential]')
-      .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]{12,}/gi, 'Bearer [redacted credential]');
+    for (const secret of sorted) result = result.split(secret).join('[redacted credential]');
+    return result.replace(/\b(?:sk[-_]|(?:ghp|github_pat|hf)_)[A-Za-z0-9_-]{12,}(?![A-Za-z0-9._~+\/=-])/g, '[redacted credential]')
+      .replace(/\bBearer\s+[A-Za-z0-9._~+\/=-]{12,}/gi, 'Bearer [redacted credential]');
   };
   if (typeof value === 'string') return redact(value);
-  if (Array.isArray(value)) return value.map(item => redactDiagnostics(item, secrets));
-  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, /^(?:api[_-]?key|access[_-]?token|authorization|password|secret)$/i.test(key) ? '[redacted credential]' : redactDiagnostics(item, secrets)]));
+  if (value && typeof value === 'object') {
+    if (seen.has(value)) return '[circular]';
+    seen.add(value);
+    if (Array.isArray(value)) return value.map(item => redactDiagnostics(item, sorted, seen));
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, /^(?:api[_-]?key|access[_-]?token|authorization|password|secret)$/i.test(key) ? '[redacted credential]' : redactDiagnostics(item, sorted, seen)]));
+  }
   return value;
 }

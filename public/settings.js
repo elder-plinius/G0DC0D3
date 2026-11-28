@@ -908,15 +908,19 @@ $('#model-controls').hidden = false;
 }
 
 let autoTuneState = null;
+let autoTuneReqSeq = 0;
 async function loadAutoTuneSettings() {
   const sumEl = $('#autotune-summary');
   const listEl = $('#autotune-learned-list');
   if (!sumEl || !listEl) return;
+  const seq = ++autoTuneReqSeq;
   try {
     const data = await api('/api/hypertuner');
+    if (seq !== autoTuneReqSeq) return;
     autoTuneState = data;
     renderAutoTuneCard(data);
   } catch (err) {
+    if (seq !== autoTuneReqSeq) return;
     sumEl.textContent = `Could not load HyperTuner: ${err?.message || 'error'}`;
   }
 }
@@ -932,28 +936,45 @@ function renderAutoTuneCard(data) {
   });
   const obs = Number(data.totalObservations || 0);
   const rows = Array.isArray(data.learned) ? data.learned : [];
+  const pinsObj = data.pins && typeof data.pins === 'object' ? data.pins : {};
+  const profilesList = Array.isArray(data.profiles) ? data.profiles : [];
+  const profileById = new Map(profilesList.map(p => [p.id, p]));
   const resetBtn = $('#autotune-reset-btn');
-  if (resetBtn) resetBtn.disabled = obs === 0 && rows.length === 0 && !Object.keys(data.pins || {}).length;
+  if (resetBtn) resetBtn.disabled = obs === 0 && rows.length === 0 && !Object.keys(pinsObj).length;
   const modeDesc = data.mode === 'off'
     ? 'Disabled — models use their provider defaults or manual sliders.'
     : data.mode === 'active'
       ? `Active Thompson Sampling · ${obs} recorded outcome${obs === 1 ? '' : 's'}.`
       : `Passive Conservative mode (≤10% safe adjacent exploration) · ${obs} recorded outcome${obs === 1 ? '' : 's'}.`;
   sumEl.textContent = modeDesc;
-  if (!rows.length) {
+
+  const visibleRows = rows.slice(0, 12);
+  const visiblePinKeys = new Set(visibleRows.map(r => `${r.modelKey}::${r.domain}`));
+  const orphanPins = Object.entries(pinsObj)
+    .filter(([k]) => !visiblePinKeys.has(k) && k.includes('::'))
+    .map(([k, profileId]) => {
+      const idx = k.lastIndexOf('::');
+      return { modelKey: k.slice(0, idx), domain: k.slice(idx + 2), effort: 'all', observations: 0, winRatePct: 0, pinnedProfile: profileId, bestLabel: profileById.get(profileId)?.label || profileId, bestParams: profileById.get(profileId)?.params || {} };
+    });
+  const displayRows = [...visibleRows, ...orphanPins];
+
+  if (!displayRows.length) {
     listEl.innerHTML = '<p class="field-help autotune-empty">No learned model × domain cells yet — HyperTuner observes passively on cold start and adapts automatically as tasks verify and complete.</p>';
     return;
   }
-  const profileOpts = (Array.isArray(data.profiles) ? data.profiles : []).map(p => `<option value="${escapeHTML(p.id)}">${escapeHTML(p.label)}</option>`).join('');
-  listEl.innerHTML = `<div class="autotune-table">${rows.slice(0, 12).map(r => {
-    const tVal = r.bestParams?.temperature !== undefined ? `T=${r.bestParams.temperature}` : 'default';
+  const profileOpts = profilesList.map(p => `<option value="${escapeHTML(p.id)}">${escapeHTML(p.label)}</option>`).join('');
+  listEl.innerHTML = `<div class="autotune-table">${displayRows.map(r => {
+    const pinnedMeta = r.pinnedProfile ? profileById.get(r.pinnedProfile) : null;
+    const shownLabel = pinnedMeta ? `Pinned: ${pinnedMeta.label}` : r.bestLabel;
+    const shownTemp = pinnedMeta?.params?.temperature ?? r.bestParams?.temperature;
+    const tVal = shownTemp !== undefined ? `T=${shownTemp}` : 'default';
     return `<div class="autotune-row">
       <div class="autotune-row-main">
         <strong>${escapeHTML(r.modelKey)}</strong>
         <span class="autotune-domain-pill">${escapeHTML(r.domain)} · ${escapeHTML(r.effort)}</span>
       </div>
       <div class="autotune-row-meta">
-        <span class="autotune-profile-pill">${escapeHTML(r.bestLabel)} (${escapeHTML(tVal)})</span>
+        <span class="autotune-profile-pill">${escapeHTML(shownLabel)} (${escapeHTML(tVal)})</span>
         <span class="autotune-stat">${escapeHTML(String(r.winRatePct))}% · ${escapeHTML(String(r.observations))}n</span>
         <select class="autotune-pin-select" data-at-model="${escapeHTML(r.modelKey)}" data-at-domain="${escapeHTML(r.domain)}" title="Pin a fixed sampling archetype for this model &amp; domain" aria-label="Pin sampling profile for ${escapeHTML(r.modelKey)} ${escapeHTML(r.domain)}">
           <option value="">Pin: Auto</option>${profileOpts}
@@ -962,18 +983,22 @@ function renderAutoTuneCard(data) {
     </div>`;
   }).join('')}</div>`;
   listEl.querySelectorAll('.autotune-pin-select').forEach((sel, idx) => {
-    const row = rows[idx];
+    const row = displayRows[idx];
     if (row?.pinnedProfile) sel.value = row.pinnedProfile;
     sel.addEventListener('change', async () => {
       const val = sel.value;
       const body = val
         ? { pin: { modelKey: sel.dataset.atModel, domain: sel.dataset.atDomain, profileId: val } }
         : { unpin: { modelKey: sel.dataset.atModel, domain: sel.dataset.atDomain } };
+      const seq = ++autoTuneReqSeq;
       sel.disabled = true;
       try {
-        renderAutoTuneCard(await api('/api/hypertuner', { method: 'PATCH', body: JSON.stringify(body) }));
+        const updated = await api('/api/hypertuner', { method: 'PATCH', body: JSON.stringify(body) });
+        if (seq !== autoTuneReqSeq) return;
+        renderAutoTuneCard(updated);
         settingsFeedback(val ? `Pinned ${val} profile for ${sel.dataset.atModel} (${sel.dataset.atDomain}).` : `Restored HyperTuner Auto selection for ${sel.dataset.atModel} (${sel.dataset.atDomain}).`);
       } catch (err) {
+        if (seq !== autoTuneReqSeq) return;
         settingsFeedback(err?.message || 'Could not update HyperTuner pin.', true);
         if (autoTuneState) renderAutoTuneCard(autoTuneState);
       } finally {
@@ -986,11 +1011,15 @@ $$('.autotune-mode-btn').forEach(btn => {
   btn.addEventListener('click', async () => {
     const mode = btn.dataset.autotuneMode;
     const allModeBtns = $$('.autotune-mode-btn');
+    const seq = ++autoTuneReqSeq;
     allModeBtns.forEach(b => { b.disabled = true; });
     try {
-      renderAutoTuneCard(await api('/api/hypertuner', { method: 'PATCH', body: JSON.stringify({ mode }) }));
+      const updated = await api('/api/hypertuner', { method: 'PATCH', body: JSON.stringify({ mode }) });
+      if (seq !== autoTuneReqSeq) return;
+      renderAutoTuneCard(updated);
       settingsFeedback(`HyperTuner set to ${mode}.`);
     } catch (err) {
+      if (seq !== autoTuneReqSeq) return;
       settingsFeedback(err?.message || 'Could not update HyperTuner mode.', true);
       if (autoTuneState) renderAutoTuneCard(autoTuneState);
     } finally {
@@ -1007,11 +1036,15 @@ $('#autotune-reset-btn')?.addEventListener('click', async () => {
   });
   if (!ok) return;
   const resetBtn = $('#autotune-reset-btn');
+  const seq = ++autoTuneReqSeq;
   if (resetBtn) resetBtn.disabled = true;
   try {
-    renderAutoTuneCard(await api('/api/hypertuner', { method: 'DELETE', body: '{}' }));
+    const updated = await api('/api/hypertuner', { method: 'DELETE', body: '{}' });
+    if (seq !== autoTuneReqSeq) return;
+    renderAutoTuneCard(updated);
     settingsFeedback('HyperTuner learned profiles reset.');
   } catch (err) {
+    if (seq !== autoTuneReqSeq) return;
     settingsFeedback(err?.message || 'Could not reset HyperTuner.', true);
     if (resetBtn) resetBtn.disabled = false;
   }
@@ -1607,6 +1640,7 @@ function selectModelsSubtab(subtab) {
     el.classList.toggle('model-subtab-hidden', el.dataset.modelSubtab !== modelsSubtab);
   });
   if (modelsSubtab === 'connections') refreshAcpStatus();
+  if (modelsSubtab === 'routing') loadAutoTuneSettings();
   let emptyEl = $('#models-catalog-empty');
   if (modelsSubtab === 'catalog') {
     const visibleCatalogCards = $$('#model-controls > [data-model-subtab="catalog"]').filter(el => !el.hidden && !el.classList.contains('hidden') && !el.classList.contains('model-subtab-hidden'));

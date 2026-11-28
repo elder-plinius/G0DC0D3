@@ -19,10 +19,12 @@
   let currentImg = null;
   let currentImgSeq = 0;
   let frameInFlight = false;
+  let frameLoadGen = 0;
   let pendingFrameUrl = null;
   let pendingFrameSeq = 0;
   let reticle = null; // { x, y, action, label, bornAt, viewport }
   let rafId = null;
+  let canvasResizeObserver = null;
 
   const esc = (s) => String(s ?? '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -139,12 +141,20 @@
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (['Enter', 'Tab', 'Backspace', 'Escape'].includes(e.key)) {
         e.preventDefault();
+        e.stopPropagation();
         sendInteraction({ kind: 'key', key: e.key });
       } else if (e.key.length === 1) {
         e.preventDefault();
+        e.stopPropagation();
         sendInteraction({ kind: 'type', text: e.key });
       }
     });
+    if (canvasEl && typeof ResizeObserver === 'function' && !canvasResizeObserver) {
+      canvasResizeObserver = new ResizeObserver(() => {
+        if (isOpenState) drawCanvas();
+      });
+      canvasResizeObserver.observe(canvasEl);
+    }
 
     window.addEventListener('resize', () => {
       if (isOpenState) drawCanvas();
@@ -307,9 +317,11 @@
       pendingFrameSeq = seq;
       return;
     }
+    const gen = frameLoadGen;
     frameInFlight = true;
     const img = new Image();
     img.onload = () => {
+      if (gen !== frameLoadGen) return;
       frameInFlight = false;
       if (targetTaskId !== currentTaskId || !isOpenState) {
         pendingFrameUrl = null;
@@ -331,6 +343,7 @@
       }
     };
     img.onerror = () => {
+      if (gen !== frameLoadGen) return;
       frameInFlight = false;
       pendingFrameUrl = null;
       pendingFrameSeq = 0;
@@ -356,7 +369,10 @@
     ctx.fillStyle = pal.bg;
     ctx.fillRect(0, 0, w, h);
 
-    if (!currentImg || !currentImg.naturalWidth || !currentImg.naturalHeight) return;
+    if (!currentImg || !currentImg.naturalWidth || !currentImg.naturalHeight) {
+      lastDrawBox = null;
+      return;
+    }
 
     // Aspect-fit frame inside viewport with subtle rounded frame shadow
     const pad = 10;
@@ -489,6 +505,7 @@
           if (sJson?.settings) browserSettings = sJson.settings;
         }
       } catch {}
+      if (currentTaskId !== null) return null;
       statusData = null;
       renderUI();
       return null;
@@ -617,7 +634,9 @@
         body: JSON.stringify({ active: Boolean(active) }),
       });
       if (!res.ok) return;
-      statusData = await res.json();
+      const nextStatus = await res.json();
+      if (taskId !== currentTaskId) return;
+      statusData = nextStatus;
       renderUI();
       if (active) {
         document.getElementById('browser-live-canvas')?.focus?.();
@@ -639,8 +658,10 @@
       });
       if (!res.ok) return;
       const json = await res.json();
+      if (taskId !== currentTaskId) return;
       if (json.status) statusData = json.status;
-      fetchFrame(`/api/tasks/${encodeURIComponent(taskId)}/browser/frame?v=${Date.now()}`, Date.now(), taskId);
+      const seq = Number(json.status?.frameSeq) || 0;
+      fetchFrame(`/api/tasks/${encodeURIComponent(taskId)}/browser/frame?v=${seq || Date.now()}`, seq, taskId);
       if (groundingOn) void refreshGrounding();
     } catch {}
   }
@@ -677,9 +698,16 @@
       });
       if (taskId !== currentTaskId) return;
       if (res.ok) statusData = await res.json();
+      frameLoadGen++;
+      frameInFlight = false;
+      pendingFrameUrl = null;
+      pendingFrameSeq = 0;
       currentImg = null;
       currentImgSeq = 0;
+      groundingElements = [];
+      lastDrawBox = null;
       reticle = null;
+      if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
       renderUI();
       if (typeof window.toast === 'function') window.toast('Contained browser session closed.');
     } catch {}
@@ -719,6 +747,8 @@
     const prevTask = currentTaskId;
     isOpenState = false;
     isExpanded = false;
+    frameLoadGen++;
+    frameInFlight = false;
     pendingFrameUrl = null;
     pendingFrameSeq = 0;
     if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
@@ -744,13 +774,21 @@
     if (changed) {
       if (currentTaskId && isOpenState) setScreencast(currentTaskId, false);
       currentTaskId = nextId;
+      frameLoadGen++;
+      frameInFlight = false;
       statusData = null;
       currentImg = null;
       currentImgSeq = 0;
       pendingFrameUrl = null;
       pendingFrameSeq = 0;
+      groundingOn = false;
+      groundingElements = [];
+      lastDrawBox = null;
+      consoleOpen = false;
       recentActions = [];
       reticle = null;
+      if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
+      renderUI();
       if (nextId && isOpenState) setScreencast(nextId, true);
     }
     if (changed || (nextId && statusData === null)) {
@@ -764,9 +802,17 @@
     if (!delta || !currentTaskId) return;
     if (delta.taskId && delta.taskId !== currentTaskId) return;
     if (delta.type === 'browser.closed') {
-      statusData = { ...(statusData || {}), active: false, screencastActive: false, hasFrame: false };
+      frameLoadGen++;
+      frameInFlight = false;
+      pendingFrameUrl = null;
+      pendingFrameSeq = 0;
+      statusData = { ...(statusData || {}), active: false, takeover: false, screencastActive: false, hasFrame: false };
       currentImg = null;
+      currentImgSeq = 0;
+      groundingElements = [];
+      lastDrawBox = null;
       reticle = null;
+      if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
       renderUI();
       return;
     }
@@ -776,6 +822,8 @@
         active: delta.active !== false,
         headless: typeof delta.headless === 'boolean' ? delta.headless : (statusData?.headless ?? true),
         visibleWindow: typeof delta.headless === 'boolean' ? !delta.headless : (statusData?.visibleWindow ?? false),
+        takeover: typeof delta.takeover === 'boolean' ? delta.takeover : (statusData?.takeover ?? false),
+        consoleErrors: Array.isArray(delta.consoleErrors) ? delta.consoleErrors : (statusData?.consoleErrors || []),
         url: delta.url || statusData?.url || 'about:blank',
         title: delta.title ?? statusData?.title ?? '',
         viewport: delta.viewport || statusData?.viewport || { width: 1280, height: 800 },
@@ -794,7 +842,7 @@
         }
       }
       if (delta.type === 'browser.frame' && isOpenState && delta.frameUrl) {
-        fetchFrame(delta.frameUrl, Number(delta.seq) || Date.now(), currentTaskId);
+        fetchFrame(delta.frameUrl, Number(delta.seq) || 0, currentTaskId);
       } else {
         renderUI();
       }
