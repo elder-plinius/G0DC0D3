@@ -440,3 +440,37 @@ test('v0.3.1 Wave 4: frontend prototype-safe language lookup, mermaid empty-acto
   assert.equal(createdIframes.length, 1);
   assert.ok(createdIframes[0].srcdoc.startsWith('<!doctype html><html><head><meta http-equiv="Content-Security-Policy"'), `Unexpected srcdoc: ${createdIframes[0].srcdoc}`);
 });
+
+test('v0.3.1 Projects UX uplevel: unified popover, native Browse…, auto-preview, recent/sticky state, and Finder folder drop', async () => {
+  const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+  const html = await fs.readFile(path.join(repoRoot, 'public/index.html'), 'utf8');
+  const appJs = await fs.readFile(path.join(repoRoot, 'public/app.js'), 'utf8');
+  const desktopJs = await fs.readFile(path.join(repoRoot, 'public/desktop.js'), 'utf8');
+  const swift = await fs.readFile(path.join(repoRoot, 'native/main.swift'), 'utf8');
+
+  // 1. Markup contains unified project popover, native Browse button in create-dialog, and recent projects bar
+  assert.match(html, /id="project-popover"/);
+  assert.match(html, /id="create-browse"/);
+  assert.match(html, /id="create-recent-projects"/);
+  assert.ok(!/\sstyle\s*=\s*["']/.test(html), 'public/index.html must not contain inline style= attributes');
+
+  // 2. app.js implements sticky project state, recent projects persistence, auto-preview, and Finder drop listeners
+  assert.match(appJs, /g0dc0d3\.recentProjects/);
+  assert.match(appJs, /g0dc0d3\.pendingProject/);
+  assert.match(appJs, /function toggleProjectPopover\(/);
+  assert.match(appJs, /godcode-folder-drop/);
+  assert.match(appJs, /godcode-folder-drag/);
+  assert.match(appJs, /autoPreviewTimer/);
+
+  // 3. desktop.js exposes native Browse routing for tree, create, and popover targets
+  assert.match(desktopJs, /window\.G0DDesktopBrowse\s*=/);
+  assert.match(desktopJs, /get\('create-browse'\)/);
+  assert.match(desktopJs, /window\.G0DAttachProjectFromPicker/);
+  assert.match(desktopJs, /window\.G0DRecordRecentProject/);
+
+  // 4. native/main.swift implements GodModeWebView NSDraggingDestination for Finder folders
+  assert.match(swift, /final class GodModeWebView:\s*WKWebView/);
+  assert.match(swift, /performDragOperation/);
+  assert.match(swift, /godcode-folder-drop/);
+  assert.match(swift, /godcode-folder-drag/);
+});

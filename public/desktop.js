@@ -443,8 +443,10 @@
   get('tree-open-form').onsubmit = (e) => {
     e.preventDefault();
     act(async () => {
+      const repoPath = get('tree-folder').value.trim();
       const endpoint = view?.chatId ? '/api/conversations/' + encodeURIComponent(view.chatId) + '/repository' : '/api/worktrees';
-      const p = await post(endpoint, { repository: get('tree-folder').value.trim() });
+      const p = await post(endpoint, { repository: repoPath });
+      if (repoPath) window.G0DRecordRecentProject?.(repoPath, 'worktree');
       await refresh(p.id);
     });
   };
@@ -596,12 +598,40 @@
     if (project && activeFile)
       window.webkit?.messageHandlers?.quickLook?.postMessage({ root: project.root, file: activeFile });
   };
+  let browseTarget = 'tree';
+  window.G0DDesktopBrowse = (target = 'tree') => {
+    if (!window.webkit?.messageHandlers?.chooseRepository) return false;
+    browseTarget = target;
+    window.webkit.messageHandlers.chooseRepository.postMessage('open');
+    return true;
+  };
   if (window.webkit?.messageHandlers?.chooseRepository) {
     get('tree-browse').hidden = false;
-    get('tree-browse').onclick = () =>
-      window.webkit.messageHandlers.chooseRepository.postMessage('open');
+    get('tree-browse').onclick = () => window.G0DDesktopBrowse('tree');
+    const createBrowse = get('create-browse');
+    if (createBrowse) {
+      createBrowse.hidden = false;
+      createBrowse.onclick = () => window.G0DDesktopBrowse('create');
+    }
   }
   window.addEventListener('godcode-repository', (e) => {
-    get('tree-folder').value = e.detail;
+    const folder = typeof e.detail === 'string' ? e.detail.trim() : '';
+    const target = browseTarget;
+    browseTarget = 'tree';
+    if (!folder) return;
+    if (target === 'popover') {
+      window.G0DAttachProjectFromPicker?.(folder);
+      return;
+    }
+    if (target === 'create' || get('create-dialog')?.open) {
+      const input = get('create-source-path');
+      if (input) {
+        input.value = folder;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        window.G0DPreviewCreateImport?.();
+      }
+      return;
+    }
+    get('tree-folder').value = folder;
   });
 })();

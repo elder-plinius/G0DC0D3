@@ -212,6 +212,12 @@ input[type="checkbox"] { appearance: auto; width: 18px; height: 18px; min-height
 .source-option { min-height: 2.375rem; padding: 7px 10px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text-secondary); }
 .source-option.active { color: var(--text); border-color: #62586f; background: #332e3c; }
 .source-option span { margin-left: 6px; color: var(--muted); font-size: .75rem; }
+.recent-projects-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 10px; }
+.recent-projects-bar.hidden { display: none; }
+.recent-projects-label { font-size: .72rem; color: var(--muted); margin-right: 2px; }
+.recent-project-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 210px; padding: 4px 9px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); color: var(--text-secondary); font-size: .74rem; cursor: pointer; }
+.recent-project-chip:hover { border-color: var(--signal); color: var(--text); }
+.recent-project-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .path-preview-row { display: flex; align-items: center; gap: 8px; }
 .path-preview-row input { flex: 1; font: .8125rem var(--mono); }
 .path-preview-row .button { flex: none; }

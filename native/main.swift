@@ -4,13 +4,64 @@ import Quartz
 import Darwin
 import UserNotifications
 
+// Subclass WKWebView so dropping a macOS Finder folder onto the window attaches it as a project
+// while non-directory drops (images, PDFs, text files) pass straight through to HTML5 drag-and-drop.
+final class GodModeWebView: WKWebView {
+    var onFolderDrag: ((Bool) -> Void)?
+    var onFolderDrop: ((String) -> Void)?
+
+    private func droppedDirectoryPath(from sender: NSDraggingInfo) -> String? {
+        let pb = sender.draggingPasteboard
+        let opts: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
+        guard let urls = pb.readObjects(forClasses: [NSURL.self], options: opts) as? [URL], !urls.isEmpty else {
+            return nil
+        }
+        var isDir: ObjCBool = false
+        for url in urls where url.isFileURL {
+            if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+                return url.path
+            }
+        }
+        return nil
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if droppedDirectoryPath(from: sender) != nil {
+            onFolderDrag?(true)
+            return .copy
+        }
+        return super.draggingEntered(sender)
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if droppedDirectoryPath(from: sender) != nil {
+            return .copy
+        }
+        return super.draggingUpdated(sender)
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        onFolderDrag?(false)
+        super.draggingExited(sender)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        onFolderDrag?(false)
+        if let dirPath = droppedDirectoryPath(from: sender) {
+            onFolderDrop?(dirPath)
+            return true
+        }
+        return super.performDragOperation(sender)
+    }
+}
+
 // A small native window around the portable localhost runtime.
 // This developer build is ad-hoc signed (not notarized) and requires Node 22.13+.
 final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate, WKScriptMessageHandler, UNUserNotificationCenterDelegate {
     private let dictation = Dictation()
     private var previewWindow: NSPanel?
     private var window: NSWindow!
-    private var webView: WKWebView!
+    private var webView: GodModeWebView!
     private var loadingView: NSView!
     private var loadingTitle: NSTextField!
     private var loadingDetail: NSTextField!
@@ -135,7 +186,13 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
         configuration.userContentController.add(self, name: "quickLook")
         configuration.userContentController.add(self, name: "setAppearance")
         configuration.userContentController.add(self, name: "alerts")
-        webView = WKWebView(frame: .zero, configuration: configuration)
+        webView = GodModeWebView(frame: .zero, configuration: configuration)
+        webView.onFolderDrag = { [weak self] active in
+            self?.emit("godcode-folder-drag", ["active": active])
+        }
+        webView.onFolderDrop = { [weak self] dirPath in
+            self?.emit("godcode-folder-drop", ["path": dirPath])
+        }
         if #available(macOS 13.3, *) {
             webView.isInspectable = (environment["G0D_DEVTOOLS"] == "1")
         }

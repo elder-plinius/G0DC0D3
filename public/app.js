@@ -22,6 +22,22 @@ let createSource = 'fixture';
 let importPreview = null;
 let importPreviewBusy = false;
 let importPreviewVersion = 0;
+let autoPreviewTimer = null;
+const RECENT_PROJECTS_KEY = 'g0dc0d3.recentProjects';
+const PENDING_PROJECT_KEY = 'g0dc0d3.pendingProject';
+let pendingProjectPreview = null;
+let pendingProjectPreviewSeq = 0;
+let pendingProject = (() => {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PENDING_PROJECT_KEY) || 'null');
+    if (raw && typeof raw.path === 'string' && raw.path.trim()) {
+      const cleaned = raw.path.trim().replace(/[\\/]+$/, '') || raw.path.trim();
+      const name = cleaned.split(/[\\/]/).filter(Boolean).pop() || cleaned;
+      return { path: cleaned, name, mode: raw.mode === 'worktree' ? 'worktree' : 'copy' };
+    }
+  } catch {}
+  return null;
+})();
 let routeTaskId = null;
 let routeDirty = false;
 let streamSource = null;
@@ -623,12 +639,18 @@ function renderComposer() {
   $('#composer-project').disabled = loading || createBusy;
   $('#composer-model').disabled = loading || createBusy;
   const label = projectLabel(task);
+  const attachedPending = !task && appMode === 'godcode' && pendingProject?.path ? pendingProject : null;
   setVisible('#composer-code-prefix', Boolean(task?.codeWorkspace));
-  setText('#composer-project-label', task?.codeWorkspace ? task.codeWorkspace.repository : label || (task?.workspaceKind === 'conversation' ? 'Attach repository' : 'Add project'));
+  setText('#composer-project-label', task?.codeWorkspace ? task.codeWorkspace.repository : label || attachedPending?.name || (task?.workspaceKind === 'conversation' ? 'Attach repository' : 'Add project'));
+  $('#composer-project').classList.toggle('has-project', Boolean(task?.codeWorkspace || task?.sourcePath || attachedPending));
   const preferred = providerById(newConversationProviders()[0]);
   const race = task ? task.answerRace : RecoveryUI.preferences().answerRace;
   setText('#composer-model-label', race ? `${race.models?.length || 2} arena writers` : task ? providerById(task.providerId)?.label || task.providerId || 'Model' : preferred?.label || 'Connect model');
-  $('#composer-project').title = task?.workspaceKind === 'conversation' ? (task.codeWorkspace ? 'Open GodCode in this chat' : 'Attach a repository to this chat') : task ? 'Project locations and working copy' : 'Start a new task in a project copy';
+  $('#composer-project').title = attachedPending
+    ? `Attached project (${attachedPending.mode === 'worktree' ? 'Git Worktree' : 'Isolated Copy'}): ${attachedPending.path} — click to switch or detach`
+    : task?.workspaceKind === 'conversation'
+      ? (task.codeWorkspace ? 'Open GodCode or switch repository' : 'Attach a repository to this chat')
+      : task ? 'Project locations, recent repos, and worktrees' : 'Choose a recent project, browse a folder, or drop one here';
   setVisible('#composer-permissions', true);
   const permRulesNow = task && Array.isArray(task.permissionRules)
     ? task.permissionRules
@@ -1958,6 +1980,10 @@ function closeAllPopovers(exceptId = null) {
     $('#effort-popover')?.classList.add('hidden');
     $('#composer-effort')?.setAttribute('aria-expanded', 'false');
   }
+  if (exceptId !== 'project-popover') {
+    $('#project-popover')?.classList.add('hidden');
+    $('#composer-project')?.setAttribute('aria-expanded', 'false');
+  }
   if (exceptId !== 'composer-options') {
     setComposerOptionsOpen(false);
   }
@@ -2203,8 +2229,53 @@ async function startConversation(raw, message = raw.trim()) {
   try {
     let preferences = {};
     try { preferences = JSON.parse(localStorage.getItem('g0dc0d3.defaults') || '{}'); } catch {}
+    const attached = appMode === 'godcode' && pendingProject?.path ? pendingProject : null;
+    if (attached && attached.mode === 'copy') {
+      let preview = pendingProjectPreview && pendingProjectPreview.sourceInput === attached.path && pendingProjectPreview.snapshotHash
+        ? pendingProjectPreview
+        : null;
+      if (!preview) {
+        const res = await api('/api/workspaces/preview', { method: 'POST', body: JSON.stringify({ sourcePath: attached.path }) });
+        preview = { ...res, sourceInput: attached.path };
+        pendingProjectPreview = preview;
+      }
+      const { task } = await api('/api/tasks', {
+        method: 'POST',
+        body: JSON.stringify({
+          sourcePath: preview.sourcePath,
+          previewHash: preview.snapshotHash,
+          objective: message,
+          providerIds,
+          persona: preferences.persona || 'plinian',
+          effort: draftEffort,
+          planMode: draftPlanMode,
+          policy: RecoveryUI.policy(null),
+          execution: { enabled: Boolean(state.executionAvailable), network: false, timeoutMs: 30000 },
+          checks: [],
+          ...(composerAttachments.length ? { attachments: composerAttachments.slice(0, 4) } : {}),
+        }),
+      });
+      createdId = task.id;
+      recordRecentProject(attached.path, 'copy');
+      if (composerScope === 'welcome') clearComposerAttachments();
+      if (composerDrafts.get('welcome') === raw) saveComposerDraft('welcome', '');
+      if (composerScope === 'welcome' && $('#composer-input').value === raw) { $('#composer-input').value = ''; resizeComposer(); }
+      state.tasks.unshift(task);
+      if (!selectedId && version === selectionVersion) await selectTask(task.id);
+      toast(`Started in ${attached.name} (isolated copy).`);
+      await refresh();
+      return;
+    }
     const { task } = await api('/api/conversations', { method: 'POST', body: JSON.stringify({ objective: message, providerIds, generation: generationDefaults(), answerRace:preferences.answerRace || null, ultraplinian: Boolean(preferences.answerRace), persona: preferences.persona || 'plinian', effort: draftEffort, policy: RecoveryUI.policy(null), planMode: appMode === 'godcode' ? draftPlanMode : false, ...(composerAttachments.length ? { attachments: composerAttachments.slice(0, 4) } : {}) }) });
     createdId = task.id;
+    if (attached && attached.mode === 'worktree') {
+      try {
+        await api(`/api/conversations/${encodeURIComponent(task.id)}/repository`, { method: 'POST', body: JSON.stringify({ repository: attached.path }) });
+        recordRecentProject(attached.path, 'worktree');
+      } catch (wtErr) {
+        toast(`Chat started — worktree note: ${wtErr.message}`);
+      }
+    }
     if (composerScope === 'welcome') clearComposerAttachments();
     if (composerDrafts.get('welcome') === raw) saveComposerDraft('welcome', '');
     if (composerScope === 'welcome' && $('#composer-input').value === raw) { $('#composer-input').value = ''; resizeComposer(); }
@@ -6895,7 +6966,7 @@ function updateFixtureHelp() {
 
 function updateCreateAvailability() {
   const providers = $$('#create-providers input:checked');
-  const ready = createSource === 'fixture' ? Boolean($('#create-fixture').value) : Boolean(importPreview && importPreview.sourceInput === $('#create-source-path').value.trim() && $('#create-objective').value.trim());
+  const ready = createSource === 'fixture' ? Boolean($('#create-fixture').value) : Boolean($('#create-source-path').value.trim() && $('#create-objective').value.trim());
   $('#create-submit').disabled = createBusy || importPreviewBusy || !providers.length || !ready;
 }
 
@@ -6946,20 +7017,20 @@ function setCreateSource(mode) {
   renderCreateProviders();
 }
 
-async function previewImport() {
+async function previewImport({ silentError = false } = {}) {
   const sourcePath = $('#create-source-path').value.trim();
-  if (!sourcePath) { errorIn('#create-error', new Error('Enter an absolute project directory.')); return; }
+  if (!sourcePath) { if (!silentError) errorIn('#create-error', new Error('Enter an absolute project directory.')); return null; }
   const version = ++importPreviewVersion;
   importPreview = null;
   importPreviewBusy = true;
   $('#preview-import').disabled = true;
-  setText('#preview-import', 'Reading…');
+  setText('#preview-import', 'Scanning…');
   setVisible('#create-error', false);
   $('#import-preview').innerHTML = '';
   updateCreateAvailability();
   try {
     const preview = await api('/api/workspaces/preview', { method: 'POST', body: JSON.stringify({ sourcePath }) });
-    if (version !== importPreviewVersion || createSource !== 'project') return;
+    if (version !== importPreviewVersion || createSource !== 'project') return null;
     importPreview = { ...preview, sourceInput: sourcePath };
     const files = preview.files ?? [];
     const omitted = preview.omitted ?? [];
@@ -6969,9 +7040,14 @@ async function previewImport() {
       ? `<div class="suggested-checks"><span class="suggested-checks-label">Detected project checks (click to add)</span><div class="suggested-checks-list">${suggestedChecks.map(check => `<button type="button" class="check-chip ${existingLines.has(check.command) ? 'is-added' : ''}" data-add-check="${escapeHTML(check.command)}" title="Detected in ${escapeHTML(check.source)}"><span class="check-chip-plus" aria-hidden="true">${existingLines.has(check.command) ? '✓' : '+'}</span><span class="check-chip-name">${escapeHTML(check.name)}</span><code>${escapeHTML(check.command)}</code></button>`).join('')}</div></div>`
       : '';
     $('#import-preview').innerHTML = `<div class="import-summary"><strong>${files.length} ${files.length === 1 ? 'file' : 'files'} ready to copy</strong><span>${(Number(preview.totalBytes ?? 0) / 1024).toFixed(1)} KiB · ${omitted.length} omitted</span><p>${escapeHTML(preview.copyPolicy ?? 'Review the included and omitted paths. This is a source-file copy, not a complete environment snapshot.')}</p></div>${suggestedHtml}<details class="import-file-list"><summary>Included files (${files.length})</summary><ul>${files.map((file) => `<li><code>${escapeHTML(file.path)}</code><span>${escapeHTML(file.bytes ?? '')} B</span></li>`).join('')}</ul></details>${omitted.length ? `<details class="import-file-list"><summary>Omitted paths (${omitted.length})</summary><ul>${omitted.map((file) => `<li><code>${escapeHTML(file.path)}</code><span>${escapeHTML(file.reason)}</span></li>`).join('')}</ul></details>` : ''}`;
-  } catch (error) { if (version === importPreviewVersion) errorIn('#create-error', error); }
-  finally { if (version === importPreviewVersion) { importPreviewBusy = false; $('#preview-import').disabled = false; setText('#preview-import', 'Preview copy'); updateCreateAvailability(); } }
+    return importPreview;
+  } catch (error) {
+    if (version === importPreviewVersion && !silentError) errorIn('#create-error', error);
+    return null;
+  }
+  finally { if (version === importPreviewVersion) { importPreviewBusy = false; $('#preview-import').disabled = false; setText('#preview-import', importPreview ? 'Re-scan' : 'Preview copy'); updateCreateAvailability(); } }
 }
+window.G0DPreviewCreateImport = () => previewImport();
 
 function openCreate(fixtureId, options = {}) {
   captureComposerDraft();
@@ -6991,10 +7067,16 @@ function openCreate(fixtureId, options = {}) {
   if (fixtureId) $('#create-fixture').value = fixtureId;
   $('#create-scenario').innerHTML = '<option value="">Normal run (default)</option>' + (state.scenarios ?? []).filter((scenario) => scenario !== 'normal').map((scenario) => `<option value="${escapeHTML(scenario)}">${escapeHTML(humanize(scenario))}</option>`).join('');
   setCreateSource(options.source ?? 'fixture');
+  renderCreateRecentProjects();
+  const initialPath = (options.sourcePath ?? (options.source === 'project' ? pendingProject?.path : '') ?? '').trim();
+  if (createSource === 'project' && initialPath) {
+    $('#create-source-path').value = initialPath;
+    void previewImport({ silentError: true });
+  }
   updateFixtureHelp();
   dismissDrawers();
   if (!$('#create-dialog').open) $('#create-dialog').showModal();
-  if (createSource === 'project' && createProjectObjective) $('#create-source-path').focus();
+  if (createSource === 'project' && createProjectObjective && !initialPath) $('#create-source-path').focus();
 }
 
 async function createTask(event) {
@@ -7007,7 +7089,11 @@ async function createTask(event) {
   const request = { providerIds, persona: $('#create-persona').value, policy: { ...RecoveryUI.policy(null, liveProviders), mode: $('#create-mode').value, returnToPrimary: $('#create-return').value === 'yes' } };
   if (workflow) request.workflow = workflow;
   if (createSource === 'project') {
-    if (!importPreview || importPreview.sourceInput !== $('#create-source-path').value.trim()) { errorIn('#create-error', new Error('Preview the current source directory before creating its copy.')); return; }
+    const sourceInput = $('#create-source-path').value.trim();
+    if (!importPreview || importPreview.sourceInput !== sourceInput) {
+      const scanned = await previewImport();
+      if (!scanned) return;
+    }
     request.sourcePath = importPreview.sourcePath;
     request.previewHash = importPreview.snapshotHash;
     request.execution = { enabled: $('#create-execution').checked, network: $('#create-network').checked, timeoutMs: 30000 };
@@ -7026,6 +7112,10 @@ async function createTask(event) {
   setVisible('#create-error', false);
   try {
     const { task } = await api('/api/tasks', { method: 'POST', body: JSON.stringify(request) });
+    if (createSource === 'project' && request.sourcePath) {
+      recordRecentProject(request.sourcePath, 'copy');
+      setPendingProject(request.sourcePath, 'copy');
+    }
     if (createComposerOrigin && createSource === 'project') {
       saveComposerDraft(createComposerOrigin, '');
       composerErrors.delete(createComposerOrigin);
@@ -7879,11 +7969,21 @@ $('#composer-form')?.addEventListener('dragleave', event => {
   }
 });
 $('#composer-form')?.addEventListener('drop', event => {
-  $('#composer-form').classList.remove('is-drop-target');
+  $('#composer-form').classList.remove('is-drop-target', 'is-folder-drop-target');
   const files = [...(event.dataTransfer?.files || [])];
   if (files.length) {
     event.preventDefault();
     addComposerFiles(files, 'dropped ');
+    return;
+  }
+  const uriRaw = (event.dataTransfer?.getData('text/uri-list') || event.dataTransfer?.getData('text/plain') || '').trim();
+  if (uriRaw) {
+    const firstLine = uriRaw.split(/\r?\n/).find(l => l && !l.startsWith('#')) || '';
+    const candidate = firstLine.startsWith('file://') ? decodeURIComponent(firstLine.replace(/^file:\/\/(?:localhost)?/i, '')) : firstLine;
+    if (/^(\/|[A-Za-z]:[\\/])/.test(candidate)) {
+      event.preventDefault();
+      handleDroppedFolderPath(candidate);
+    }
   }
 });
 
@@ -7924,14 +8024,9 @@ $('#composer-input').addEventListener('keydown', (event) => {
     $('#composer-form').requestSubmit();
   }
 });
-$('#composer-project').addEventListener('click', () => {
-  const task = selectedData?.task;
-  if (task?.workspaceKind === 'conversation') { window.openChatCode(task); return; }
-  if (!task) { openCreate(undefined, { source: 'project', objective: $('#composer-input').value, composerOrigin: selectedId || 'welcome' }); return; }
-  const shortWs = task.workspace ? task.workspace.split(/[\\/]/).pop() || task.workspace : '';
-  $('#project-location').innerHTML = `<section class="project-location"><h3>Working copy</h3><code title="${escapeHTML(task.workspace)}">${escapeHTML(shortWs)}</code><p class="field-help">The agent edits this copy.</p></section>${task.sourcePath ? `<section class="project-location"><h3>Original project</h3><code>${escapeHTML(task.sourcePath)}</code><p class="field-help">Changes reach this folder only after reviewed Apply.</p></section>` : '<p class="field-help">Example project. Your own files are unchanged.</p>'}`;
-  dismissDrawers();
-  $('#project-dialog').showModal();
+$('#composer-project').addEventListener('click', (event) => {
+  event.stopPropagation();
+  toggleProjectPopover();
 });
 $('#project-new-task').addEventListener('click',()=>{ $('#project-dialog').close(); openCreate(undefined,{source:'project', objective:$('#composer-input').value,composerOrigin:selectedId || 'welcome'}); });
 $('#project-dialog').addEventListener('close',()=>$('#composer-project').focus());
@@ -7956,7 +8051,7 @@ $('#composer-options-toggle')?.addEventListener('click', (event) => {
 document.addEventListener('click', (event) => {
   const shell = $('#composer-shell');
   if (!shell?.classList.contains('composer-options-open')) return;
-  if (event.target.closest('#composer-shell, #effort-popover, #ultra-popover, #model-picker, dialog[open]')) return;
+  if (event.target.closest('#composer-shell, #effort-popover, #ultra-popover, #project-popover, #model-picker, dialog[open]')) return;
   setComposerOptionsOpen(false);
 });
 function closeUltraPopover() {
@@ -8216,14 +8311,395 @@ $('#effort-popover')?.addEventListener('click', async event => {
   await setEffortLevel(selectedData?.task || null, level);
 });
 
+function normalizeProjectPath(raw) {
+  const s = String(raw ?? '').trim();
+  if (!s) return '';
+  if (s === '/' || /^[A-Za-z]:[\\/]?$/.test(s)) return s;
+  return s.replace(/[\\/]+$/, '');
+}
+
+function projectBaseName(folderPath) {
+  const clean = normalizeProjectPath(folderPath);
+  return clean.split(/[\\/]/).filter(Boolean).pop() || clean;
+}
+
+function projectParentDir(folderPath) {
+  const clean = normalizeProjectPath(folderPath);
+  const parts = clean.split(/[\\/]/);
+  if (parts.length <= 2) return clean;
+  return parts.slice(0, -1).join('/');
+}
+
+function loadRecentProjects() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(RECENT_PROJECTS_KEY) || '[]');
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .filter(item => item && typeof item.path === 'string' && item.path.trim())
+      .slice(0, 8)
+      .map(item => {
+        const clean = normalizeProjectPath(item.path);
+        return {
+          path: clean,
+          name: item.name || projectBaseName(clean),
+          mode: item.mode === 'worktree' ? 'worktree' : 'copy',
+          lastUsed: Number(item.lastUsed || 0),
+        };
+      });
+  } catch { return []; }
+}
+
+function saveRecentProjects(list) {
+  try { localStorage.setItem(RECENT_PROJECTS_KEY, JSON.stringify(list.slice(0, 8))); } catch {}
+}
+
+function recordRecentProject(folderPath, mode = 'copy') {
+  const clean = normalizeProjectPath(folderPath);
+  if (!clean) return;
+  const current = loadRecentProjects().filter(item => item.path !== clean);
+  current.unshift({ path: clean, name: projectBaseName(clean), mode: mode === 'worktree' ? 'worktree' : 'copy', lastUsed: Date.now() });
+  saveRecentProjects(current);
+  renderCreateRecentProjects();
+  renderProjectPopover();
+}
+window.G0DRecordRecentProject = recordRecentProject;
+
+function removeRecentProject(folderPath) {
+  const clean = normalizeProjectPath(folderPath);
+  saveRecentProjects(loadRecentProjects().filter(item => item.path !== clean));
+  renderCreateRecentProjects();
+  renderProjectPopover();
+}
+
+function renderCreateRecentProjects() {
+  const bar = $('#create-recent-projects');
+  if (!bar) return;
+  const recent = loadRecentProjects();
+  if (!recent.length) { bar.classList.add('hidden'); bar.innerHTML = ''; return; }
+  bar.classList.remove('hidden');
+  bar.innerHTML = `<span class="recent-projects-label">Recent</span>${recent.slice(0, 5).map(item => `<button type="button" class="recent-project-chip" data-recent-create-path="${escapeHTML(item.path)}" title="${escapeHTML(item.path)}"><span>${escapeHTML(item.name)}</span></button>`).join('')}`;
+}
+
+async function scanPendingProjectPreview(folderPath) {
+  const clean = normalizeProjectPath(folderPath);
+  if (!clean) return;
+  const seq = ++pendingProjectPreviewSeq;
+  pendingProjectPreview = { sourceInput: clean, loading: true, error: null };
+  renderProjectPopover();
+  try {
+    const res = await api('/api/workspaces/preview', { method: 'POST', body: JSON.stringify({ sourcePath: clean }) });
+    if (seq !== pendingProjectPreviewSeq || pendingProject?.path !== clean) return;
+    pendingProjectPreview = {
+      ...res,
+      sourceInput: clean,
+      fileCount: Array.isArray(res.files) ? res.files.length : 0,
+      omittedCount: Array.isArray(res.omitted) ? res.omitted.length : 0,
+      loading: false,
+      error: null,
+    };
+  } catch (err) {
+    if (seq !== pendingProjectPreviewSeq || pendingProject?.path !== clean) return;
+    pendingProjectPreview = { sourceInput: clean, loading: false, error: err?.message || 'Unable to scan folder' };
+  }
+  renderProjectPopover();
+}
+
+function setPendingProject(folderPath, mode = 'copy', { notify = false } = {}) {
+  const clean = normalizeProjectPath(folderPath);
+  if (!clean) {
+    pendingProject = null;
+    pendingProjectPreview = null;
+    pendingProjectPreviewSeq += 1;
+    try { localStorage.removeItem(PENDING_PROJECT_KEY); } catch {}
+    renderComposer();
+    renderProjectPopover();
+    if (notify) toast('Detached project.');
+    return;
+  }
+  const normalizedMode = mode === 'worktree' ? 'worktree' : 'copy';
+  pendingProject = { path: clean, name: projectBaseName(clean), mode: normalizedMode };
+  try { localStorage.setItem(PENDING_PROJECT_KEY, JSON.stringify(pendingProject)); } catch {}
+  recordRecentProject(clean, normalizedMode);
+  if (normalizedMode === 'copy') {
+    if (!pendingProjectPreview || pendingProjectPreview.sourceInput !== clean || pendingProjectPreview.error) {
+      void scanPendingProjectPreview(clean);
+    }
+  } else {
+    pendingProjectPreview = null;
+  }
+  renderComposer();
+  renderProjectPopover();
+  if (notify) toast(`Attached ${pendingProject.name} (${normalizedMode === 'worktree' ? 'Git Worktree' : 'Isolated Copy'}).`);
+}
+
+function handleDroppedFolderPath(folderPath) {
+  const clean = normalizeProjectPath(folderPath);
+  if (!clean) return;
+  if ($('#create-dialog')?.open) {
+    setCreateSource('project');
+    $('#create-source-path').value = clean;
+    void previewImport();
+    toast(`Loaded ${projectBaseName(clean)} into New Task.`);
+    return;
+  }
+  if ($('#tree-dialog')?.open) {
+    const input = $('#tree-folder');
+    if (input) input.value = clean;
+    toast(`Loaded ${projectBaseName(clean)} into Git Worktrees.`);
+    return;
+  }
+  const task = selectedData?.task;
+  if (task?.workspaceKind === 'conversation' && typeof window.openChatCode === 'function') {
+    recordRecentProject(clean, 'worktree');
+    void window.openChatCode(task).then(() => {
+      const input = $('#tree-folder');
+      if (input) input.value = clean;
+    });
+    toast(`Ready to attach ${projectBaseName(clean)} worktree.`);
+    return;
+  }
+  if (appMode !== 'godcode') applyAppMode('godcode', { persist: true, notify: false, switchView: false });
+  if (selectedId) newConversation();
+  setPendingProject(clean, pendingProject?.mode || 'copy', { notify: true });
+  $('#composer-input')?.focus();
+}
+
+window.G0DAttachProjectFromPicker = (folder) => {
+  const clean = normalizeProjectPath(folder);
+  if (!clean) return;
+  const task = selectedData?.task;
+  if (task?.workspaceKind === 'conversation' && typeof window.openChatCode === 'function') {
+    closeProjectPopover();
+    recordRecentProject(clean, 'worktree');
+    void window.openChatCode(task).then(() => {
+      const input = $('#tree-folder');
+      if (input) input.value = clean;
+    });
+    return;
+  }
+  if (appMode !== 'godcode') applyAppMode('godcode', { persist: true, notify: false, switchView: false });
+  setPendingProject(clean, pendingProject?.mode || 'copy', { notify: true });
+  closeProjectPopover();
+  $('#composer-input')?.focus();
+};
+
+window.addEventListener('godcode-folder-drag', event => {
+  const active = Boolean(event?.detail?.active);
+  $('#composer-form')?.classList.toggle('is-folder-drop-target', active);
+});
+window.addEventListener('godcode-folder-drop', event => {
+  $('#composer-form')?.classList.remove('is-folder-drop-target');
+  const dirPath = typeof event?.detail?.path === 'string' ? event.detail.path : '';
+  if (dirPath) handleDroppedFolderPath(dirPath);
+});
+
+function closeProjectPopover() {
+  const pop = $('#project-popover');
+  if (!pop || pop.classList.contains('hidden')) return;
+  pop.classList.add('hidden');
+  $('#composer-project')?.setAttribute('aria-expanded', 'false');
+  lastDialogCloseAt = Date.now();
+}
+
+function positionProjectPopover() {
+  const pop = $('#project-popover');
+  const btn = $('#composer-project');
+  if (!pop || !btn || pop.classList.contains('hidden')) return;
+  const rect = btn.getBoundingClientRect();
+  const popW = Math.min(400, window.innerWidth - 24);
+  const left = Math.max(12, Math.min(window.innerWidth - popW - 12, rect.left));
+  const bottom = Math.max(12, window.innerHeight - rect.top + 8);
+  pop.style.left = `${Math.round(left)}px`;
+  pop.style.bottom = `${Math.round(bottom)}px`;
+}
+
+function openProjectLocationsDialog(task) {
+  if (!task) return;
+  const shortWs = task.workspace ? task.workspace.split(/[\\/]/).pop() || task.workspace : '';
+  $('#project-location').innerHTML = `<section class="project-location"><h3>Working copy</h3><code title="${escapeHTML(task.workspace)}">${escapeHTML(shortWs)}</code><p class="field-help">The agent edits this copy.</p></section>${task.sourcePath ? `<section class="project-location"><h3>Original project</h3><code>${escapeHTML(task.sourcePath)}</code><p class="field-help">Changes reach this folder only after reviewed Apply.</p></section>` : '<p class="field-help">Example project. Your own files are unchanged.</p>'}`;
+  dismissDrawers();
+  $('#project-dialog').showModal();
+}
+
+function renderProjectPopover() {
+  const pop = $('#project-popover');
+  if (!pop || pop.classList.contains('hidden')) return;
+  const task = selectedData?.task || null;
+  const recent = loadRecentProjects();
+  const hasNativeBrowse = Boolean(window.webkit?.messageHandlers?.chooseRepository);
+  let activeHtml = '';
+  if (task) {
+    const label = task.codeWorkspace ? task.codeWorkspace.repository : (projectLabel(task) || 'Current workspace');
+    const pathLine = task.sourcePath || task.codeWorkspace?.root || task.workspace || '';
+    activeHtml = `
+      <div class="project-pop-active">
+        <div class="project-pop-active-top">
+          <strong>${escapeHTML(label)}</strong>
+          <span class="project-pop-item-badge">${task.codeWorkspace ? 'Worktree' : task.sourcePath ? 'Copy' : 'Chat'}</span>
+        </div>
+        ${pathLine ? `<code class="project-pop-path" title="${escapeHTML(pathLine)}">${escapeHTML(pathLine)}</code>` : ''}
+        <div class="project-pop-actions-row">
+          ${task.workspaceKind === 'conversation' ? `<button type="button" class="button button-secondary" data-project-open-worktree>${task.codeWorkspace ? 'Open Git Worktree…' : 'Attach Git Worktree…'}</button>` : `<button type="button" class="button button-secondary" data-project-inspect>Inspect paths</button>`}
+          <button type="button" class="button button-quiet" data-project-new-task>New project task…</button>
+        </div>
+      </div>`;
+  } else if (pendingProject) {
+    let statusLine = '';
+    if (pendingProject.mode === 'worktree') {
+      statusLine = '<p class="project-pop-preview">Starts a conversation attached to a dedicated Git worktree branch.</p>';
+    } else if (pendingProjectPreview?.sourceInput === pendingProject.path) {
+      if (pendingProjectPreview.loading) statusLine = '<p class="project-pop-preview">Scanning project files…</p>';
+      else if (pendingProjectPreview.error) statusLine = `<p class="project-pop-preview is-error">${escapeHTML(pendingProjectPreview.error)}</p>`;
+      else statusLine = `<p class="project-pop-preview">✓ ${pendingProjectPreview.fileCount} files (${(Number(pendingProjectPreview.totalBytes || 0) / 1024).toFixed(1)} KiB) ready · press Enter to start</p>`;
+    }
+    activeHtml = `
+      <div class="project-pop-active">
+        <div class="project-pop-active-top">
+          <strong title="${escapeHTML(pendingProject.path)}">${escapeHTML(pendingProject.name)}</strong>
+          <button type="button" class="button button-quiet" data-project-detach>Detach</button>
+        </div>
+        <code class="project-pop-path" title="${escapeHTML(pendingProject.path)}">${escapeHTML(pendingProject.path)}</code>
+        <div class="project-pop-mode-switch" role="radiogroup" aria-label="Workspace isolation mode">
+          <button type="button" class="project-pop-mode-btn${pendingProject.mode === 'copy' ? ' active' : ''}" role="radio" aria-checked="${pendingProject.mode === 'copy'}" data-project-mode="copy">Isolated Copy</button>
+          <button type="button" class="project-pop-mode-btn${pendingProject.mode === 'worktree' ? ' active' : ''}" role="radio" aria-checked="${pendingProject.mode === 'worktree'}" data-project-mode="worktree">Git Worktree</button>
+        </div>
+        ${statusLine}
+      </div>`;
+  }
+
+  const recentHtml = recent.length
+    ? `<div class="project-pop-recent">${recent.map(item => {
+        const isCurrent = !task && pendingProject?.path === item.path;
+        return `<div class="project-pop-item${isCurrent ? ' active' : ''}"><button type="button" class="project-pop-item-main" data-project-pick="${escapeHTML(item.path)}" data-project-pick-mode="${escapeHTML(item.mode)}" title="${escapeHTML(item.path)}"><span class="project-pop-item-name">${escapeHTML(item.name)}</span><span class="project-pop-item-dir">${escapeHTML(projectParentDir(item.path))}</span></button><span class="project-pop-item-badge">${item.mode === 'worktree' ? 'Worktree' : 'Copy'}</span><button type="button" class="project-pop-item-remove" data-project-remove="${escapeHTML(item.path)}" aria-label="Remove ${escapeHTML(item.name)} from recent projects">×</button></div>`;
+      }).join('')}</div>`
+    : `<p class="project-pop-empty">Paste a folder path above${hasNativeBrowse ? ', click Browse…,' : ''} or drag any repo folder onto the composer.</p>`;
+
+  pop.innerHTML = `
+    <div class="ultra-popover-head">
+      <div><strong>Project</strong><small>${task ? 'Active session' : (pendingProject ? 'Ready to run' : 'Pick or drop a folder')}</small></div>
+      <button type="button" class="icon-button" data-close-project-popover aria-label="Close project picker">×</button>
+    </div>
+    ${activeHtml}
+    <form class="project-pop-quick-form" data-project-quick-form>
+      <input type="text" data-project-quick-input placeholder="/path/to/repo" value="${!task && pendingProject ? escapeHTML(pendingProject.path) : ''}" aria-label="Project folder path" autocomplete="off" spellcheck="false">
+      ${hasNativeBrowse ? '<button type="button" class="button button-secondary" data-project-browse>Browse…</button>' : ''}
+      <button type="submit" class="button button-primary">Attach</button>
+    </form>
+    <div class="project-pop-section-label"><span>Recent projects</span><span>${recent.length ? `${recent.length}/8` : ''}</span></div>
+    ${recentHtml}
+    <div class="ultra-popover-foot">
+      <button type="button" class="button button-quiet ultra-pop-advanced" data-project-advanced>Full task setup…</button>
+      <button type="button" class="button button-quiet ultra-pop-advanced" data-project-fixtures>Example projects</button>
+    </div>`;
+  positionProjectPopover();
+}
+
+function toggleProjectPopover(force) {
+  const pop = $('#project-popover');
+  if (!pop) return;
+  const open = typeof force === 'boolean' ? force : pop.classList.contains('hidden');
+  if (!open) { closeProjectPopover(); return; }
+  closeAllPopovers('project-popover');
+  pop.classList.remove('hidden');
+  $('#composer-project')?.setAttribute('aria-expanded', 'true');
+  renderProjectPopover();
+  if (!selectedData?.task && pendingProject?.mode === 'copy' && (!pendingProjectPreview || pendingProjectPreview.sourceInput !== pendingProject.path)) {
+    void scanPendingProjectPreview(pendingProject.path);
+  }
+}
+
+$('#project-popover')?.addEventListener('click', event => {
+  event.stopPropagation();
+  if (event.target.closest('[data-close-project-popover]')) { closeProjectPopover(); return; }
+  if (event.target.closest('[data-project-browse]')) { window.G0DDesktopBrowse?.('popover'); return; }
+  if (event.target.closest('[data-project-detach]')) { setPendingProject(null, 'copy', { notify: true }); return; }
+  const modeBtn = event.target.closest('[data-project-mode]');
+  if (modeBtn && pendingProject) {
+    setPendingProject(pendingProject.path, modeBtn.dataset.projectMode, { notify: false });
+    return;
+  }
+  const rmBtn = event.target.closest('[data-project-remove]');
+  if (rmBtn) { removeRecentProject(rmBtn.dataset.projectRemove); return; }
+  const pickBtn = event.target.closest('[data-project-pick]');
+  if (pickBtn) {
+    const pickedPath = pickBtn.dataset.projectPick;
+    const pickedMode = pickBtn.dataset.projectPickMode || 'copy';
+    const task = selectedData?.task;
+    closeProjectPopover();
+    if (task?.workspaceKind === 'conversation' && typeof window.openChatCode === 'function') {
+      void window.openChatCode(task).then(() => {
+        const input = $('#tree-folder');
+        if (input) input.value = pickedPath;
+      });
+    } else if (task) {
+      openCreate(undefined, { source: 'project', sourcePath: pickedPath, objective: $('#composer-input').value, composerOrigin: selectedId || 'welcome' });
+    } else {
+      setPendingProject(pickedPath, pickedMode, { notify: true });
+      $('#composer-input')?.focus();
+    }
+    return;
+  }
+  if (event.target.closest('[data-project-open-worktree]')) {
+    const task = selectedData?.task;
+    closeProjectPopover();
+    if (task && typeof window.openChatCode === 'function') window.openChatCode(task);
+    return;
+  }
+  if (event.target.closest('[data-project-inspect]')) {
+    const task = selectedData?.task;
+    closeProjectPopover();
+    openProjectLocationsDialog(task);
+    return;
+  }
+  if (event.target.closest('[data-project-new-task]') || event.target.closest('[data-project-advanced]')) {
+    closeProjectPopover();
+    openCreate(undefined, { source: 'project', sourcePath: pendingProject?.path || selectedData?.task?.sourcePath || '', objective: $('#composer-input').value, composerOrigin: selectedId || 'welcome' });
+    return;
+  }
+  if (event.target.closest('[data-project-fixtures]')) {
+    closeProjectPopover();
+    openCreate();
+    return;
+  }
+});
+
+$('#project-popover')?.addEventListener('submit', event => {
+  const form = event.target.closest('[data-project-quick-form]');
+  if (!form) return;
+  event.preventDefault();
+  const val = normalizeProjectPath(form.querySelector('[data-project-quick-input]')?.value || '');
+  if (!val) return;
+  const task = selectedData?.task;
+  closeProjectPopover();
+  if (task?.workspaceKind === 'conversation' && typeof window.openChatCode === 'function') {
+    recordRecentProject(val, 'worktree');
+    void window.openChatCode(task).then(() => {
+      const input = $('#tree-folder');
+      if (input) input.value = val;
+    });
+  } else if (task) {
+    openCreate(undefined, { source: 'project', sourcePath: val, objective: $('#composer-input').value, composerOrigin: selectedId || 'welcome' });
+  } else {
+    setPendingProject(val, pendingProject?.mode || 'copy', { notify: true });
+    $('#composer-input')?.focus();
+  }
+});
+
 document.addEventListener('click', event => {
   const pop = $('#ultra-popover');
   if (pop && !pop.classList.contains('hidden') && !pop.contains(event.target) && !event.target.closest('#composer-race')) closeUltraPopover();
   const epop = $('#effort-popover');
   if (epop && !epop.classList.contains('hidden') && !epop.contains(event.target) && !event.target.closest('#composer-effort')) closeEffortPopover();
+  const ppop = $('#project-popover');
+  if (ppop && !ppop.classList.contains('hidden') && !ppop.contains(event.target) && !event.target.closest('#composer-project')) closeProjectPopover();
 });
-window.addEventListener('resize', () => { positionUltraPopover(); positionEffortPopover(); });
+window.addEventListener('resize', () => { positionUltraPopover(); positionEffortPopover(); positionProjectPopover(); });
 document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && $('#project-popover') && !$('#project-popover').classList.contains('hidden')) {
+    event.preventDefault();
+    closeProjectPopover();
+    return;
+  }
   if (event.key === 'Escape' && $('#effort-popover') && !$('#effort-popover').classList.contains('hidden')) {
     event.preventDefault();
     closeEffortPopover();
@@ -9083,8 +9559,33 @@ $('#create-dialog').addEventListener('close', () => {
   }
   renderComposer();
 });
-$('#create-source-path').addEventListener('input', () => { importPreview = null; importPreviewVersion += 1; importPreviewBusy = false; $('#preview-import').disabled = false; setText('#preview-import', 'Preview copy'); $('#import-preview').innerHTML = ''; updateCreateAvailability(); });
-$('#preview-import').addEventListener('click', previewImport);
+$('#create-recent-projects')?.addEventListener('click', (event) => {
+  const chip = event.target.closest('[data-recent-create-path]');
+  if (!chip) return;
+  const val = chip.dataset.recentCreatePath || '';
+  if (!val) return;
+  $('#create-source-path').value = val;
+  void previewImport();
+});
+$('#create-source-path').addEventListener('input', () => {
+  importPreview = null;
+  importPreviewVersion += 1;
+  importPreviewBusy = false;
+  $('#preview-import').disabled = false;
+  setText('#preview-import', 'Preview copy');
+  $('#import-preview').innerHTML = '';
+  updateCreateAvailability();
+  clearTimeout(autoPreviewTimer);
+  const val = $('#create-source-path').value.trim();
+  if (createSource === 'project' && /^(\/|~\/|[A-Za-z]:[\\/])/.test(val) && val.length >= 2) {
+    autoPreviewTimer = setTimeout(() => {
+      if (createSource === 'project' && $('#create-source-path').value.trim() === val) {
+        void previewImport({ silentError: true });
+      }
+    }, 350);
+  }
+});
+$('#preview-import').addEventListener('click', () => previewImport());
 $('#create-form').addEventListener('submit', createTask);
 
 
