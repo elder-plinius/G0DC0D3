@@ -5,12 +5,12 @@ import path from 'node:path';
 const GIT = '/usr/bin/git';
 const MAX_OUTPUT = 32768;
 const MAX_BUFFER = 4 * 1024 * 1024;
-const SAFE_GIT_FLAGS = [
+export const SAFE_GIT_FLAGS = [
   '-c', 'core.hooksPath=/dev/null',
   '-c', 'core.fsmonitor=false',
   '-c', 'commit.gpgsign=false',
   '-c', 'core.pager=cat',
-  '-c', 'diff.external=false',
+  '-c', 'diff.external=',
   '-c', 'core.attributesfile=/dev/null',
   '-c', 'core.sshCommand=/usr/bin/false',
 ];

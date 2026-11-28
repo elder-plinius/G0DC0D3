@@ -3,7 +3,8 @@ import { spawn, execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { hasGit, gitInit, gitCommit } from './git.mjs';
+import { hasGit, gitInit, gitCommit, SAFE_GIT_FLAGS, neutralizeRepoGitConfigFlags } from './git.mjs';
+import { PERMISSION_PRESETS } from './permissions.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -87,7 +88,7 @@ function parseJsonPath(obj, dotPath) {
   const parts = String(dotPath || '').split('.').map(s => s.trim()).filter(Boolean);
   let cur = obj;
   for (const key of parts) {
-    if (cur == null || typeof cur !== 'object') return null;
+    if (cur == null || typeof cur !== 'object' || !Object.prototype.hasOwnProperty.call(cur, key)) return null;
     cur = cur[key];
   }
   const n = Number(cur);
@@ -165,7 +166,7 @@ export function normalizeNorthStarInput(input = {}) {
   const metricMode = VALID_METRIC_MODES.has(String(input.metricMode || 'regex')) ? String(input.metricMode || 'regex') : 'regex';
   const metricPattern = String(input.metricPattern || '').trim().slice(0, 300);
   if (metricMode === 'regex' && metricPattern) {
-    if (/\([^)]*[+*][^)]*\)[+*?]/.test(metricPattern)) {
+    if (/\([^)]*(?:[+*]|\{\d+,\d*\})[^)]*\)(?:[+*?]|\{\d+,\d*\})/.test(metricPattern) || /\(\([^)]*\)[+*?][^)]*\)[+*?]/.test(metricPattern)) {
       throw nsError('Metric regex contains unsafe nested quantifiers.');
     }
     try { new RegExp(metricPattern); } catch (err) { throw nsError(`Invalid metric regex: ${err.message}`); }
@@ -264,12 +265,15 @@ async function runShellCommand(command, cwd, { timeoutMs = 120_000, signal = nul
   });
 }
 
-async function gitExec(args, cwd) {
-  const { stdout } = await execFileAsync('git', args, {
+async function gitExec(args, cwd, { configRepoRoot = cwd } = {}) {
+  const extraFlags = configRepoRoot ? await neutralizeRepoGitConfigFlags(configRepoRoot) : [];
+  const { stdout } = await execFileAsync('git', [...SAFE_GIT_FLAGS, ...extraFlags, ...args], {
     cwd,
     maxBuffer: 8 * 1024 * 1024,
     env: {
       ...process.env,
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_CONFIG_GLOBAL: '/dev/null',
       GIT_TERMINAL_PROMPT: '0',
       GIT_AUTHOR_NAME: 'G0DC0D3 North Star',
       GIT_AUTHOR_EMAIL: 'northstar@g0dc0d3.local',
@@ -338,7 +342,7 @@ export class NorthStarManager {
       try {
         const raw = await fs.readFile(stateFile, 'utf8');
         const state = JSON.parse(raw);
-        if (state && state.id) {
+        if (state && typeof state.id === 'string' && /^ns_[a-zA-Z0-9_-]{4,64}$/.test(state.id) && state.id === ent.name) {
           if (state.status === 'running') {
             state.status = 'paused';
             state.pauseReason = 'App restarted — click Resume to continue cleanly.';
@@ -349,7 +353,12 @@ export class NorthStarManager {
     }
   }
 
-  _runDir(id) { return path.join(this.baseDir, id); }
+  _runDir(id) {
+    if (typeof id !== 'string' || !/^ns_[a-zA-Z0-9_-]{4,64}$/.test(id)) {
+      throw nsError('Invalid North Star run identifier.', 'INVALID_ID', 400);
+    }
+    return path.join(this.baseDir, id);
+  }
   _statePath(id) { return path.join(this._runDir(id), 'state.json'); }
   _expPath(id) { return path.join(this._runDir(id), 'experiments.jsonl'); }
   _logPath(id) { return path.join(this._runDir(id), 'LAB_LOG.md'); }
@@ -466,22 +475,32 @@ export class NorthStarManager {
     await fs.mkdir(runDir, { recursive: true });
 
     let isGitWorktree = false;
-    const repoHasGit = await hasGit(cfg.repoPath);
-    if (repoHasGit) {
-      try {
-        await gitExec(['worktree', 'add', '-b', branch, worktreePath, 'HEAD'], cfg.repoPath);
-        isGitWorktree = true;
-      } catch {
-        // Fallback cleanly to isolated git-initialized copy if HEAD is unborn or worktree unavailable
-        isGitWorktree = false;
+    let baselineSha = null;
+    try {
+      const repoHasGit = await hasGit(cfg.repoPath);
+      if (repoHasGit) {
+        try {
+          await gitExec(['worktree', 'add', '-b', branch, worktreePath, 'HEAD'], cfg.repoPath);
+          isGitWorktree = true;
+        } catch {
+          // Fallback cleanly to isolated git-initialized copy if HEAD is unborn or worktree unavailable
+          isGitWorktree = false;
+        }
       }
+      if (!isGitWorktree) {
+        await copyWorkspaceSnapshot(cfg.repoPath, worktreePath);
+        await gitInit(worktreePath);
+        await gitCommit(worktreePath, { message: 'northstar: baseline snapshot' });
+      }
+      baselineSha = await gitExec(['rev-parse', 'HEAD'], worktreePath, { configRepoRoot: isGitWorktree ? cfg.repoPath : worktreePath });
+    } catch (err) {
+      if (isGitWorktree) {
+        try { await gitExec(['worktree', 'remove', '--force', worktreePath], cfg.repoPath); } catch {}
+        try { await gitExec(['branch', '-D', branch], cfg.repoPath); } catch {}
+      }
+      await fs.rm(runDir, { recursive: true, force: true }).catch(() => {});
+      throw err;
     }
-    if (!isGitWorktree) {
-      await copyWorkspaceSnapshot(cfg.repoPath, worktreePath);
-      await gitInit(worktreePath);
-      await gitCommit(worktreePath, { message: 'northstar: baseline snapshot' });
-    }
-    const baselineSha = await gitExec(['rev-parse', 'HEAD'], worktreePath);
 
     await fs.writeFile(path.join(runDir, 'NORTHSTAR.md'), [
       `# NORTHSTAR: ${cfg.name}`,
@@ -571,12 +590,15 @@ export class NorthStarManager {
 
   async pauseRun(id, reason = 'Paused by user') {
     const run = this.getRun(id);
+    if (run.status === 'completed') return run;
     const ctrl = this.activeControllers.get(id);
     if (ctrl) ctrl.abort();
     const p = this.activePromises.get(id);
     if (p) await p.catch(() => {});
-    run.status = 'paused';
-    run.pauseReason = reason;
+    if (run.status !== 'completed') {
+      run.status = 'paused';
+      run.pauseReason = reason;
+    }
     this._stopKeepAwake(id);
     await this._persist(run);
     return run;
@@ -594,8 +616,8 @@ export class NorthStarManager {
   async getChampionDiff(id) {
     const run = this.getRun(id);
     try {
-      const diff = await gitExec(['diff', `${run.baselineSha}..${run.championSha}`], run.worktreePath);
-      const stat = await gitExec(['diff', '--stat', `${run.baselineSha}..${run.championSha}`], run.worktreePath);
+      const diff = await gitExec(['diff', '--no-ext-diff', '--no-textconv', `${run.baselineSha}..${run.championSha}`], run.worktreePath, { configRepoRoot: run.isGitWorktree ? run.repoPath : run.worktreePath });
+      const stat = await gitExec(['diff', '--no-ext-diff', '--no-textconv', '--stat', `${run.baselineSha}..${run.championSha}`], run.worktreePath, { configRepoRoot: run.isGitWorktree ? run.repoPath : run.worktreePath });
       return { id: run.id, baselineSha: run.baselineSha, championSha: run.championSha, baselineScore: run.baselineScore, bestScore: run.bestScore, stat, diff };
     } catch (err) {
       throw nsError(`Could not compute champion diff: ${err.message}`, 'DIFF_ERROR', 500);
@@ -610,8 +632,17 @@ export class NorthStarManager {
     const patchPath = path.join(this._runDir(id), 'champion.patch');
     await fs.writeFile(patchPath, diff + '\n', { mode: 0o600 });
     try {
-      await execFileAsync('git', ['apply', '--check', patchPath], { cwd: run.repoPath });
-      await execFileAsync('git', ['apply', patchPath], { cwd: run.repoPath });
+      const repoIsGit = await hasGit(run.repoPath);
+      const extraFlags = repoIsGit ? await neutralizeRepoGitConfigFlags(run.repoPath) : [];
+      const applyEnv = {
+        ...process.env,
+        GIT_CONFIG_NOSYSTEM: '1',
+        GIT_CONFIG_GLOBAL: '/dev/null',
+        GIT_TERMINAL_PROMPT: '0',
+        ...(!repoIsGit ? { GIT_CEILING_DIRECTORIES: path.dirname(path.resolve(run.repoPath)) } : {}),
+      };
+      await execFileAsync('git', [...SAFE_GIT_FLAGS, ...extraFlags, 'apply', '--check', patchPath], { cwd: run.repoPath, env: applyEnv });
+      await execFileAsync('git', [...SAFE_GIT_FLAGS, ...extraFlags, 'apply', patchPath], { cwd: run.repoPath, env: applyEnv });
       return { ok: true, applied: true, championSha: run.championSha, bestScore: run.bestScore, patchPath };
     } catch (err) {
       throw nsError(`Could not cleanly apply champion patch to ${run.repoPath}: ${err.stderr || err.message}`, 'APPLY_CONFLICT', 409);
@@ -671,9 +702,13 @@ export class NorthStarManager {
   }
 
   _resolveProvidersForIteration(run) {
+    const allowedMap = typeof this.runtime?._privacyFilteredProviders === 'function'
+      ? this.runtime._privacyFilteredProviders()
+      : this.runtime?.providers;
+    const isLive = p => p && p.available !== false && !p.closed && p.kind !== 'scripted';
     const configured = run.providerIds?.length
-      ? run.providerIds
-      : [...(this.runtime?.providers?.values?.() || [])].filter(p => p.available !== false && !p.closed && p.kind !== 'scripted').map(p => p.id);
+      ? run.providerIds.filter(pid => !allowedMap || isLive(allowedMap.get(pid)))
+      : [...(allowedMap?.values?.() || [])].filter(isLive).map(p => p.id);
     if (!configured.length) return [];
     const idx = run.activeProviderIndex % configured.length;
     return [configured[idx], ...configured.filter((_, i) => i !== idx)];
@@ -703,15 +738,16 @@ export class NorthStarManager {
 
   async _runDefaultIteration(run, prompt, providers, signal) {
     if (!this.runtime) throw nsError('Runtime unavailable for North Star iteration.', 'NO_RUNTIME', 500);
-    if (!providers.length) throw nsError('No live AI provider connected for North Star run.', 'NO_PROVIDER', 400);
+    if (!providers.length) throw nsError('No live AI provider connected (or allowed by current privacy settings) for North Star run.', 'NO_PROVIDER', 400);
     const task = await this.runtime.createTask({
       workspace: run.worktreePath,
       objective: prompt,
       providers,
       policy: { mode: 'adaptive', maxAttempts: 4, maxCalls: 24, learning: true },
       execution: { enabled: true, network: false },
+      permissionRules: [...(PERMISSION_PRESETS.autonomous || [])],
     });
-    const onAbort = () => { try { this.runtime.pause(task.id); } catch {} };
+    const onAbort = () => { try { this.runtime.cancel(task.id); } catch {} };
     signal.addEventListener('abort', onAbort, { once: true });
     try {
       const done = await this.runtime.run(task.id);
@@ -721,6 +757,14 @@ export class NorthStarManager {
       return { hypothesis, providerId: done?.providerId || providers[0] };
     } finally {
       signal.removeEventListener('abort', onAbort);
+      // Always ensure the ephemeral iteration task reaches a terminal state so resuming
+      // or running the next iteration in the same worktree never trips WORKSPACE_BUSY.
+      try {
+        const cur = this.runtime.getTask(task.id);
+        if (cur && !['completed', 'cancelled'].includes(cur.status)) {
+          this.runtime.cancel(task.id);
+        }
+      } catch {}
     }
   }
 
@@ -880,7 +924,10 @@ export class NorthStarManager {
               status = 'kept';
               note = `New record! ${score} (${delta >= 0 ? '+' : ''}${delta.toFixed(4)})`;
               try {
-                this.runtime?.store?.recordDomainOutcome?.({ domain: 'swe_coding', providerId: usedProvider, outcome: 'win' });
+                const isEphemeral = this.runtime?.getPrivacy?.()?.settings?.ephemeralSession === true;
+                if (!isEphemeral && this.runtime?.providers?.has?.(usedProvider)) {
+                  this.runtime?.store?.recordDomainOutcome?.({ domain: 'swe_coding', providerId: usedProvider, outcome: 'win' });
+                }
               } catch {}
             } else {
               status = 'reverted';

@@ -8252,7 +8252,7 @@ $('#ultra-popover')?.addEventListener('click', async event => {
   const openSettingsBtn = event.target.closest('[data-ultra-open-settings]');
   if (openSettingsBtn) {
     closeUltraPopover();
-    await openSettings('models', { subtab: 'routing' });
+    await openSettings('autonomy', { scrollTo: openSettingsBtn.dataset.ultraOpenSettings === 'arena' ? '#race-options' : '#ultra-router-section' });
     const raceEl = $('#race-options');
     const target = (openSettingsBtn.dataset.ultraOpenSettings === 'arena' && raceEl && !raceEl.hidden)
       ? raceEl
@@ -9708,7 +9708,7 @@ $('#overseer-popover')?.addEventListener('click', async event => {
   }
   if (event.target.closest('[data-overseer-pop-settings]')) {
     toggleOverseerPopover(false);
-    openSettings('models', { subtab: 'overseer' });
+    openSettings('autonomy', { scrollTo: '#overseer-section' });
   }
 });
 $('#overseer-popover')?.addEventListener('change', event => {

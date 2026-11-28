@@ -494,6 +494,9 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
       }
       const skillDeleteMatch=url.pathname.match(/^\/api\/skills\/([^/]+)$/);
       if(skillDeleteMatch && req.method==='DELETE') {
+        if (runtime.getPrivacy().settings.ephemeralSession === true) {
+          return send(res, 403, { error: 'Ephemeral engagement mode is active; persistent skill mutations are paused.', code: 'EPHEMERAL_SESSION' });
+        }
         const result=await deleteUserSkill(dataDir,decodeURIComponent(skillDeleteMatch[1]));
         if(!result.deleted)return send(res,404,{error:'Skill not found',code:'SKILL_NOT_FOUND'});
         return send(res,200,result);

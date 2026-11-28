@@ -961,7 +961,7 @@ export class Runtime {
           to: d.to || d.providerId || null,
           reason: d.reason || d.level || 'GODMODƎ recovery'
         });
-      } else if (ev.type === 'race.dispatched' || ev.type === 'race.result' || (ev.type === 'model.response' && d.scorecard)) {
+      } else if (ev.type === 'race.dispatched' || ev.type === 'race.result' || ev.type === 'race.crowned' || (ev.type === 'model.response' && d.scorecard)) {
         raceEvents.push(ev);
       }
     }
@@ -1031,6 +1031,7 @@ export class Runtime {
       });
       const judgeResult = relevantResults.find(e => e.data?.stage === 'grade');
       const judgeDispatched = raceEvents.some(e => e.type === 'race.dispatched' && e.data?.stage === 'grade' && (!raceId || e.data?.raceId === raceId));
+      const latestCrown = [...raceEvents].reverse().find(e => e.type === 'race.crowned' && (!raceId || !e.data?.raceId || e.data.raceId === raceId));
       arena = {
         raceId,
         status: latestScorecard ? 'completed' : judgeDispatched ? 'grading' : (latestDispatch && active.has(task.status) ? 'drafting' : 'ready'),
@@ -1041,6 +1042,7 @@ export class Runtime {
           status: latestScorecard ? 'completed' : judgeResult ? judgeResult.data.status : (judgeDispatched ? 'grading' : 'waiting')
         } : null,
         winnerId: latestScorecard?.winnerId || null,
+        crownedWinnerId: latestCrown?.data?.winnerId || null,
         note: latestScorecard?.note || null
       };
     }
@@ -4023,15 +4025,36 @@ export class Runtime {
       throw fault('INVALID_CROWN', 'That model was not a contender in this Conclave race.');
     }
     const domain = sc.domain || task.routing?.domain || 'fast_general';
+    const priorCrowns = events.filter(e => e.type === 'race.crowned' && (!sc.raceId || e.data?.raceId === sc.raceId));
+    const latestCrown = priorCrowns.at(-1) || null;
     const beforeStats = providerDomainStats(this.getLearning(), domain, cleanWinner);
     const eloBefore = beforeStats?.elo ?? 1500;
+    if (latestCrown?.data?.winnerId === cleanWinner) {
+      return {
+        ok: true,
+        alreadyCrowned: true,
+        raceId: sc.raceId || null,
+        winnerId: cleanWinner,
+        previousWinnerId: sc.winnerId || null,
+        domain,
+        eloBefore,
+        eloAfter: eloBefore,
+        delta: 0,
+        tier: eloRankTier(eloBefore),
+        source: 'owner',
+      };
+    }
+    const isEphemeral = this.getPrivacy().settings?.ephemeralSession === true;
+    const alreadyScoredElo = priorCrowns.length > 0;
     const opponents = contenderIds.filter(pid => pid !== cleanWinner);
-    if (opponents.length) {
-      for (const opponentId of opponents) {
-        this.store.recordDomainOutcome({ domain, providerId: cleanWinner, opponentId, outcome: 'race_win', margin: 4 });
+    if (!isEphemeral && !alreadyScoredElo) {
+      if (opponents.length) {
+        for (const opponentId of opponents) {
+          this.store.recordDomainOutcome({ domain, providerId: cleanWinner, opponentId, outcome: 'race_win', margin: 4 });
+        }
+      } else {
+        this.store.recordDomainOutcome({ domain, providerId: cleanWinner, outcome: 'prefer' });
       }
-    } else {
-      this.store.recordDomainOutcome({ domain, providerId: cleanWinner, outcome: 'prefer' });
     }
     const afterStats = providerDomainStats(this.getLearning(), domain, cleanWinner);
     const eloAfter = afterStats?.elo ?? eloBefore;

@@ -145,7 +145,8 @@ export async function runAnswerRace(runtime, task, epoch, signal) {
     try { runtime.store.recordDomainOutcome?.({ domain: raceDomain, ...payload }); } catch {}
   };
   const history = catalogMessages({task,history:runtime.getRecentEvents(id,200)});
-  const messages = [{role:'system',content:history[0].content+'\n'+editorial},...history.slice(1)];
+  const sysBase = history[0]?.content ? `${history[0].content}\n${editorial}` : editorial;
+  const messages = [{role:'system',content:sysBase},...history.slice(1)];
   const raceId = epoch + '-' + (task.calls+1);
   function reserve(modelIds,stage) {
     runtime.store.updateTask(id,t=>{t.calls+=modelIds.length;return t;},'race.dispatched',{raceId,stage,models:modelIds});
@@ -328,9 +329,10 @@ export async function runAnswerRace(runtime, task, epoch, signal) {
   let verdict = !graded.declined && graded.response?.type === 'message' && graded.response?.finish === 'done'
     ? scores(graded.response.text, contendersToGrade.length)
     : null;
-  if (!verdict && godmodeOn && runtime.getTask(id).calls < runtime.getTask(id).policy.maxCalls && (graded.declined || graded.response?.type !== 'message' || graded.response?.finish !== 'done')) {
+  if (!verdict && godmodeOn && runtime.getTask(id).calls < runtime.getTask(id).policy.maxCalls) {
     const privacy = runtime.outboundOptions?.()?.privacy || DEFAULT_PRIVACY_SETTINGS;
-    const backupJudge = await findUncensoredCatalogFallback(runtime, [activeJudge.id], privacy);
+    const backupJudge = await findUncensoredCatalogFallback(runtime, [activeJudge.id, ...ids], privacy)
+      || await findUncensoredCatalogFallback(runtime, [activeJudge.id], privacy);
     if (backupJudge && backupJudge.id !== activeJudge.id) {
       activeJudge = backupJudge;
       reserve([activeJudge.id], 'grade');

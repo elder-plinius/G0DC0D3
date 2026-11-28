@@ -134,6 +134,23 @@ test('v0.3.1 Phase 2 Gamified Conclave: local Elo tiers, streaks, leaderboard AP
       assert.equal(crown.winnerId, 'writer:b');
       assert.ok(crown.delta > 0, `Crowning must award positive Elo delta, got ${crown.delta}`);
 
+      // Repeat crown click on same contender is idempotent (no duplicate Elo farming)
+      const repeatCrownRes = await fetch(`${baseUrl}/api/tasks/${encodeURIComponent(created.task.id)}/race-crown`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-g0d-request': '1' },
+        body: JSON.stringify({ winnerId: 'writer:b' }),
+      });
+      assert.equal(repeatCrownRes.status, 200);
+      const repeatCrown = await repeatCrownRes.json();
+      assert.equal(repeatCrown.alreadyCrowned, true);
+      assert.equal(repeatCrown.delta, 0);
+
+      // Conclave snapshot persists owner's crownedWinnerId across reloads
+      const snapRes = await fetch(`${baseUrl}/api/tasks/${encodeURIComponent(created.task.id)}/conclave`, {
+        headers: { 'x-g0d-request': '1' },
+      }).then(r => r.json());
+      assert.equal(snapRes.arena?.crownedWinnerId, 'writer:b');
+
       // Invalid contender rejected with 400
       const badRes = await fetch(`${baseUrl}/api/tasks/${encodeURIComponent(created.task.id)}/race-crown`, {
         method: 'POST',
@@ -246,6 +263,16 @@ test('v0.3.1 Phase 3 North Star AutoResearch: git-atomic keep/revert, guardrails
     assert.equal(applied.applied, true);
     const updatedRepoAlgo = await fs.readFile(path.join(repo, 'algo.mjs'), 'utf8');
     assert.ok(updatedRepoAlgo.includes('SCORE = 45'), 'Champion patch must apply cleanly to source repo');
+
+    // Pausing an already-completed run must keep it completed (never resurrect to paused)
+    const afterPause = await manager.pauseRun(run.id);
+    assert.equal(afterPause.status, 'completed');
+
+    // Hardening checks: ReDoS brace-quantifier guard + JSON prototype traversal block
+    assert.throws(() => normalizeNorthStarInput({
+      goal: 'x', repoPath: repo, evalCommand: 'node eval.mjs', metricMode: 'regex', metricPattern: '([0-9]+){2,}',
+    }), /nested quantifiers/i);
+    assert.equal(extractMetric('{"score":42}', { metricMode: 'json', metricPattern: 'constructor.length' }), null);
 
     // Crash-proof persistence across fresh NorthStarManager restart
     await manager.close();

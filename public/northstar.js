@@ -12,6 +12,58 @@
   let pollTimer = null;
   let formExpanded = false;
   let draftGoal = '';
+  const diffByRun = new Map();
+
+  function captureUiDrafts(anchor) {
+    if (!anchor) return null;
+    const active = document.activeElement;
+    const focusInfo = active && anchor.contains(active) && active.id
+      ? {
+          id: active.id,
+          start: typeof active.selectionStart === 'number' ? active.selectionStart : null,
+          end: typeof active.selectionEnd === 'number' ? active.selectionEnd : null,
+        }
+      : null;
+    const fieldIds = [
+      'ns-goal', 'ns-repo', 'ns-eval-cmd', 'ns-metric-pattern', 'ns-direction',
+      'ns-hours', 'ns-iters', 'ns-guardrail', 'ns-target', 'ns-allowlist', 'ns-beam', 'ns-steer-input',
+    ];
+    const values = {};
+    for (const fid of fieldIds) {
+      const el = document.getElementById(fid);
+      if (el) values[fid] = el.value;
+    }
+    const keepAwakeEl = document.getElementById('ns-keep-awake');
+    const keepAwakeChecked = keepAwakeEl ? keepAwakeEl.checked : null;
+    const advDetailsOpen = Boolean(anchor.querySelector('#ns-create-form details.settings-disclosure')?.open);
+    return { focusInfo, values, keepAwakeChecked, advDetailsOpen };
+  }
+
+  function restoreUiDrafts(anchor, snap) {
+    if (!anchor || !snap) return;
+    for (const [fid, val] of Object.entries(snap.values || {})) {
+      if (fid === 'ns-goal' && draftGoal && !val) continue;
+      const el = document.getElementById(fid);
+      if (el && val !== undefined && el.value !== val) el.value = val;
+    }
+    if (snap.keepAwakeChecked !== null) {
+      const keepAwakeEl = document.getElementById('ns-keep-awake');
+      if (keepAwakeEl) keepAwakeEl.checked = snap.keepAwakeChecked;
+    }
+    if (snap.advDetailsOpen) {
+      const det = anchor.querySelector('#ns-create-form details.settings-disclosure');
+      if (det) det.open = true;
+    }
+    if (snap.focusInfo?.id) {
+      const el = document.getElementById(snap.focusInfo.id);
+      if (el && typeof el.focus === 'function') {
+        el.focus({ preventScroll: true });
+        if (snap.focusInfo.start !== null && typeof el.setSelectionRange === 'function') {
+          try { el.setSelectionRange(snap.focusInfo.start, snap.focusInfo.end ?? snap.focusInfo.start); } catch {}
+        }
+      }
+    }
+  }
 
   async function req(url, opts = {}) {
     const res = await fetch(url, {
@@ -91,7 +143,9 @@
   function render() {
     const anchor = document.getElementById('northstar-runs-anchor');
     if (!anchor) return;
+    const draftSnap = captureUiDrafts(anchor);
     const activeRun = runs.find(r => r.id === selectedRunId) || runs[0] || null;
+    const savedDiff = activeRun ? diffByRun.get(activeRun.id) : null;
     const tplChips = templates.map(t => `<button type="button" class="clp-tpl-chip" data-ns-template="${esc(t.id)}" title="${esc(t.description)}"><span>${esc(t.icon)}</span>${esc(t.label)}</button>`).join('');
     const runsListHtml = runs.length
       ? `<div class="ns-runs-strip">${runs.map(r => `<button type="button" class="ns-run-pill${activeRun?.id === r.id ? ' active' : ''} status-${esc(r.status)}" data-ns-select="${esc(r.id)}"><strong>${esc(r.name)}</strong><small>${esc(r.status)} · ${esc(r.iterations)}/${esc(r.maxIterations)}${r.bestScore !== null ? ` · ${r.bestScore}` : ''}</small></button>`).join('')}</div>`
@@ -128,7 +182,7 @@
           <input type="text" id="ns-steer-input" placeholder="Steer next iteration mid-flight (e.g. try batching or cache lookups)…" aria-label="Steer next North Star iteration" maxlength="1000">
           <button type="submit" class="button button-secondary">Queue Steer</button>
         </form>
-        <pre id="ns-diff-output" class="wire-pre hidden" tabindex="0"></pre>
+        <pre id="ns-diff-output" class="wire-pre${savedDiff ? '' : ' hidden'}" tabindex="0">${savedDiff ? esc(savedDiff) : ''}</pre>
         ${selectedExps.length ? `<div class="ns-exp-tape" aria-label="Experiment tape">${selectedExps.slice(-12).reverse().map(e => `<div class="ns-exp-row status-${esc(e.status)}"><span class="ns-exp-tag">${e.status === 'kept' ? '✓' : e.status === 'reverted' ? '✗' : '⚠'} #${esc(e.iteration)}</span><span class="ns-exp-hyp">${esc(e.hypothesis)}</span><span class="ns-exp-score">${e.score !== null && e.score !== undefined ? esc(e.score) : esc(e.status)}</span></div>`).join('')}</div>` : ''}
       </div>` : '';
 
@@ -196,6 +250,7 @@
         </form>
       </section>
     `;
+    restoreUiDrafts(anchor, draftSnap);
   }
 
   document.addEventListener('click', async event => {
@@ -229,8 +284,10 @@
     }
     const actBtn = event.target.closest('[data-ns-action]');
     if (actBtn) {
+      if (actBtn.disabled) return;
       const action = actBtn.dataset.nsAction;
       const id = actBtn.dataset.nsId;
+      actBtn.disabled = true;
       try {
         if (action === 'start') {
           await req(`/api/northstar/${encodeURIComponent(id)}/start`, { method: 'POST', body: '{}' });
@@ -240,9 +297,11 @@
           window.toast?.('North Star run paused cleanly.');
         } else if (action === 'diff') {
           const res = await req(`/api/northstar/${encodeURIComponent(id)}/diff`);
+          const diffTxt = res.diff ? `${res.stat}\n\n${res.diff}` : 'Champion matches baseline (no diff yet).';
+          diffByRun.set(id, diffTxt);
           const pre = document.getElementById('ns-diff-output');
           if (pre) {
-            pre.textContent = res.diff ? `${res.stat}\n\n${res.diff}` : 'Champion matches baseline (no diff yet).';
+            pre.textContent = diffTxt;
             pre.classList.remove('hidden');
           }
           return;
@@ -251,12 +310,15 @@
           window.toast?.(res.applied ? `✓ Applied champion patch (score ${res.bestScore}) to repo!` : (res.message || 'Nothing to apply.'));
         } else if (action === 'delete') {
           await req(`/api/northstar/${encodeURIComponent(id)}`, { method: 'DELETE' });
+          diffByRun.delete(id);
           if (selectedRunId === id) selectedRunId = null;
           window.toast?.('Deleted North Star run.');
         }
         await refresh();
       } catch (err) {
         window.toast?.(err.message || 'North Star action failed.');
+      } finally {
+        if (actBtn.isConnected) actBtn.disabled = false;
       }
     }
   });

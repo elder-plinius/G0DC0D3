@@ -634,8 +634,8 @@
       return;
     }
     if (preset === 'arena') {
-      if (typeof window.openSettings === 'function') window.openSettings('models', { subtab: 'routing' });
-      else if (typeof window.toast === 'function') window.toast('Open Settings → Models → Routing & Conclave to configure Head-to-Head Conclave.');
+      if (typeof window.openSettings === 'function') window.openSettings('autonomy', { scrollTo: '#ultra-router-section' });
+      else if (typeof window.toast === 'function') window.toast('Open Settings → Autonomy & Tuning to configure Head-to-Head Conclave.');
     }
   }
 
@@ -2393,6 +2393,9 @@
       const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/conclave`);
       if (!res.ok || token !== fetchToken) return;
       data = await res.json();
+      if (data?.arena?.raceId && data.arena.crownedWinnerId) {
+        crownedByRace.set(data.arena.raceId, data.arena.crownedWinnerId);
+      }
       renderAll();
       // Auto-open gently if multiple workers or an active arena/crew are running for the first time on this task
       const autoTrigger = (data.stats?.activeWorkers >= 2) || (data.mode === 'crew' && data.crew?.status === 'running') || (data.mode === 'arena' && (data.arena?.status === 'drafting' || data.arena?.status === 'grading'));
@@ -2455,7 +2458,7 @@
       renderAll();
       return;
     }
-    if (delta.type === 'conclave.update' || delta.type === 'conclave.steered' || delta.type === 'race.dispatched' || delta.type === 'race.result' || delta.type === 'race.completed' || delta.type === 'permission.requested') {
+    if (delta.type === 'conclave.update' || delta.type === 'conclave.steered' || delta.type === 'race.dispatched' || delta.type === 'race.result' || delta.type === 'race.completed' || delta.type === 'race.crowned' || delta.type === 'permission.requested') {
       loadSnapshot(currentTaskId);
     }
   }

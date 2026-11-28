@@ -9607,7 +9607,7 @@ body.visualizer-open.sidebar-collapsed .visualizer-dock { grid-column: 2; }
 }
 .autotune-empty { margin: 4px 0 0; }
 
-/* Light theme overrides for Live Rail, Visualizer, AutoTune */
+/* Light theme overrides for Live Rail, Visualizer, HyperTuner */
 :root[data-theme="light"] .live-work-rail {
   background: #f8f6fb;
   border-color: #d8cfe6;
