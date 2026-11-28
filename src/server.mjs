@@ -72,8 +72,8 @@ function publicTask(task,runtime) {
   return {...rest,pendingApproval:rest.pendingApproval||null,permissionRules:rest.permissionRules??null,todos:Array.isArray(rest.todos)?rest.todos:[],outcome:outcomeFor(task,runtime),crewBusy:Boolean(runtime?.crew.busy(task.id)),sourceBusy:Boolean(runtime?.sourceChanges.busy(task.id)),draining:!['running','recovering','verifying'].includes(task.status)&&Boolean(runtime?.runs.has(task.id)||runtime?.broker.locks.has(task.id))};
 }
 function taskSummary(task,runtime) {
-  const {id,title,objective,status,providerId,providers,calls,recoveries,createdAt,updatedAt,completionKind,fixtureId,sourcePath,workspaceKind,planMode,parentTaskId,version,eventSeq}=task;
-  return {id,title,objective,status,providerId,providers,calls,recoveries,createdAt,updatedAt,completionKind,fixtureId,sourcePath,workspaceKind,planMode:Boolean(planMode),parentTaskId:parentTaskId||null,version:Number(version)||0,eventSeq:Number(eventSeq)||0,pendingApproval:Boolean(task.pendingApproval),pendingApprovalTool:task.pendingApproval?.tool||null,pendingApprovalId:task.pendingApproval?.id||null,todoCount:Array.isArray(task.todos)?task.todos.length:0,outcome:outcomeFor(task,runtime)};
+  const {id,title,objective,status,providerId,providers,pendingProviders,calls,recoveries,createdAt,updatedAt,completionKind,fixtureId,sourcePath,workspaceKind,planMode,parentTaskId,version,eventSeq}=task;
+  return {id,title,objective,status,providerId,providers,pendingProviders:Array.isArray(pendingProviders)&&pendingProviders.length?pendingProviders:null,calls,recoveries,createdAt,updatedAt,completionKind,fixtureId,sourcePath,workspaceKind,planMode:Boolean(planMode),parentTaskId:parentTaskId||null,version:Number(version)||0,eventSeq:Number(eventSeq)||0,pendingApproval:Boolean(task.pendingApproval),pendingApprovalTool:task.pendingApproval?.tool||null,pendingApprovalId:task.pendingApproval?.id||null,todoCount:Array.isArray(task.todos)?task.todos.length:0,outcome:outcomeFor(task,runtime)};
 }
 const DISPLAY_TEXT_KEYS = new Set(['text', 'message', 'thinking']);
 function displayValue(value, depth = 0, key = '') {

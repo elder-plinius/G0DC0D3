@@ -645,7 +645,11 @@ function renderComposer() {
   $('#composer-project').classList.toggle('has-project', Boolean(task?.codeWorkspace || task?.sourcePath || attachedPending));
   const preferred = providerById(newConversationProviders()[0]);
   const race = task ? task.answerRace : RecoveryUI.preferences().answerRace;
-  setText('#composer-model-label', race ? `${race.models?.length || 2} Conclave writers` : task ? providerById(task.providerId)?.label || task.providerId || 'Model' : preferred?.label || 'Connect model');
+  const pendingNextId = task && Array.isArray(task.pendingProviders) && task.pendingProviders.length ? task.pendingProviders[0] : null;
+  const currentModelLabel = task ? providerById(task.providerId)?.label || task.providerId || 'Model' : preferred?.label || 'Connect model';
+  const pendingNextLabel = pendingNextId ? (providerById(pendingNextId)?.label || pendingNextId) : '';
+  setText('#composer-model-label', race ? `${race.models?.length || 2} Conclave writers` : pendingNextLabel ? `Next: ${pendingNextLabel}` : currentModelLabel);
+  $('#composer-model').classList.toggle('is-queued-model', Boolean(pendingNextLabel && !race));
   $('#composer-project').title = attachedPending
     ? `Attached project (${attachedPending.mode === 'worktree' ? 'Git Worktree' : 'Isolated Copy'}): ${attachedPending.path} — click to switch or detach`
     : task?.workspaceKind === 'conversation'
@@ -660,7 +664,13 @@ function renderComposer() {
   const cmdSuffix = task ? (task.execution?.enabled ? (task.execution.network ? ' · Cmd+Net' : ' · Cmd') : '') : '';
   setText('#composer-permissions-label', `${shortPermLabel}${cmdSuffix}`);
   $('#composer-permissions').title = `Permission Gate: ${shortPermLabel} (Shift+Tab to cycle, click to configure)`;
-  $('#composer-model').title = race ? 'View the Conclave writers and judge' : task ? 'Change model for this chat' : 'Choose or connect a model';
+  $('#composer-model').title = race
+    ? 'View the Conclave writers and judge'
+    : pendingNextLabel
+      ? `Queued for your next message: ${pendingNextLabel} (current response continues on ${currentModelLabel})`
+      : task && ACTIVE.has(task.status)
+        ? 'Select a model for your next message while this response finishes'
+        : task ? 'Change model for this chat' : 'Choose or connect a model';
   setVisible('#composer-connect', !task && Boolean(composerErrors.get(key)) && !preferred);
   renderRecoveryControl(task, loading || !online);
   renderPlanModeControl(task, loading || !online);
@@ -744,7 +754,7 @@ function renderRecoveryControl(task, loading = false) {
       : view.detail);
   $('#composer-ultra').setAttribute('aria-checked', String(view.enabled));
   $('#composer-ultra').classList.toggle('enabled', view.enabled);
-  const setupLock = view.locked ? modelSelectionLock(task) : '';
+  const setupLock = view.locked ? (ACTIVE.has(task?.status) ? 'Wait for this response to finish or pause before changing the outage backup.' : modelSelectionLock(task)) : '';
   $('#composer-ultra').disabled = Boolean(setupLock) || loading || Boolean(task?.draining) || isCrewBusy(task) || task?.status === 'cancelled' || (typeof settingsBusy !== 'undefined' && settingsBusy) || (typeof recoveryToggleBusy !== 'undefined' && recoveryToggleBusy);
   $('#composer-ultra').title = setupLock || (ultraOn
     ? (view.enabled ? 'G0DM0D3 recovery is active alongside Ultra-Plinian (auto-recovers errors, declines & output limits).' : 'Turn on G0DM0D3 to auto-recover Ultra-Plinian errors, declines & output limits.')
@@ -3382,7 +3392,7 @@ function renderModelGroups() {
     return `<button type="button" class="model-group-chip ${isSel ? 'active' : ''}" data-select-model-group="${escapeHTML(group.id)}" aria-pressed="${isSel}"><span>${escapeHTML(group.shortName || group.name)}</span><span class="model-group-count">${escapeHTML(group.count)}</span></button>`;
   }).join('');
   const activeTask = settingsTaskId ? selectedData?.task : null;
-  const activeModelId = activeTask?.providerId || newConversationProviders()[0] || null;
+  const activeModelId = activeTask?.pendingProviders?.[0] || activeTask?.providerId || newConversationProviders()[0] || null;
   const modelLock = modelSelectionLock(activeTask);
   const ordered = orderedModelsForGroup(active);
   const hasCustomOrder = customWaterfallOrder.has(active.id);
@@ -3449,15 +3459,18 @@ async function applyModelGroup(groupId) {
   renderModelGroups();
   try {
     const task = settingsTaskId ? selectedData?.task : null;
-    if (task && !ACTIVE.has(task.status) && !task.draining) {
+    if (task && !task.draining && !isCrewBusy(task)) {
       const { task: updated } = await api(`/api/tasks/${encodeURIComponent(task.id)}/providers`, {
         method: 'PATCH',
         body: JSON.stringify({ providerIds: route })
       });
       if (selectedId === task.id && selectedData) renderSelected({ ...selectedData, task: updated }, true);
-      const msg = `Applied ${group.name} waterfall (${route.length} models).`;
+      const queued = Boolean(updated?.pendingProviders?.length);
+      const msg = queued
+        ? `Queued ${group.name} waterfall (${route.length} models) for your next message.`
+        : `Applied ${group.name} waterfall (${route.length} models).`;
       setModelFeedback(msg);
-      toast(`Applied ${group.shortName} waterfall (${route.length} models).`);
+      toast(queued ? `Queued ${group.shortName} waterfall for next message.` : `Applied ${group.shortName} waterfall (${route.length} models).`);
     } else {
       preferredProvider = route[0];
       try {
@@ -6391,11 +6404,12 @@ function renderRouting(task) {
   if (changed) { routeTaskId = task.id; routeDirty = false; setText('#route-feedback', ''); }
   if ($('#settings-dialog')?.open && !settingsTaskId) return;
   const answered = task.workspaceKind === 'conversation' && task.completionKind === 'answered';
-  const blocked = ACTIVE.has(task.status) || (TERMINAL.has(task.status) && !answered) || task.draining || isCrewBusy(task);
-  const current = routeDirty && !changed ? new Set($$('#route-options input:checked').map(input => input.value)) : new Set(taskProviders(task));
+  const blocked = (TERMINAL.has(task.status) && !answered) || task.draining || isCrewBusy(task);
+  const routeBase = Array.isArray(task.pendingProviders) && task.pendingProviders.length ? task.pendingProviders : taskProviders(task);
+  const current = routeDirty && !changed ? new Set($$('#route-options input:checked').map(input => input.value)) : new Set(routeBase);
   const providers = state.providers.filter(provider => task.fixtureId || provider.kind !== 'scripted');
   const eligible = providers.filter(provider => provider.available !== false).map(provider=>provider.id);
-  const requested = routeDirty && !changed ? $('#route-preferred').value : taskProviders(task)[0];
+  const requested = routeDirty && !changed ? $('#route-preferred').value : routeBase[0];
   const preferred = catalogId(requested) || eligible.includes(requested) ? requested : eligible[0] || '';
   $('#route-preferred').value = preferred;
   setVisible('#route-fallback-group', !catalogId(preferred));
@@ -6409,8 +6423,11 @@ function renderRouting(task) {
     $('#route-options').innerHTML = markup; settingsListContents.set($('#route-options'),markup);
   }
   const activeRoute = orderedProviders(taskProviders(task), task.providerId || preferred);
-  setText('#model-current', formatRouteSummary(activeRoute.length ? activeRoute : [task.providerId || preferred], 'Active route'));
-  setText('#route-help', isCrewBusy(task) ? 'Finish or dismiss the crew to change models.' : task.draining ? 'Wait for the request to stop.' : ACTIVE.has(task.status) ? 'Pause the task to change its model route.' : answered ? 'Your next message uses this route.' : TERMINAL.has(task.status) ? 'This task is closed. Send a follow-up to continue.' : 'Your task, files and spent budget stay intact.');
+  const nextRoute = Array.isArray(task.pendingProviders) && task.pendingProviders.length ? task.pendingProviders : null;
+  setText('#model-current', nextRoute
+    ? `${formatRouteSummary(nextRoute, 'Next message route')} · Running: ${providerById(task.providerId)?.label || task.providerId || 'Model'}`
+    : formatRouteSummary(activeRoute.length ? activeRoute : [task.providerId || preferred], 'Active route'));
+  setText('#route-help', isCrewBusy(task) ? 'Finish or dismiss the crew to change models.' : task.draining ? 'Wait for the request to stop.' : ACTIVE.has(task.status) ? 'Response in progress — changes apply automatically to your next message.' : answered ? 'Your next message uses this route.' : TERMINAL.has(task.status) ? 'This task is closed. Send a follow-up to continue.' : 'Your task, files and spent budget stay intact.');
   $('#save-route').disabled = blocked || routeBusy || !preferred;
 }
 
@@ -7183,7 +7200,7 @@ async function saveRoute(event, catalogRoute) {
     if (selectedId !== taskId) return;
     routeDirty = false;
     if (task && selectedData) renderSelected({ ...selectedData, task }, true);
-    setText('#route-feedback', task?.completionKind === 'answered' ? 'Saved for your next message.' : 'Saved.');
+    setText('#route-feedback', task?.pendingProviders?.length ? 'Queued for your next message.' : task?.completionKind === 'answered' ? 'Saved for your next message.' : 'Saved.');
     await refresh();
   } catch (error) { if (selectedId === taskId) { routeDirty=false; setText('#route-feedback', error.message); $('#route-feedback').classList.add('error'); } }
   finally { routeBusy = false; if (selectedData?.task) renderRouting(selectedData.task); if (focusKey && selectedId === taskId && $('#settings-dialog').open && settingsPane === 'models' && document.activeElement === document.body) $$('#route-form input').find(input=>input.name===focusKey.name && input.value===focusKey.value)?.focus({preventScroll:true}); }
@@ -9968,7 +9985,7 @@ try { const saved = JSON.parse(localStorage.getItem('g0dc0d3.recentModels') || '
 function modelSelectionLock(task) {
   if (!task) return '';
   if (isCrewBusy(task)) return 'Finish or dismiss the crew to change models.';
-  if (ACTIVE.has(task.status) || task.draining) return 'Models can be changed when this response finishes or is paused.';
+  if (task.draining) return 'Workspace work is still settling; try again in a moment.';
   if (TERMINAL.has(task.status) && !(task.workspaceKind === 'conversation' && task.completionKind === 'answered')) return 'Send a follow-up to continue this task before changing models.';
   return '';
 }
@@ -10094,7 +10111,10 @@ const PICKER_BUCKET_LABELS = {
 
 function renderModelPicker() {
   if (!$('#model-picker').open) return;
-  const task = pickerTask(), selected = task?.providerId || newConversationProviders()[0];
+  const task = pickerTask();
+  const isTaskActive = Boolean(task && ACTIVE.has(task.status));
+  const pendingNext = task && Array.isArray(task.pendingProviders) && task.pendingProviders.length ? task.pendingProviders[0] : null;
+  const selected = pendingNext || task?.providerId || newConversationProviders()[0];
   const previous = pickerModels[pickerIndex]?.id;
   const rawQuery = $('#model-picker-search').value.trim();
   const query = rawQuery.toLowerCase();
@@ -10163,7 +10183,12 @@ function renderModelPicker() {
   setText('#model-picker-scope', task ? 'This chat' : 'New chats');
   setText('#model-picker-count', pickerLoading ? 'Loading…' : `${totalMatches} ${totalMatches === 1 ? 'model' : 'models'}`);
   const race = task ? task.answerRace : RecoveryUI.preferences().answerRace;
-  setText('#model-picker-note', lock || (race ? 'Ultra-Plinian is on. This selects the model used when comparison is off.' : task ? 'Select a model for your next message.' : 'Select the default for new chats.'));
+  const activeNote = isTaskActive
+    ? (pendingNext
+        ? `Queued for your next message: ${providerById(pendingNext)?.label || pendingNext}. Current turn finishes on ${providerById(task.providerId)?.label || task.providerId}.`
+        : 'Response in progress — pick a model for your next message.')
+    : null;
+  setText('#model-picker-note', lock || activeNote || (race ? 'Ultra-Plinian is on. This selects the model used when comparison is off.' : task ? 'Select a model for your next message.' : 'Select the default for new chats.'));
   const rowsHtml = pickerModels.map((p,i) => {
     const name = p.label || p.model || p.id;
     const isOr = p.id?.startsWith('openrouter:') || p.catalogProvider === 'openrouter';
@@ -10189,6 +10214,8 @@ function renderModelPicker() {
       meta?.priceLabel || formatOpenRouterPrice(p.pricing) || '',
       meta?.contextLabel || formatOpenRouterContext(p.contextWindow) || '',
       meta?.zdr?.label || '',
+      isTaskActive && pendingNext && p.id === task.providerId ? 'Running now' : '',
+      isTaskActive && pendingNext && p.id === pendingNext ? 'Queued next' : '',
       recentModels.includes(p.id) && p.id !== selected ? 'Recent' : ''
     ].filter(Boolean).join(' · ');
     const badge = p.id === selected ? '✓' : p.catalogAdd ? '+' : '';
@@ -10281,9 +10308,14 @@ async function selectModel(id, {scope = pickerScope, backup} = {}) {
   routeBusy = true;
   renderModelPicker();
   try {
+    let queuedNext = false;
+    let keptActive = false;
     if (task) {
+      const wasActive = ACTIVE.has(task.status);
       const response = await api(`/api/tasks/${encodeURIComponent(scope)}/providers`, {method:'PATCH', body:JSON.stringify({providerIds})});
       if (selectedId === scope && selectedData) { routeDirty = false; renderSelected({...selectedData,task:response.task},true); }
+      queuedNext = wasActive && Boolean(response.task?.pendingProviders?.length);
+      keptActive = wasActive && !queuedNext;
     } else {
       preferredProvider = id;
       preferredVeniceBackup = catalogId(id) ? {primary:id,id:providerIds[1] || null} : null;
@@ -10295,11 +10327,15 @@ async function selectModel(id, {scope = pickerScope, backup} = {}) {
     recentModels = [id,...recentModels.filter(other => other !== id)].slice(0,5);
     try { localStorage.setItem('g0dc0d3.recentModels',JSON.stringify(recentModels)); } catch {}
     renderComposer();
+    const pickedLabel = providerById(id)?.label || id;
+    if (queuedNext) toast(`Queued ${pickedLabel} for your next message.`);
+    else if (keptActive) toast(`Kept ${pickedLabel} for your next message.`);
     if ($('#settings-dialog').open) {
       renderModelSettings();
-      const pickedLabel = providerById(id)?.label || id;
       const fbCount = Math.max(0, providerIds.length - 1);
-      const msg = fbCount > 0 ? `Selected ${pickedLabel} (+${fbCount} fallback${fbCount === 1 ? '' : 's'}).` : `Selected ${pickedLabel}.`;
+      const msg = queuedNext
+        ? `Queued ${pickedLabel} for your next message.`
+        : fbCount > 0 ? `Selected ${pickedLabel} (+${fbCount} fallback${fbCount === 1 ? '' : 's'}).` : `Selected ${pickedLabel}.`;
       setModelFeedback(msg);
     }
     return true;

@@ -7184,6 +7184,11 @@ body.conclave-open.sidebar-collapsed .conclave-dock {
   min-width: 96px;
   color: var(--text);
 }
+.composer-options #composer-model.is-queued-model {
+  border-color: color-mix(in srgb, var(--violet) 54%, var(--line));
+  background: color-mix(in srgb, var(--violet) 12%, var(--panel-soft));
+  color: var(--text);
+}
 .composer-options .composer-option:hover,
 .composer-options #composer-race:hover {
   background: color-mix(in srgb, var(--panel-raised) 82%, var(--panel-soft));
@@ -7237,6 +7242,11 @@ body.conclave-open.sidebar-collapsed .conclave-dock {
 }
 :root[data-theme="light"] .composer-options #composer-model {
   color: #181520;
+}
+:root[data-theme="light"] .composer-options #composer-model.is-queued-model {
+  background: #efe8fc;
+  border-color: #bba2e8;
+  color: #3d246e;
 }
 :root[data-theme="light"] .composer-options .composer-option:hover,
 :root[data-theme="light"] .composer-options #composer-race:hover {

@@ -24,7 +24,7 @@ import { MemoryStore } from '../src/memory.mjs';
 import { discoverSkills } from '../src/skills.mjs';
 import { detectRefusal, diagnoseIncident, rankCandidates } from '../src/routing.mjs';
 import { extractEpisodicMemories } from '../src/brain.mjs';
-import { routeUltraPlinian } from '../src/ultra-router.mjs';
+import { routeUltraPlinian, selectBestJudge } from '../src/ultra-router.mjs';
 import { publishablePath } from '../src/workspaces.mjs';
 import { discoverSubagents } from '../src/subagents.mjs';
 
@@ -524,4 +524,110 @@ test('v0.3.1 HyperTuner uplevel: posterior-ranked retries, passive-arm drift dec
   }
   assert.ok(Object.keys(evictState.cells).length <= 250);
   assert.ok(Boolean(evictState.cells['qwen3-coder-32b::swe::medium']), 'High-observation cell must survive 1-obs noise flood');
+});
+
+test('v0.3.1 QoL: switching model while task is actively responding queues it for next turn and promotes on completion', async () => {
+  const dir = await fs.mkdtemp(path.join(tmpdir(), 'g0d-next-model-'));
+  const ws = path.join(dir, 'ws');
+  await fs.mkdir(ws);
+  const calls = [];
+  let releaseTurn1;
+  const turn1Gate = new Promise(r => { releaseTurn1 = r; });
+  let turn1Entered;
+  const turn1Ready = new Promise(r => { turn1Entered = r; });
+  const modelA = {
+    id: 'openai:model-a',
+    label: 'Model A',
+    kind: 'http',
+    available: true,
+    async turn() {
+      calls.push('openai:model-a');
+      if (calls.length === 1) {
+        turn1Entered();
+        await turn1Gate;
+      }
+      return { type: 'message', finish: 'done', text: 'Answer from Model A.' };
+    }
+  };
+  const modelB = {
+    id: 'anthropic:model-b',
+    label: 'Model B',
+    kind: 'http',
+    available: true,
+    async turn() {
+      calls.push('anthropic:model-b');
+      return { type: 'message', finish: 'done', text: 'Answer from Model B.' };
+    }
+  };
+  const runtime = new Runtime({ dataDir: path.join(dir, 'state'), providers: new Map([[modelA.id, modelA], [modelB.id, modelB]]) });
+  try {
+    const task = await runtime.createTask({ workspace: ws, workspaceKind: 'conversation', objective: 'First question', providers: [modelA.id] });
+    const runPromise = runtime.run(task.id);
+    await turn1Ready;
+
+    // Switch model while Model A is mid-response: must queue pendingProviders without aborting Model A
+    const queuedTask = runtime.setProviders(task.id, [modelB.id]);
+    assert.equal(queuedTask.providerId, modelA.id, 'Active turn stays on Model A');
+    assert.deepEqual(queuedTask.pendingProviders, [modelB.id], 'Model B is staged as pendingProviders');
+
+    // Picking current Model A back clears pendingProviders cleanly
+    const clearedTask = runtime.setProviders(task.id, [modelA.id]);
+    assert.equal(clearedTask.pendingProviders, null, 'Re-selecting active model clears pending switch');
+
+    // Stage Model B again AND enqueue a deferred follow-up message
+    runtime.setProviders(task.id, [modelB.id]);
+    await runtime.submitMessage(task.id, 'Second question on B', undefined, 'queue');
+
+    releaseTurn1();
+    const afterQueuedRun = await runPromise;
+    assert.deepEqual(calls, ['openai:model-a', 'anthropic:model-b'], 'Deferred next turn must execute on queued Model B');
+    assert.equal(afterQueuedRun.providerId, modelB.id);
+    assert.equal(afterQueuedRun.pendingProviders, null);
+
+    // Also verify promotion when finishing with NO deferred message
+    let releaseTurn3;
+    const turn3Gate = new Promise(r => { releaseTurn3 = r; });
+    let turn3Entered;
+    const turn3Ready = new Promise(r => { turn3Entered = r; });
+    modelB.turn = async () => {
+      calls.push('anthropic:model-b-slow');
+      turn3Entered();
+      await turn3Gate;
+      return { type: 'message', finish: 'done', text: 'Slow answer from Model B.' };
+    };
+    await runtime.addMessage(task.id, 'Third question');
+    const run3 = runtime.run(task.id);
+    await turn3Ready;
+    const stagedBackToA = runtime.setProviders(task.id, [modelA.id]);
+    assert.deepEqual(stagedBackToA.pendingProviders, [modelA.id]);
+    releaseTurn3();
+    const settled = await run3;
+    assert.equal(settled.providerId, modelA.id, 'Queued model promotes automatically when current turn finishes');
+    assert.equal(settled.pendingProviders, null);
+  } finally {
+    await runtime.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('v0.3.1 Conclave Judge: tiered tastemaker selection prefers Gemini 4 Neon / Opus over flash, and Abliterated Large for high-refusal prompts', () => {
+  const pool = [
+    { id: 'venice-catalog:z-ai-glm-5-3-flash', model: 'z-ai-glm-5-3-flash', label: 'GLM 5.3 Flash', family: 'GLM 5.3', benchmarkPrior: 82, totalScore: 80, compliance: 85, speed: 95 },
+    { id: 'venice-catalog:gemini-4-neon', model: 'gemini-4-neon', label: 'Gemini 4 Neon', family: 'Gemini 4', benchmarkPrior: 96, totalScore: 95, compliance: 74, speed: 90 },
+    { id: 'anthropic:claude-opus-5-5', model: 'claude-opus-5-5', label: 'Claude Opus 5.5', family: 'Claude Opus 5.5', benchmarkPrior: 99, totalScore: 97, compliance: 62, speed: 72 },
+    { id: 'openai:gpt-5.4', model: 'gpt-5.4', label: 'GPT-5.4', family: 'GPT-5.4', benchmarkPrior: 97, totalScore: 95, compliance: 62, speed: 78 },
+    { id: 'venice-catalog:abliteration-abliterated-model-large-v2', model: 'abliteration-abliterated-model-large-v2', label: 'Abliterated Large v2', family: 'Abliterated Large', benchmarkPrior: 91, totalScore: 90, compliance: 99, speed: 80 },
+  ];
+
+  // Standard SWE race: contenders are Opus + GPT-5.4 -> independent judge must be Gemini 4 Neon (NOT glm-5-3-flash!)
+  const sweJudge = selectBestJudge(pool, ['anthropic:claude-opus-5-5', 'openai:gpt-5.4'], { refusalRisk: 0.05, domain: 'swe_coding' });
+  assert.equal(sweJudge?.id, 'venice-catalog:gemini-4-neon', 'Standard race judge should prefer Gemini 4 Neon over GLM Flash');
+
+  // If Neon is already a contender, independent judge should be Claude Opus (NOT glm-5-3-flash!)
+  const secondJudge = selectBestJudge(pool, ['venice-catalog:gemini-4-neon', 'openai:gpt-5.4'], { refusalRisk: 0.05, domain: 'creative_writing' });
+  assert.equal(secondJudge?.id, 'anthropic:claude-opus-5-5', 'When Neon is racing, independent judge should be Claude Opus');
+
+  // High-agency / security_research race: independent judge should prefer Abliterated Large so it never refuses or penalizes direct answers
+  const secJudge = selectBestJudge(pool, ['anthropic:claude-opus-5-5', 'openai:gpt-5.4'], { refusalRisk: 0.85, domain: 'security_research' });
+  assert.equal(secJudge?.id, 'venice-catalog:abliteration-abliterated-model-large-v2', 'High-refusal/security race judge should prefer Abliterated Large');
 });

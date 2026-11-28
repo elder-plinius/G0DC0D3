@@ -2432,7 +2432,24 @@ function renderRaceOptions(task) {
   const first = models.some(m => m.id === preferred) ? preferred : (RecoveryUI.recommendedBackup(models, null) || models[0]?.id);
   const second = RecoveryUI.recommendedBackup(models, first) || models.find(m => m.id !== first)?.id || '';
   const third = models.find(m => m.id !== first && m.id !== second)?.id || '';
-  const judge = models.find(m => /glm-5-3-flash|gemini-4-neon|claude-sonnet/i.test(m.id))?.id || second || first;
+  const judgeTiers = [
+    /gemini[-_.]?4(?:[._-]0)?[-_.]?neon|\bneon[-_.]?4\b/i,
+    /claude[-_.]?(?:opus[-_.]?[45]|(?:4|5)(?:[-_.]?\d)?[-_.]?opus)/i,
+    /(?:openai[-_.]?)?gpt[-_.]?(?:6(?:[._-]?[12])?[-_.]?(?:astra|sol|luna|terra)|5(?:[._-]?[456])(?!.*(?:mini|nano)))/i,
+    /claude[-_.]?(?:sonnet[-_.]?[45]|(?:4|5)(?:[-_.]?\d)?[-_.]?sonnet)/i,
+    /abliterat(?:ion|ed)[-_.]?(?:abliterated[-_.]?)?(?:model[-_.]?)?large/i,
+    /hermes[-_.]?4[-_.]?405b|deepseek[-_.]?v4(?!.*flash)|grok[-_.]?4|qwen[-_.]?3[-_.]?[67][-_.]?plus/i,
+  ];
+  const writerSet = new Set([first, second, third].filter(Boolean));
+  const pickDefaultJudge = (list) => {
+    for (const pat of judgeTiers) {
+      const hit = list.find(m => pat.test(`${m.id} ${m.model || ''} ${m.label || ''}`));
+      if (hit) return hit.id;
+    }
+    return null;
+  };
+  const independentModels = models.filter(m => !writerSet.has(m.id));
+  const judge = pickDefaultJudge(independentModels) || pickDefaultJudge(models) || independentModels[0]?.id || second || first;
   const saved = config
     ? [config.models?.[0] || '', config.models?.[1] || '', config.models?.[2] || '', config.models?.[3] || '', config.judge || '']
     : [first || '', second || '', third || '', '', judge || ''];

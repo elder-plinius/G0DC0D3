@@ -1684,16 +1684,29 @@ export class Runtime {
         const [message, ...rest] = current.deferredMessages || [];
         if (!message) break;
         const followup = { ...message, appliedAt: new Date().toISOString(), contractVersion: current.contractVersion + 1 };
+        const pendingRoute = this._resolvePendingProviders(current);
+        const baseForNext = pendingRoute
+          ? {
+              ...current,
+              providers: pendingRoute,
+              providerId: pendingRoute[0],
+              providerIndex: 0,
+              routing: { primaryId: pendingRoute[0], cooldowns: {}, primaryReturnUsed: false, contributions: {} },
+              pendingProviders: null,
+            }
+          : current;
         const proposed = {
-          ...withFollowups(current, [...(current.followups || []), followup]),
+          ...withFollowups(baseForNext, [...(current.followups || []), followup]),
           deferredMessages: rest,
+          pendingProviders: null,
           status: 'queued',
           ...(Array.isArray(message.attachments) && message.attachments.length ? { attachments: message.attachments } : {}),
         };
         const deferredProvider = this.selectedProvider(proposed.providerId, proposed.workspaceKind);
         buildContext({ task: proposed, provider: deferredProvider, history: this.getRecentEvents(id), totalHistoryCount: current.eventSeq + 2, files: snapshot.files, snapshotHash: snapshot.snapshotHash, learning: this.getLearning(), memories: this._memoriesForTask(proposed), transparency: current.fixtureId ? null : this.getTransparencyConfig() });
-        this.store.updateTask(id, () => proposed, 'user.messages.applied', { ids: [message.id], contractVersion: proposed.contractVersion, source: 'owner' });
+        this.store.updateTask(id, () => proposed, 'user.messages.applied', { ids: [message.id], contractVersion: proposed.contractVersion, source: 'owner', ...(pendingRoute ? { providerId: pendingRoute[0], providers: pendingRoute } : {}) });
       } while (!controller.signal.aborted);
+      this._promotePendingProviders(id);
       const finalTask = this.getTask(id);
       if (finalTask?.status === 'completed') {
         try { this.autoLearnFromTask(id); } catch {}
@@ -1701,8 +1714,11 @@ export class Runtime {
       return finalTask;
     })().catch(cause => {
       const current = this.getTask(id);
-      if (active.has(current.status) || (current.status === 'completed' && current.deferredMessages?.length)) return this.store.updateTask(id, value => { value.status = 'failed'; value.blocker = { code: cause.code || 'RUNTIME_ERROR', message: cause.message }; return value; }, 'task.status', { status: 'failed', error: cause.message });
-      return current;
+      if (active.has(current.status) || (current.status === 'completed' && current.deferredMessages?.length)) {
+        const failed = this.store.updateTask(id, value => { value.status = 'failed'; value.blocker = { code: cause.code || 'RUNTIME_ERROR', message: cause.message }; return value; }, 'task.status', { status: 'failed', error: cause.message });
+        return this._promotePendingProviders(id) || failed;
+      }
+      return this._promotePendingProviders(id) || current;
     }).finally(() => {
       if (this.runs.get(id) === entry) this.runs.delete(id);
       this._liveTurn.delete(id);
@@ -2923,6 +2939,29 @@ export class Runtime {
     return this.getTask(id);
   }
   _current(id, epoch, signal) { const task = this.getTask(id); return !signal?.aborted && task.epoch === epoch && active.has(task.status) && this.crew.workerCurrent(task); }
+  _resolvePendingProviders(task) {
+    const raw = Array.isArray(task?.pendingProviders) ? task.pendingProviders : [];
+    if (!raw.length) return null;
+    const valid = [...new Set(raw)].filter(pid => typeof pid === 'string' && Boolean(this.selectedProvider(pid, task.workspaceKind)));
+    return valid.length ? valid : null;
+  }
+  _promotePendingProviders(id) {
+    const current = this.getTask(id);
+    if (!current || !Array.isArray(current.pendingProviders) || !current.pendingProviders.length) return null;
+    if (active.has(current.status) || current.status === 'cancelled' || this.broker.locks.has(id)) return null;
+    const selected = this._resolvePendingProviders(current);
+    if (!selected) {
+      return this.store.updateTask(id, value => { value.pendingProviders = null; return value; }, 'providers.queued', { to: null, cleared: true, reason: 'unavailable' });
+    }
+    return this.store.updateTask(id, value => {
+      value.providers = selected;
+      value.providerId = selected[0];
+      value.providerIndex = 0;
+      value.routing = { primaryId: selected[0], cooldowns: {}, primaryReturnUsed: false, contributions: {} };
+      value.pendingProviders = null;
+      return value;
+    }, 'providers.updated', { from: current.providers, to: selected, providerId: selected[0], source: 'owner', promotedFromQueue: true });
+  }
   _applyPending(id, snapshot) {
     const task = this.getTask(id), messages = task.pendingMessages || [];
     if (!messages.length) return task;
@@ -2930,15 +2969,27 @@ export class Runtime {
     const appliedAt = new Date().toISOString();
     const additions = messages.map((message, index) => ({ ...message, appliedAt, contractVersion: (task.contractVersion || 1) + index + 1 }));
     const queuedAttachments = additions.flatMap(m => (Array.isArray(m.attachments) ? m.attachments : [])).slice(-4);
+    const pendingRoute = this._resolvePendingProviders(task);
+    const baseTask = pendingRoute
+      ? {
+          ...task,
+          providers: pendingRoute,
+          providerId: pendingRoute[0],
+          providerIndex: 0,
+          routing: { primaryId: pendingRoute[0], cooldowns: {}, primaryReturnUsed: false, contributions: {} },
+          pendingProviders: null,
+        }
+      : task;
     const proposed = {
-      ...withFollowups(task, [...(task.followups || []), ...additions]),
+      ...withFollowups(baseTask, [...(task.followups || []), ...additions]),
       pendingMessages: [],
+      ...(pendingRoute ? { pendingProviders: null } : {}),
       ...(queuedAttachments.length ? { attachments: queuedAttachments } : {}),
     };
     // Preflight the complete new contract before atomically consuming the queue.
     const pendingProvider = this.selectedProvider(proposed.providerId, proposed.workspaceKind);
     buildContext({ task: { ...proposed, calls: proposed.calls + 1, version: task.version + 2, eventSeq: task.eventSeq + 2 }, provider: pendingProvider, history: this.getRecentEvents(id), totalHistoryCount: task.eventSeq + 2, files: snapshot.files, snapshotHash: snapshot.snapshotHash, learning: this.getLearning(), memories: this._memoriesForTask(proposed) });
-    return this.store.updateTask(id, () => proposed, 'user.messages.applied', { ids: additions.map(message => message.id), contractVersion: proposed.contractVersion, source: 'owner' });
+    return this.store.updateTask(id, () => proposed, 'user.messages.applied', { ids: additions.map(message => message.id), contractVersion: proposed.contractVersion, source: 'owner', ...(pendingRoute ? { providerId: pendingRoute[0], providers: pendingRoute } : {}) });
   }
   _status(id, epoch, status, blocker = null) {
     if (this.getTask(id).epoch !== epoch) return this.getTask(id);
@@ -5037,7 +5088,18 @@ export class Runtime {
     const followup = { id: messageId || randomUUID(), message, createdAt: new Date().toISOString(), contractVersion: (task.contractVersion || 1) + 1 };
     const followups = [...(task.followups || []), followup];
     checkMessageLimit(followups);
-    const proposed = { ...withFollowups(task, followups), attachments: validAttachments, epoch: task.epoch + 1, status: 'queued' };
+    const pendingRoute = this._resolvePendingProviders(task);
+    const baseTask = pendingRoute
+      ? {
+          ...task,
+          providers: pendingRoute,
+          providerId: pendingRoute[0],
+          providerIndex: 0,
+          routing: { primaryId: pendingRoute[0], cooldowns: {}, primaryReturnUsed: false, contributions: {} },
+          pendingProviders: null,
+        }
+      : task;
+    const proposed = { ...withFollowups(baseTask, followups), pendingProviders: null, attachments: validAttachments, epoch: task.epoch + 1, status: 'queued' };
     const snapshot = await taskSnapshot(task.workspace);
     if (this.closed) throw fault('RUNTIME_CLOSED', 'Runtime is closed.');
     // Reject a contract that cannot fit before persisting or dispatching it.
@@ -5060,17 +5122,30 @@ export class Runtime {
     if (this.closed) throw fault('RUNTIME_CLOSED', 'Runtime is closed.');
     this.crew.assertIdle(id);
     const task = this.getTask(id);
-    if (active.has(task.status)) throw fault('TASK_ACTIVE', 'Pause the task before changing its providers.');
-    if (this.runs.has(id) || this.broker.locks.has(id)) throw fault('RUN_DRAINING', 'Workspace work is still settling; retry provider selection shortly.');
+    if (this.broker.locks.has(id)) throw fault('RUN_DRAINING', 'Workspace work is still settling; retry provider selection shortly.');
+    const isActive = active.has(task.status) || this.runs.has(id);
     const answered = task.workspaceKind === 'conversation' && task.status === 'completed' && task.completionKind === 'answered';
-    if (!answered && !['queued', 'paused', 'blocked', 'waiting_input', 'paused_budget', 'failed'].includes(task.status)) throw fault('TASK_TERMINAL', 'Providers can only change on an unfinished, idle task or an answered conversation.');
+    if (!isActive && !answered && !['queued', 'paused', 'blocked', 'waiting_input', 'paused_budget', 'failed'].includes(task.status)) throw fault('TASK_TERMINAL', 'Providers can only change on an unfinished, idle task or an answered conversation.');
     this.validateCatalogRoute(providerIds, task.workspaceKind);
     if (!Array.isArray(providerIds) || providerIds.length < 1 || providerIds.length > 10 || providerIds.some(providerId => typeof providerId !== 'string' || !this.selectedProvider(providerId, task.workspaceKind))) throw fault('INVALID_PROVIDER', 'Select 1–10 configured provider IDs.');
     if (task.workspaceKind === 'conversation' && providerIds.some(providerId => { const provider = this.selectedProvider(providerId, task.workspaceKind); return !provider.kind || provider.kind === 'scripted' || provider.available === false; })) throw fault('LIVE_PROVIDER_REQUIRED', 'Conversations require configured live models.');
-    for (const id of providerIds) parametersFor(this.selectedProvider(id, task.workspaceKind), task.generation);
+    for (const pid of providerIds) parametersFor(this.selectedProvider(pid, task.workspaceKind), task.generation);
     const selected = [...new Set(providerIds)];
+    if (isActive) {
+      const sameAsCurrent = selected[0] === task.providerId
+        && Array.isArray(task.providers)
+        && selected.length === task.providers.length
+        && selected.every((pid, idx) => pid === task.providers[idx]);
+      return this.store.updateTask(id, current => {
+        current.pendingProviders = sameAsCurrent ? null : selected;
+        return current;
+      }, 'providers.queued', sameAsCurrent
+        ? { from: task.providers, to: null, providerId: task.providerId, cleared: true, source: 'owner' }
+        : { from: task.providers, to: selected, providerId: selected[0], source: 'owner' });
+    }
     return this.store.updateTask(id, current => {
       current.providers = selected; current.providerId = selected[0]; current.providerIndex = 0;
+      current.pendingProviders = null;
       current.routing = { primaryId: selected[0], cooldowns: {}, primaryReturnUsed: false, contributions: {} };
       current.epoch += 1; current.blocker = null;
       current.status = answered ? 'completed' : current.status === 'queued' ? 'queued' : 'paused';
