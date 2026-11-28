@@ -5,12 +5,43 @@ import path from 'node:path';
 const GIT = '/usr/bin/git';
 const MAX_OUTPUT = 32768;
 const MAX_BUFFER = 4 * 1024 * 1024;
-const SAFE_GIT_FLAGS = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'commit.gpgsign=false'];
+export const SAFE_GIT_FLAGS = [
+  '-c', 'core.hooksPath=/dev/null',
+  '-c', 'core.fsmonitor=false',
+  '-c', 'commit.gpgsign=false',
+  '-c', 'core.pager=cat',
+  '-c', 'diff.external=',
+  '-c', 'core.attributesfile=/dev/null',
+  '-c', 'core.sshCommand=/usr/bin/false',
+];
 
-function run(args, { cwd, timeout = 5000 } = {}) {
+export async function neutralizeRepoGitConfigFlags(repoRoot) {
+  const extra = [];
+  if (!repoRoot) return extra;
+  try {
+    const cfgPath = path.join(repoRoot, '.git', 'config');
+    const st = await fs.lstat(cfgPath);
+    if (st.isSymbolicLink() || !st.isFile() || st.size > 256 * 1024) return extra;
+    const raw = await fs.readFile(cfgPath, 'utf8');
+    const filterNames = new Set();
+    const diffNames = new Set();
+    for (const m of raw.matchAll(/\[\s*filter\s+"([^"\n]+)"\s*\]/gi)) filterNames.add(m[1]);
+    for (const m of raw.matchAll(/\[\s*diff\s+"([^"\n]+)"\s*\]/gi)) diffNames.add(m[1]);
+    for (const name of filterNames) {
+      extra.push('-c', `filter.${name}.clean=`, '-c', `filter.${name}.smudge=`, '-c', `filter.${name}.process=`);
+    }
+    for (const name of diffNames) {
+      extra.push('-c', `diff.${name}.textconv=`, '-c', `diff.${name}.command=`);
+    }
+  } catch {}
+  return extra;
+}
+
+async function run(args, { cwd, timeout = 5000 } = {}) {
+  const extraFlags = cwd ? await neutralizeRepoGitConfigFlags(cwd) : [];
   return new Promise((resolve, reject) => {
     const ceiling = cwd ? path.dirname(path.resolve(cwd)) : undefined;
-    execFile(GIT, [...SAFE_GIT_FLAGS, ...args], {
+    execFile(GIT, [...SAFE_GIT_FLAGS, ...extraFlags, ...args], {
       cwd,
       timeout,
       maxBuffer: MAX_BUFFER,
@@ -59,7 +90,7 @@ export async function gitAutoCommit(workspace, message = 'auto') {
 export async function gitDiff(workspace, { staged = false } = {}) {
   try {
     if (!await hasGit(workspace)) return '';
-    const args = ['diff', '--no-ext-diff', '--stat', '--patch'];
+    const args = ['diff', '--no-ext-diff', '--no-textconv', '--stat', '--patch'];
     if (staged) args.push('--cached');
     else if (await hasHead(workspace)) args.push('HEAD');
     const output = await run(args, { cwd: workspace, timeout: 10000 });
@@ -78,7 +109,7 @@ export async function gitLog(workspace, { limit = 20 } = {}) {
 export async function gitDiffSummary(workspace) {
   try {
     if (!await hasGit(workspace)) return '';
-    const args = ['diff', '--no-ext-diff', '--stat'];
+    const args = ['diff', '--no-ext-diff', '--no-textconv', '--stat'];
     if (await hasHead(workspace)) args.push('HEAD');
     const output = await run(args, { cwd: workspace, timeout: 5000 });
     return output.slice(0, 4096);
@@ -97,8 +128,11 @@ export async function gitCommit(workspace, { message = 'commit' } = {}) {
 
 export async function hasGit(workspace) {
   try {
-    await fs.access(path.join(workspace, '.git'));
-    return true;
+    const wsReal = await fs.realpath(workspace);
+    const gitDir = path.join(wsReal, '.git');
+    const st = await fs.lstat(gitDir);
+    if (st.isSymbolicLink() || !st.isDirectory()) return false;
+    return (await fs.realpath(gitDir)) === gitDir;
   } catch { return false; }
 }
 
@@ -140,7 +174,10 @@ export async function gitRewind(workspace, stepsOrOptions = 1) {
     }
     const target = matches[0];
     if (target.idx === 0) {
-      throw Object.assign(new Error('Workspace is already at this checkpoint.'), { code: 'INVALID_REWIND' });
+      const dirty = (await run(['status', '--porcelain'], { cwd: workspace, timeout: 5000 })).trim();
+      if (!dirty) {
+        throw Object.assign(new Error('Workspace is already at this checkpoint.'), { code: 'INVALID_REWIND' });
+      }
     }
     const fromHash = (await run(['rev-parse', '--short', 'HEAD'], { cwd: workspace, timeout: 5000 })).trim();
     await run(['reset', '--hard', target.hash], { cwd: workspace, timeout: 10000 });
@@ -156,7 +193,7 @@ export async function gitRewind(workspace, stepsOrOptions = 1) {
   if (!await hasGit(workspace) || !await hasHead(workspace)) {
     throw Object.assign(new Error('No git history in this workspace.'), { code: 'NO_GIT_HISTORY' });
   }
-  const countText = await run(['rev-list', '--count', 'HEAD'], { cwd: workspace, timeout: 5000 });
+  const countText = await run(['rev-list', '--first-parent', '--count', 'HEAD'], { cwd: workspace, timeout: 5000 });
   const count = Number(countText.trim());
   if (!Number.isInteger(count) || count <= 1 || steps >= count) {
     throw Object.assign(new Error('Cannot rewind past the initial workspace commit.'), { code: 'REWIND_LIMIT' });

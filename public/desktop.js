@@ -143,13 +143,14 @@
   }
   function watchBuild(id, fingerprint, local = false) {
     stopWatching();
-    const watch = { revision: '', previousBuild: local ? project?.review?.buildId : null };
+    const watch = { revision: '', previousBuild: local ? project?.review?.buildId : null, errors: 0 };
     watcher = watch;
     const poll = async () => {
-      if (watcher !== watch) return;
+      if (watcher !== watch || project?.id !== id) { stopWatching(); return; }
       try {
         const result = await read('/api/worktrees/' + id + '/progress?after=' + encodeURIComponent(watch.revision));
         if (watcher !== watch || project?.id !== id) return;
+        watch.errors = 0;
         watch.revision = result.revision;
         if (result.review?.fingerprint === fingerprint && result.review.buildId !== watch.previousBuild) {
           const changed = result.candidates.some((c, i) => {
@@ -166,8 +167,13 @@
         }
         if (!result.building && !local) { stopWatching(); return; }
       } catch (error) {
-        if (watcher !== watch) return;
+        if (watcher !== watch || project?.id !== id) { stopWatching(); return; }
+        watch.errors++;
         status(error.message);
+        if (error?.status === 404 || /not found|404|view changed/i.test(String(error?.message || '')) || watch.errors >= 3) {
+          stopWatching();
+          return;
+        }
       }
       watch.timer = setTimeout(poll, 600);
     };
@@ -180,6 +186,7 @@
       'Exit ' + result.exitCode, result.stdout, result.stderr].filter(Boolean).join('\n') : '';
   }
   async function showFile(file) {
+    if (!project) return;
     const current = ++previewVersion;
     activeFile = file;
     get('tree-quicklook').hidden = !window.webkit?.messageHandlers?.quickLook;
@@ -222,6 +229,7 @@
     const sequence = ++version;
     const fresh = await read('/api/worktrees/' + id);
     if (version !== sequence) return;
+    stopWatching();
     ++previewVersion;
     clearBlob();
     dialog.dataset.project = 'open';
@@ -414,6 +422,7 @@
           throw err;
         }
       }
+      stopWatching();
       project = null;
       await refresh();
       status('Removed worktree. Branch ' + result.branch + ' is retained.');
@@ -434,19 +443,24 @@
   get('tree-open-form').onsubmit = (e) => {
     e.preventDefault();
     act(async () => {
+      const repoPath = get('tree-folder').value.trim();
       const endpoint = view?.chatId ? '/api/conversations/' + encodeURIComponent(view.chatId) + '/repository' : '/api/worktrees';
-      const p = await post(endpoint, { repository: get('tree-folder').value.trim() });
+      const p = await post(endpoint, { repository: repoPath });
+      if (repoPath) window.G0DRecordRecentProject?.(repoPath, 'worktree');
       await refresh(p.id);
     });
   };
   get('tree-filter').oninput = files;
   get('tree-new-names').oninput = files;
   get('tree-files').onclick = (e) => {
+    if (!project || busy) return;
     const btn = e.target.closest('button[data-view]');
     if (btn) showFile(btn.dataset.view);
   };
   get('tree-files').onchange = (e) => {
+    if (!project || busy) return;
     const name = e.target.dataset.select;
+    if (!name) return;
     if (e.target.checked) selected.add(name);
     else selected.delete(name);
     files();
@@ -516,7 +530,7 @@
     });
   };
   get('tree-send').onclick = () => {
-    if (!prepared) return;
+    if (!prepared || busy || !project) return;
     const request = prepared;
     prepared = null;
     previewDialog.close();
@@ -538,10 +552,16 @@
     });
   };
   get('tree-stop-waiting').onclick = async () => {
+    const buildId = project?.review?.buildId;
+    if (!project || !buildId) return;
+    const btn = get('tree-stop-waiting');
+    if (btn.disabled) return;
+    btn.disabled = true;
     const owner = view;
     try {
-      await post(route('stop-waiting'), { buildId: project.review.buildId });
+      await post(route('stop-waiting'), { buildId });
     } catch (error) { if (owner === view) status(error.message); }
+    finally { btn.disabled = false; }
   };
   get('tree-apply').onclick = () =>
     act(async () => {
@@ -578,12 +598,40 @@
     if (project && activeFile)
       window.webkit?.messageHandlers?.quickLook?.postMessage({ root: project.root, file: activeFile });
   };
+  let browseTarget = 'tree';
+  window.G0DDesktopBrowse = (target = 'tree') => {
+    if (!window.webkit?.messageHandlers?.chooseRepository) return false;
+    browseTarget = target;
+    window.webkit.messageHandlers.chooseRepository.postMessage('open');
+    return true;
+  };
   if (window.webkit?.messageHandlers?.chooseRepository) {
     get('tree-browse').hidden = false;
-    get('tree-browse').onclick = () =>
-      window.webkit.messageHandlers.chooseRepository.postMessage('open');
+    get('tree-browse').onclick = () => window.G0DDesktopBrowse('tree');
+    const createBrowse = get('create-browse');
+    if (createBrowse) {
+      createBrowse.hidden = false;
+      createBrowse.onclick = () => window.G0DDesktopBrowse('create');
+    }
   }
   window.addEventListener('godcode-repository', (e) => {
-    get('tree-folder').value = e.detail;
+    const folder = typeof e.detail === 'string' ? e.detail.trim() : '';
+    const target = browseTarget;
+    browseTarget = 'tree';
+    if (!folder) return;
+    if (target === 'popover') {
+      window.G0DAttachProjectFromPicker?.(folder);
+      return;
+    }
+    if (target === 'create' || get('create-dialog')?.open) {
+      const input = get('create-source-path');
+      if (input) {
+        input.value = folder;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        window.G0DPreviewCreateImport?.();
+      }
+      return;
+    }
+    get('tree-folder').value = folder;
   });
 })();

@@ -104,14 +104,20 @@ async function readSafeSkillFile(rootReal, filePath) {
   }
 }
 
-async function scanFlatMarkdownDir(rootDir, relSegments, { scope, source, skillsByName }) {
+const MAX_SKILLS_PER_SOURCE = 64;
+const MAX_TOTAL_SKILLS = 128;
+
+async function scanFlatMarkdownDir(rootDir, relSegments, { scope, source, skillsByName, allowShadowGlobal = true }) {
+  if (skillsByName.size >= MAX_TOTAL_SKILLS) return;
   const resolved = await resolveNoSymlinkPath(rootDir, relSegments);
   if (!resolved) return;
   let entries;
   try { entries = await fs.readdir(resolved.target, { withFileTypes: true }); }
   catch { return; }
   entries.sort((a, b) => a.name.localeCompare(b.name, 'en'));
+  let added = 0;
   for (const entry of entries) {
+    if (added >= MAX_SKILLS_PER_SOURCE || skillsByName.size >= MAX_TOTAL_SKILLS) break;
     if (entry.isSymbolicLink() || !entry.isFile() || !entry.name.endsWith('.md')) continue;
     const full = path.join(resolved.target, entry.name);
     const content = await readSafeSkillFile(resolved.rootReal, full);
@@ -119,8 +125,9 @@ async function scanFlatMarkdownDir(rootDir, relSegments, { scope, source, skills
     const { meta, body } = parseSkillMarkdown(content);
     if (!body) continue;
     const stem = entry.name.slice(0, -3).toLowerCase();
-    const slug = (meta.name || stem).toLowerCase();
+    const slug = (scope === 'global' ? (meta.name || stem) : stem).toLowerCase();
     if (!SKILL_SLUG_RE.test(slug)) continue;
+    if (!allowShadowGlobal && skillsByName.get(slug)?.scope === 'global') continue;
     const mode = meta.mode && VALID_MODES.has(meta.mode) ? meta.mode : null;
     skillsByName.set(slug, {
       name: slug,
@@ -131,17 +138,21 @@ async function scanFlatMarkdownDir(rootDir, relSegments, { scope, source, skills
       scope,
       body
     });
+    added += 1;
   }
 }
 
-async function scanNestedSkillsDir(rootDir, relSegments, { scope, source, skillsByName }) {
+async function scanNestedSkillsDir(rootDir, relSegments, { scope, source, skillsByName, allowShadowGlobal = true }) {
+  if (skillsByName.size >= MAX_TOTAL_SKILLS) return;
   const resolved = await resolveNoSymlinkPath(rootDir, relSegments);
   if (!resolved) return;
   let entries;
   try { entries = await fs.readdir(resolved.target, { withFileTypes: true }); }
   catch { return; }
   entries.sort((a, b) => a.name.localeCompare(b.name, 'en'));
+  let added = 0;
   for (const entry of entries) {
+    if (added >= MAX_SKILLS_PER_SOURCE || skillsByName.size >= MAX_TOTAL_SKILLS) break;
     if (entry.isSymbolicLink() || !entry.isDirectory()) continue;
     const subDir = path.join(resolved.target, entry.name);
     let subStat;
@@ -152,8 +163,9 @@ async function scanNestedSkillsDir(rootDir, relSegments, { scope, source, skills
     if (content === null) continue;
     const { meta, body } = parseSkillMarkdown(content);
     if (!body) continue;
-    const slug = (meta.name || entry.name).toLowerCase();
+    const slug = (scope === 'global' ? (meta.name || entry.name) : entry.name).toLowerCase();
     if (!SKILL_SLUG_RE.test(slug)) continue;
+    if (!allowShadowGlobal && skillsByName.get(slug)?.scope === 'global') continue;
     const mode = meta.mode && VALID_MODES.has(meta.mode) ? meta.mode : null;
     skillsByName.set(slug, {
       name: slug,
@@ -164,6 +176,7 @@ async function scanNestedSkillsDir(rootDir, relSegments, { scope, source, skills
       scope,
       body
     });
+    added += 1;
   }
 }
 
@@ -171,24 +184,27 @@ export async function discoverSkills({ dataDir, workspace, sourcePath } = {}) {
   const skillsByName = new Map();
 
   if (typeof dataDir === 'string' && dataDir) {
-    await scanFlatMarkdownDir(dataDir, ['commands'], { scope: 'global', source: 'global:commands', skillsByName });
-    await scanFlatMarkdownDir(dataDir, ['skills'], { scope: 'global', source: 'global:skills', skillsByName });
+    await scanFlatMarkdownDir(dataDir, ['commands'], { scope: 'global', source: 'global:commands', skillsByName, allowShadowGlobal: true });
+    await scanFlatMarkdownDir(dataDir, ['skills'], { scope: 'global', source: 'global:skills', skillsByName, allowShadowGlobal: true });
   }
 
+  // Never scan writable workspace when sourcePath exists (prevents workspace self-hijacking).
+  // Trusted owner sourcePath may override global skills; writable workspace-only roots cannot shadow global.
+  const projectCandidates = sourcePath ? [{ root: sourcePath, allowShadowGlobal: true }] : (workspace ? [{ root: workspace, allowShadowGlobal: false }] : []);
   const projectRoots = [];
-  for (const candidate of [sourcePath, workspace]) {
+  for (const { root: candidate, allowShadowGlobal } of projectCandidates) {
     if (typeof candidate !== 'string' || !candidate) continue;
     try {
       const resolved = await fs.realpath(candidate);
-      if (!projectRoots.includes(resolved)) projectRoots.push(resolved);
+      if (!projectRoots.some(r => r.root === resolved)) projectRoots.push({ root: resolved, allowShadowGlobal });
     } catch {}
   }
 
-  for (const root of projectRoots) {
-    await scanFlatMarkdownDir(root, ['.claude', 'commands'], { scope: 'project', source: '.claude/commands', skillsByName });
-    await scanFlatMarkdownDir(root, ['.opencode', 'commands'], { scope: 'project', source: '.opencode/commands', skillsByName });
-    await scanFlatMarkdownDir(root, ['.g0dc0d3', 'commands'], { scope: 'project', source: '.g0dc0d3/commands', skillsByName });
-    await scanNestedSkillsDir(root, ['.g0dc0d3', 'skills'], { scope: 'project', source: '.g0dc0d3/skills', skillsByName });
+  for (const { root, allowShadowGlobal } of projectRoots) {
+    await scanFlatMarkdownDir(root, ['.claude', 'commands'], { scope: 'project', source: '.claude/commands', skillsByName, allowShadowGlobal });
+    await scanFlatMarkdownDir(root, ['.opencode', 'commands'], { scope: 'project', source: '.opencode/commands', skillsByName, allowShadowGlobal });
+    await scanFlatMarkdownDir(root, ['.g0dc0d3', 'commands'], { scope: 'project', source: '.g0dc0d3/commands', skillsByName, allowShadowGlobal });
+    await scanNestedSkillsDir(root, ['.g0dc0d3', 'skills'], { scope: 'project', source: '.g0dc0d3/skills', skillsByName, allowShadowGlobal });
   }
 
   return [...skillsByName.values()].sort((a, b) => a.name.localeCompare(b.name, 'en'));

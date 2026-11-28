@@ -4,13 +4,64 @@ import Quartz
 import Darwin
 import UserNotifications
 
+// Subclass WKWebView so dropping a macOS Finder folder onto the window attaches it as a project
+// while non-directory drops (images, PDFs, text files) pass straight through to HTML5 drag-and-drop.
+final class GodModeWebView: WKWebView {
+    var onFolderDrag: ((Bool) -> Void)?
+    var onFolderDrop: ((String) -> Void)?
+
+    private func droppedDirectoryPath(from sender: NSDraggingInfo) -> String? {
+        let pb = sender.draggingPasteboard
+        let opts: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
+        guard let urls = pb.readObjects(forClasses: [NSURL.self], options: opts) as? [URL], !urls.isEmpty else {
+            return nil
+        }
+        var isDir: ObjCBool = false
+        for url in urls where url.isFileURL {
+            if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+                return url.path
+            }
+        }
+        return nil
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if droppedDirectoryPath(from: sender) != nil {
+            onFolderDrag?(true)
+            return .copy
+        }
+        return super.draggingEntered(sender)
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if droppedDirectoryPath(from: sender) != nil {
+            return .copy
+        }
+        return super.draggingUpdated(sender)
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        onFolderDrag?(false)
+        super.draggingExited(sender)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        onFolderDrag?(false)
+        if let dirPath = droppedDirectoryPath(from: sender) {
+            onFolderDrop?(dirPath)
+            return true
+        }
+        return super.performDragOperation(sender)
+    }
+}
+
 // A small native window around the portable localhost runtime.
 // This developer build is ad-hoc signed (not notarized) and requires Node 22.13+.
 final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate, WKScriptMessageHandler, UNUserNotificationCenterDelegate {
     private let dictation = Dictation()
     private var previewWindow: NSPanel?
     private var window: NSWindow!
-    private var webView: WKWebView!
+    private var webView: GodModeWebView!
     private var loadingView: NSView!
     private var loadingTitle: NSTextField!
     private var loadingDetail: NSTextField!
@@ -65,6 +116,7 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
         menu.addItem(appMenuItem)
         let appMenu = NSMenu(title: "G0DM0D3")
         appMenu.addItem(withTitle: "About G0DM0D3", action: #selector(showAbout), keyEquivalent: "")
+        appMenu.addItem(withTitle: "Check for Updates…", action: #selector(checkForUpdatesMenu), keyEquivalent: "")
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Settings…", action: #selector(openSettingsMenu), keyEquivalent: ",")
         appMenu.addItem(.separator())
@@ -134,7 +186,13 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
         configuration.userContentController.add(self, name: "quickLook")
         configuration.userContentController.add(self, name: "setAppearance")
         configuration.userContentController.add(self, name: "alerts")
-        webView = WKWebView(frame: .zero, configuration: configuration)
+        webView = GodModeWebView(frame: .zero, configuration: configuration)
+        webView.onFolderDrag = { [weak self] active in
+            self?.emit("godcode-folder-drag", ["active": active])
+        }
+        webView.onFolderDrop = { [weak self] dirPath in
+            self?.emit("godcode-folder-drop", ["path": dirPath])
+        }
         if #available(macOS 13.3, *) {
             webView.isInspectable = (environment["G0D_DEVTOOLS"] == "1")
         }
@@ -406,6 +464,7 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
 
     private func connect() {
         connectionEpoch += 1
+        webViewReady = false
         let epoch = connectionEpoch
         loadingView.isHidden = false
         webView.isHidden = true
@@ -545,8 +604,8 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
                     let url = try self.launchURL()
                     self.openWorkspace(url)
                     return
-                } catch let err as NSError where err.domain == NSCocoaErrorDomain && err.code == NSFileReadNoSuchFileError && remaining > 0 {
-                    // Session token file may still be publishing right after server.listen().
+                } catch let err as NSError where ((err.domain == NSCocoaErrorDomain && err.code == NSFileReadNoSuchFileError) || (err.domain == "G0DC0D3" && err.code == 6)) && remaining > 0 {
+                    // Session token file may still be publishing right after server.listen() or replacing a stale PID file.
                 } catch {
                     self.showError("The local session could not be opened", error.localizedDescription)
                     return
@@ -641,6 +700,7 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
         }
     }
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        webViewReady = false
         recoverWebContent()
     }
     private func recoverWebContent() {
@@ -846,6 +906,17 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
     @objc private func retry() { webContentRestarts = 0; connect() }
     @objc private func showWindow() { window?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
     @objc private func openSettingsMenu() { showWindow(); webView.evaluateJavaScript("typeof openSettings==='function'&&openSettings('general')", completionHandler: nil) }
+    @objc private func checkForUpdatesMenu() {
+        showWindow()
+        guard webViewReady else {
+            let alert = NSAlert()
+            alert.messageText = "Workspace is still connecting"
+            alert.informativeText = "Wait a moment for the local G0DM0D3 runtime to finish connecting, then choose Check for Updates… again."
+            alert.beginSheetModal(for: window)
+            return
+        }
+        webView.evaluateJavaScript("typeof checkForUpdates==='function'&&checkForUpdates({openSettings:true})", completionHandler: nil)
+    }
     @objc private func newChatMenu() { showWindow(); webView.evaluateJavaScript("typeof newConversation==='function'&&newConversation()", completionHandler: nil) }
     @objc private func zoomIn() { webView.pageZoom = min(2.0, webView.pageZoom + 0.1) }
     @objc private func zoomOut() { webView.pageZoom = max(0.6, webView.pageZoom - 0.1) }
@@ -863,7 +934,7 @@ final class GodModeApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, W
         let alert = NSAlert()
         let ver = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.3.0"
         alert.messageText = "G0DM0D3 \(ver)"
-        alert.informativeText = "Local-first AI workspace & GODCODƎ coding harness\n\nNative AppKit/WKWebView client with self-contained Node.js 22 runtime, zero telemetry, zero npm dependencies, macOS Seatbelt command sandboxing, ACP v1 multi-harness coordination, Conclave 2.0, Brain 2.0, Live Browser 2.0, and AutoTune.\n\nScripted fault checks and live model results are labeled separately."
+        alert.informativeText = "Local-first AI workspace & GODCODƎ coding harness\n\nNative AppKit/WKWebView client with self-contained Node.js 22 runtime, zero telemetry, zero npm dependencies, macOS Seatbelt command sandboxing, ACP v1 multi-harness coordination, Conclave 2.0, Brain 2.0, Live Browser 2.0, and HyperTuner.\n\nScripted fault checks and live model results are labeled separately."
         alert.beginSheetModal(for: window)
     }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showWindow(); return true }

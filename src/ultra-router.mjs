@@ -280,7 +280,9 @@ export function matchBenchmarkEntry(candidate, matrix = loadBenchmarkMatrix()) {
   };
 }
 
-export function scoreCandidateForTask({ candidate, classification, matrix, learning, settings }) {
+export function scoreCandidateForTask({ candidate = {}, classification = {}, matrix, learning, settings } = {}) {
+  candidate = candidate && typeof candidate === 'object' ? candidate : {};
+  classification = classification && typeof classification === 'object' ? classification : {};
   const cfg = normalizeRouterSettings(settings || DEFAULT_ROUTER_SETTINGS);
   const primary = classification.primaryDomain || 'swe_coding';
   const secondary = classification.secondaryDomain;
@@ -370,8 +372,11 @@ export function routeUltraPlinian({ objective = '', files = [], attachments = []
   const matrix = loadBenchmarkMatrix(cfg.customBenchmarks);
   const classification = classifyPromptDomain(objective, { files, attachments, history });
   classification.needsTools = promptNeedsLiveTools(objective);
-  const ranked = (candidates || [])
-    .filter(c => c && c.id && c.available !== false && !c.closed && c.kind !== 'scripted')
+  const validCandidates = Array.isArray(candidates)
+    ? candidates.filter(c => c && typeof c.id === 'string' && c.id && c.available !== false && !c.closed && c.kind !== 'scripted')
+    : [];
+  const byId = new Map(validCandidates.map(c => [c.id, c]));
+  const ranked = validCandidates
     .map(candidate => scoreCandidateForTask({ candidate, classification, matrix, learning, settings: cfg }))
     .sort((a, b) => b.totalScore - a.totalScore || b.benchmarkPrior - a.benchmarkPrior || a.id.localeCompare(b.id));
 
@@ -388,7 +393,7 @@ export function routeUltraPlinian({ objective = '', files = [], attachments = []
   if (topUncensored) waterfallIds.push(topUncensored.id);
 
   // For Auto-Arena: pick up to cfg.arenaSize (2..4) distinct-family contenders across connected HTTP & Venice catalog models + an independent Judge
-  const draftCapable = ranked.filter(r => r.id.startsWith('venice-catalog:') || candidates.find(c => c.id === r.id)?.kind === 'http');
+  const draftCapable = ranked.filter(r => r.id.startsWith('venice-catalog:') || byId.get(r.id)?.kind === 'http');
   const pool = draftCapable;
   let arenaModels = null;
   let judgeId = null;
@@ -410,10 +415,10 @@ export function routeUltraPlinian({ objective = '', files = [], attachments = []
       if (chosen.length >= targetCount) break;
       if (!chosen.includes(c.id)) chosen.push(c.id);
     }
-    const judgeCandidate = pool.find(c => /glm-5-3-flash|gemini-4-neon|claude-sonnet/i.test(c.id) && !chosen.includes(c.id))
-      || pool.find(c => !chosen.includes(c.id) && c.speed >= 80)
-      || pool.find(c => !chosen.includes(c.id))
-      || pool[0];
+    const judgeCandidate = selectBestJudge(pool, chosen, {
+      refusalRisk: classification.refusalRisk,
+      domain: classification.primaryDomain
+    });
     if (chosen.length >= 2 && judgeCandidate) {
       arenaModels = chosen;
       judgeId = judgeCandidate.id;
@@ -441,6 +446,62 @@ export function routeUltraPlinian({ objective = '', files = [], attachments = []
       ? `${domainMeta.shortLabel} → ${selected.label} (bench ${selected.benchmarkPrior} · Elo ${selected.userElo} · ${selected.refusalRate}% refusal)`
       : 'No eligible models available for Ultra-Plinian routing.'
   };
+}
+
+const JUDGE_TASTEMAKER_TIERS = Object.freeze([
+  // Tier 1: Peak editorial taste + deep code/factual discernment + low over-refusal
+  /gemini[-_.]?4(?:[._-]0)?[-_.]?neon|\bneon[-_.]?4\b/i,
+  // Tier 2: Frontier editorial/architectural tastemakers
+  /claude[-_.]?(?:opus[-_.]?[45]|(?:4|5)(?:[-_.]?\d)?[-_.]?opus)/i,
+  /(?:openai[-_.]?)?gpt[-_.]?(?:6(?:[._-]?[12])?[-_.]?(?:astra|sol|luna|terra)|5(?:[._-]?[456])(?!.*(?:mini|nano)))/i,
+  // Tier 3: Strong independent frontier models & high-capacity uncensored judges
+  /claude[-_.]?(?:sonnet[-_.]?[45]|(?:4|5)(?:[-_.]?\d)?[-_.]?sonnet)/i,
+  /gemini[-_.]?4[-_.]?(?:pro|carbon|argon)/i,
+  /abliterat(?:ion|ed)[-_.]?(?:abliterated[-_.]?)?(?:model[-_.]?)?large/i,
+  /hermes[-_.]?4[-_.]?405b|deepseek[-_.]?v4(?!.*flash)|grok[-_.]?4|qwen[-_.]?3[-_.]?[67][-_.]?plus/i,
+]);
+
+const JUDGE_LIBERATED_TIERS = Object.freeze([
+  // For high-agency / security / edgy prompts: unpreachy high-intelligence judges that won't refuse or penalize direct answers
+  /abliterat(?:ion|ed)[-_.]?(?:abliterated[-_.]?)?(?:model[-_.]?)?large/i,
+  /glm[-_.]?5[-_.]?3.*(?:abliterat|uncensored|heretic|penclaw)/i,
+  /hermes[-_.]?[34][-_.]?(?:405b|70b)/i,
+  /deepseek[-_.]?v4.*(?:uncensored|abliterat|heretic)|qwen[-_.]?3[-_.]?[678].*(?:heretic|abliterat|plus)/i,
+  /gemini[-_.]?4(?:[._-]0)?[-_.]?neon|\bneon[-_.]?4\b/i,
+  /venice[-_.]?uncensored|dolphin|abliterat|heretic/i,
+  /grok[-_.]?4|glm[-_.]?5[-_.]?3/i,
+]);
+
+export function selectBestJudge(pool = [], chosenIds = [], { refusalRisk = 0, domain = 'fast_general' } = {}) {
+  if (!Array.isArray(pool) || !pool.length) return null;
+  const chosenSet = new Set(chosenIds || []);
+  const chosenFamilies = new Set(pool.filter(c => chosenSet.has(c.id)).map(c => c.family).filter(Boolean));
+  const independent = pool.filter(c => !chosenSet.has(c.id));
+  const distinctFamily = independent.filter(c => !c.family || !chosenFamilies.has(c.family));
+  const useLiberated = Number(refusalRisk) >= 0.45 || domain === 'security_research';
+  const tiers = useLiberated ? JUDGE_LIBERATED_TIERS : JUDGE_TASTEMAKER_TIERS;
+  const ident = c => `${c.id || ''} ${c.model || ''} ${c.label || ''}`;
+  const qualityRank = (a, b) => {
+    const qa = Number(a.benchmarkPrior || 0) * 0.7 + Number(a.totalScore || 0) * 0.3 + (useLiberated ? Number(a.compliance || 0) * 0.45 : 0);
+    const qb = Number(b.benchmarkPrior || 0) * 0.7 + Number(b.totalScore || 0) * 0.3 + (useLiberated ? Number(b.compliance || 0) * 0.45 : 0);
+    return qb - qa;
+  };
+  const pickFrom = (list) => {
+    if (!list.length) return null;
+    for (const pattern of tiers) {
+      const hits = list.filter(c => pattern.test(ident(c)));
+      if (hits.length) return [...hits].sort(qualityRank)[0];
+    }
+    if (useLiberated) {
+      const highComp = list.filter(c => Number(c.compliance || 0) >= 90);
+      if (highComp.length) return [...highComp].sort(qualityRank)[0];
+    }
+    // Never downgrade to a small flash/mini judge when a stronger frontier model is available
+    const nonLite = list.filter(c => !/(?:mini|nano|haiku|flash-lite|small|8b|7b)\b/i.test(ident(c)));
+    if (nonLite.length) return [...nonLite].sort(qualityRank)[0];
+    return [...list].sort(qualityRank)[0];
+  };
+  return pickFrom(distinctFamily) || pickFrom(independent) || pickFrom(pool) || pool[0];
 }
 
 export function buildDomainLeaderboards({ candidates = [], learning = null, settings = DEFAULT_ROUTER_SETTINGS } = {}) {

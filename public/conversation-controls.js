@@ -114,9 +114,15 @@ document.body.insertAdjacentHTML('beforeend', `
 
 function renderConversationControls(task) {
   if ($('#generation-dialog').open && generationContext?.taskId === task?.id) refreshGenerationLimits(task);
-  const queued = Boolean(task && (ACTIVE.has(task.status) || task.pendingMessages?.length || task.deferredMessages?.length));
+  const isCancelled = Boolean(task && task.status === 'cancelled');
+  const isLiveRunning = Boolean(task && !isCancelled && (ACTIVE.has(task.status) || (typeof isCrewBusy === 'function' && isCrewBusy(task))));
+  const queued = Boolean(task && !isCancelled && (isLiveRunning || task.pendingMessages?.length || task.deferredMessages?.length));
   $('#composer-delivery-label').hidden = !queued;
-  const deliveryVal = $('#composer-delivery').value;
+  const deliveryEl = $('#composer-delivery');
+  const parallelOpt = deliveryEl?.querySelector('option[value="parallel"]');
+  if (parallelOpt) parallelOpt.disabled = !isLiveRunning;
+  if (deliveryEl && deliveryEl.value === 'parallel' && !isLiveRunning) deliveryEl.value = 'steer';
+  const deliveryVal = deliveryEl?.value || 'steer';
   $('#composer-delivery-help').textContent = queued
     ? (deliveryVal === 'steer'
       ? 'Preempts active thinking or applies after current tool.'
@@ -124,9 +130,11 @@ function renderConversationControls(task) {
         ? 'Runs a concurrent sidecar worker without interrupting the main plan.'
         : 'Runs after the current turn finishes.')
     : '';
-  $('#composer-parameters').disabled = Boolean(task && task.status === 'cancelled');
+  $('#composer-parameters').disabled = isCancelled;
   const count = Object.keys(task?.generation || (!task ? generationDefaults() : {})).length;
   $('#composer-parameters').textContent = count ? `Model controls · ${count}` : 'Model controls';
+  const controlsBar = document.querySelector('.conversation-controls');
+  if (controlsBar) controlsBar.classList.toggle('is-idle', !queued && count === 0);
 }
 generationControls=window.ModelParameterControls($('#generation-dialog .generation-fields'));
 $('#composer-delivery').addEventListener('change', renderComposer);
@@ -138,10 +146,11 @@ function refreshGenerationLimits(task, force=false) {
 }
 
 function renderConversationQueue(task) {
+  const cancelled = task.status === 'cancelled';
   return [['pendingMessages','Steering','Applied together at the next request or tool boundary.'],['deferredMessages','Queued','Each message starts a separate turn after the current turn finishes.']].map(([field,title,help]) => {
     const queue = task[field] || [];
     if (!queue.length) return '';
-    return `<section class="queued-instructions" aria-label="${title} messages"><h3>${title} · ${queue.length}</h3><p>${task.status === 'cancelled' ? 'Cancelled before application.' : help}</p>${queue.map((item,i) => `<article class="queued-instruction" data-queue-id="${escapeHTML(item.id)}"><header><strong>${title === 'Queued' ? 'Turn' : 'Instruction'} ${i+1}</strong><div class="queue-actions"><button type="button" class="button button-quiet" data-edit-queued="${escapeHTML(item.id)}">Edit</button><button type="button" class="button button-quiet" data-move-queued="${escapeHTML(item.id)}" data-direction="-1" aria-label="Move message ${i+1} up" ${i === 0 ? 'disabled' : ''}>↑</button><button type="button" class="button button-quiet" data-move-queued="${escapeHTML(item.id)}" data-direction="1" aria-label="Move message ${i+1} down" ${i === queue.length-1 ? 'disabled' : ''}>↓</button><button type="button" class="button button-quiet" data-remove-message="${escapeHTML(item.id)}">Remove</button></div></header><div class="queued-text" tabindex="0">${escapeHTML(item.message)}</div></article>`).join('')}</section>`;
+    return `<section class="queued-instructions" aria-label="${title} messages"><h3>${title} · ${queue.length}</h3><p>${cancelled ? 'Cancelled before application.' : help}</p>${queue.map((item,i) => `<article class="queued-instruction" data-queue-id="${escapeHTML(item.id)}"><header><strong>${title === 'Queued' ? 'Turn' : 'Instruction'} ${i+1}</strong>${cancelled ? '' : `<div class="queue-actions"><button type="button" class="button button-quiet" data-edit-queued="${escapeHTML(item.id)}">Edit</button><button type="button" class="button button-quiet" data-move-queued="${escapeHTML(item.id)}" data-direction="-1" aria-label="Move message ${i+1} up" ${i === 0 ? 'disabled' : ''}>↑</button><button type="button" class="button button-quiet" data-move-queued="${escapeHTML(item.id)}" data-direction="1" aria-label="Move message ${i+1} down" ${i === queue.length-1 ? 'disabled' : ''}>↓</button><button type="button" class="button button-quiet" data-remove-message="${escapeHTML(item.id)}">Remove</button></div>`}</header><div class="queued-text" tabindex="0">${escapeHTML(item.message)}</div></article>`).join('')}</section>`;
   }).join('');
 }
 

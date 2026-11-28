@@ -190,8 +190,12 @@
       if (p) { addActor(p[1], p[2] || p[1]); continue; }
       const m = /^([^:\-]+?)\s*(-->>|->>|-->|->)\s*([^:]+?)\s*:\s*(.*)$/.exec(line);
       if (m) {
-        addActor(m[1]); addActor(m[3]);
-        msgs.push({ from: m[1].trim(), arrow: m[2], to: m[3].trim(), text: m[4].trim() });
+        const from = m[1].trim();
+        const to = m[3].trim();
+        if (from && to) {
+          addActor(from); addActor(to);
+          msgs.push({ from, arrow: m[2], to, text: m[4].trim() });
+        }
       }
     }
     if (!actors.length) return null;

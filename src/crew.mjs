@@ -17,8 +17,15 @@ export class CrewController {
   constructor(runtime) {
     this.runtime = runtime; this.store = runtime.store; this.jobs = new Map(); this.closed = false;
     for (const crew of this.store.listCrews()) if (working.has(crew.status)) {
-      crew.status = 'paused'; crew.error = { code: 'CREW_RESTART', message: 'Crew interrupted. Resume continues with the original budget and deadline.' };
-      this.store.putCrew(crew, 'crew.paused');
+      if (crew.status === 'applying' && crew.candidate) {
+        crew.status = 'ready';
+        crew.error = { code: 'CREW_RESTART', message: 'Adoption was interrupted before completion. Review and apply the verified candidate again.' };
+        this.store.putCrew(crew, 'crew.ready');
+      } else {
+        crew.status = 'paused';
+        crew.error = { code: 'CREW_RESTART', message: 'Crew interrupted. Resume continues with the original budget and deadline.' };
+        this.store.putCrew(crew, 'crew.paused');
+      }
     }
   }
   record(parentId) { return this.store.latestCrew(parentId); }
@@ -137,7 +144,28 @@ export class CrewController {
       const current = this.store.getCrew(crew.id);
       await Promise.allSettled(Object.values(current.members).map(id => this.runtime.runs.get(id)?.promise).filter(Boolean));
       if (this.jobs.get(crew.parentId) === entry) this.jobs.delete(crew.parentId);
+      const settled = this.store.getCrew(crew.id);
+      if (settled && ['cancelled', 'failed'].includes(settled.status)) {
+        this._cleanupDisposableDirs(settled).catch(() => {});
+      }
     });
+  }
+  async _cleanupDisposableDirs(crew, { preservePath = null } = {}) {
+    if (!crew?.id) return;
+    const baseDir = path.join(this.store.dataDir, 'crews', crew.id);
+    const keepReal = preservePath ? await fs.realpath(preservePath).catch(() => path.resolve(preservePath)) : null;
+    let entries;
+    try { entries = await fs.readdir(baseDir, { withFileTypes: true }); } catch { return; }
+    for (const ent of entries) {
+      if (!ent.isDirectory()) continue;
+      const full = path.join(baseDir, ent.name);
+      const fullReal = await fs.realpath(full).catch(() => full);
+      if (keepReal && fullReal === keepReal) continue;
+      if (/^(?:solver|challenger|verifier|adopted)-/.test(ent.name)) {
+        await fs.rm(full, { recursive: true, force: true }).catch(() => {});
+      }
+    }
+    if (!keepReal) await fs.rmdir(baseDir).catch(() => {});
   }
   async wait(parentId) { await this.jobs.get(parentId)?.promise; return this.summary(parentId); }
   async inspect(parentId) {
@@ -217,9 +245,10 @@ export class CrewController {
       const parent = this._assertParent(crew), remaining = crew.maxCalls - crew.calls;
       const providers = role === 'challenger' && parent.providers.length > 1 ? [...parent.providers.slice(1), parent.providers[0]] : parent.providers;
       const maxCalls = role === 'solver' ? Math.max(2, crew.maxCalls - 3) : role === 'challenger' ? Math.max(1, Math.min(3, remaining)) : 1;
+      const effectivePermissionRules = this.runtime._effectivePermissionRules(parent);
       return await this.runtime.createTask({ title: `${role[0].toUpperCase() + role.slice(1)} · ${parent.title}`, objective: parent.objective, constraints: parent.constraints, workspace, workspaceKind: parent.workspaceKind, providers,
         fixtureId: parent.fixtureId, scenario: parent.scenario, acceptance: parent.acceptance, persona: parent.persona, checks: parent.checks,
-        ...(parent.permissionRules !== undefined ? { permissionRules: parent.permissionRules } : {}),
+        ...(effectivePermissionRules.length ? { permissionRules: effectivePermissionRules } : {}),
         ...(parent.effort !== undefined ? { effort: parent.effort } : {}),
         ...(parent.generation !== undefined ? { generation: parent.generation } : {}),
         execution: role === 'challenger' ? { enabled: false, network: false, timeoutMs: parent.execution.timeoutMs } : parent.execution,
@@ -240,8 +269,12 @@ export class CrewController {
     }
     this._live(crewId, signal); task = this.runtime.getTask(taskId);
     if (this.runtime.getOperations(taskId).some(op => !['succeeded','failed'].includes(op.status))) throw fault('OUTCOME_UNKNOWN', 'Crew worker has unresolved tool effects. Inspect its recorded operations before continuing.');
-    if (task.blocker && !['CALL_BUDGET','CREW_BUDGET','UNREGISTERED_ACCEPTANCE','RECOVERY_LIMIT'].includes(task.blocker.code) && !diagnoseIncident(task.blocker).route) throw fault(task.blocker.code, task.blocker.message);
+    const allowedHandoff = ['CALL_BUDGET', 'CREW_BUDGET', 'UNREGISTERED_ACCEPTANCE', 'RECOVERY_LIMIT'];
+    if (task.blocker && !allowedHandoff.includes(task.blocker.code) && !diagnoseIncident(task.blocker).route) throw fault(task.blocker.code, task.blocker.message);
     if (task.status === 'failed' || task.status === 'cancelled') throw fault(task.blocker?.code || 'CREW_WORKER_FAILED', task.blocker?.message || 'Crew worker failed.');
+    if ((task.status === 'paused' || task.status === 'blocked') && !allowedHandoff.includes(task.blocker?.code)) {
+      throw fault(task.blocker?.code || 'CREW_WORKER_STOPPED', task.blocker?.message || `Crew worker stopped (${task.status}).`);
+    }
     return task;
   }
   async _drive(id, signal) {
@@ -288,6 +321,17 @@ export class CrewController {
     }
     this._update(id, { phase: 'verifier', status: 'verifying' }, 'crew.phase');
     const captured = await snapshot(solver.workspace); this._live(id, signal);
+    // If an interrupted verifier workspace was dirtied by a previous aborted check, recreate a clean copy.
+    const existingVerifierId = this.store.getCrew(id)?.members?.verifier;
+    if (existingVerifierId) {
+      const existingVerifier = this.store.getTask(existingVerifierId);
+      const existingSnap = existingVerifier?.workspace ? await snapshot(existingVerifier.workspace).catch(() => null) : null;
+      if (!existingSnap || existingSnap.snapshotHash !== captured.snapshotHash) {
+        const curCrew = this.store.getCrew(id);
+        delete curCrew.members.verifier;
+        this.store.putCrew(curCrew);
+      }
+    }
     const verifier = await this._member(id, 'verifier', solver.workspace, captured, signal);
     const checking = this.store.updateTask(verifier.id, task => { task.status = 'verifying'; task.epoch += 1; task.verification = null; return task; });
     // Verification uses the existing command journal, even though it makes no model call.
@@ -357,7 +401,9 @@ export class CrewController {
         if (current.snapshotHash !== input.snapshotHash || adopted.snapshotHash !== input.snapshotHash) throw fault('CREW_STALE_CANDIDATE', 'Candidate or copied files changed during adoption.');
         // One SQLite transaction moves the task pointer. Original and reviewed
         // workspaces remain intact; no partial multi-file merge can be exposed.
-        return this.store.adoptCrew(crew.id, workspace, crew.candidate.verification);
+        const adoptedTask = this.store.adoptCrew(crew.id, workspace, crew.candidate.verification);
+        this._cleanupDisposableDirs(this.store.getCrew(crew.id), { preservePath: workspace }).catch(() => {});
+        return adoptedTask;
       } catch (error) {
         if (workspace) await fs.rm(workspace, { recursive: true, force: true }).catch(() => {});
         this._update(crew.id, { status: 'ready', error: problem(error) }, 'crew.apply_failed');

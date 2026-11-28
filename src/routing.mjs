@@ -8,14 +8,14 @@ export function diagnoseIncident(incident = {}) {
   if (code === 'PROVIDER_FAILURE') return { category: 'provider_failure', route: false };
   if (['ABORTED', 'CANCELLED', 'CANCELED', 'STALE_RUN', 'TASK_CANCELLED', 'EXECUTION_CANCELLED', 'EVALUATION_CANCELLED'].includes(code)) return { category: 'cancelled', route: false };
   if (/AUTH|CREDENTIAL|PROVIDER_CONFIGURATION|PROVIDER_CLOSED|PRIVACY_LOCAL_ONLY|PRIVACY_STRICT_ZDR/.test(code)) return { category: 'configuration', route: false };
-  if (/DENIED|PERMISSION|SANDBOX|ISOLATION_UNAVAILABLE|EXECUTION_DISABLED|NETWORK_DISABLED|PROTECTED|GRANT|EACCES|EPERM/.test(code)) return { category: 'permission', route: false };
+  if (/DENIED|PERMISSION|SANDBOX|ISOLATION_UNAVAILABLE|EXECUTION_DISABLED|NETWORK_DISABLED|PROTECTED|GRANT|EACCES|EPERM|APPROVAL_REQUIRED|SCOPE_EXCLUDED|SCOPE_OUT_OF_BOUNDS|EPHEMERAL_SESSION/.test(code)) return { category: 'permission', route: false };
   if (/OUTCOME_UNKNOWN|WORKSPACE_|WRITE_CONFLICT|STALE_HASH|HASH_MISMATCH/.test(code)) return { category: 'workspace', route: false };
   if (/CONTEXT_LIMIT|CALL_BUDGET|RECOVERY_LIMIT|UNREGISTERED_ACCEPTANCE|USER_INPUT|MISSING_INPUT/.test(code)) return { category: 'owner_input', route: false };
   if (/HTTP_401|HTTP_402|HTTP_403/.test(code)) return { category: 'configuration', route: false };
   if (/HTTP_429/.test(code)) return { category: 'transport', route: true };
-  if (/HTTP_4\d\d/.test(code)) return { category: 'provider_404', route: true };
-  if (incident.retryable === false) return { category: 'configuration', route: false };
   if (incident.kind === 'refusal' || /REFUSAL|CONTENT_FILTER/.test(code)) return { category: 'refusal', route: true };
+  if (incident.retryable === false) return { category: 'configuration', route: false };
+  if (/HTTP_4\d\d/.test(code)) return { category: 'provider_404', route: true };
   if (/CAPABILITY|UNSUPPORTED_MODEL|UNSUPPORTED_TOOL/.test(code)) return { category: 'capability', route: true };
   if (code === 'OUTPUT_LIMIT') return { category: 'output_limit', route: true };
   if (/INVALID_RESPONSE|INVALID_TOOL|TOOL_PROTOCOL|RESULT_SCHEMA|OPERATION_ID_COLLISION/.test(code)) return { category: 'protocol', route: true };
@@ -52,7 +52,8 @@ export function detectRefusal(response, { learnedPatterns = [] } = {}) {
     && /\b(?:can.?t|cannot|won.?t|will not|refuse|unable|not able|must (?:decline|refrain)|inappropriate|irresponsible)\b/i.test(prose);
   const softRefusal = /\b(?:hold up|whoa|stop right|can.?t do that|won.?t (?:do|help|assist|create|build|write|generate)|not (?:going to|gonna)|must (?:refuse|decline|refrain)|strongly (?:advise|recommend) against|raising.{0,20}eyebrows|(?:need|have) to stop here|cannot fulfill (?:this|that|your) request|unable to (?:fulfill|assist with) (?:this|that|your) request)\b/i.test(prose)
     && /\b(?:malware|ransomware|exploit|trojan|virus|keylog|harmful|illegal|unethical|malicious|weapon|attack|hack(?:ing)?|rootkit|spyware|botnet|c2|c&c|RAT|worm|backdoor|phish|credential.?steal|supply.?chain.?attack|reverse.?shell|APT|advanced persistent|drainer|stealer|implant|request|policy|guidelines|safety|ethics)\b/i.test(prose);
-  const policyRefusal = /\b(?:violat(?:es?|ing)|against|prohibited by|not (?:allowed|permitted)|breach(?:es)?|goes against)\b.*\b(?:policy|guidelines?|terms|rules?|principles?|safety|ethics)\b/i.test(prose);
+  const policyRefusal = /\b(?:violat(?:es?|ing)|against|prohibited by|not (?:allowed|permitted)|breach(?:es)?|goes against)\b.*\b(?:policy|guidelines?|terms|rules?|principles?|safety|ethics)\b/i.test(prose)
+    && /\b(?:i\s+(?:cannot|can't|won't|will not|must|am unable|have to|decline|refuse)|cannot\s+(?:assist|help|fulfill|provide|comply)|my\s+(?:policy|guidelines|principles|safety)|this\s+request|your\s+request)\b/i.test(prose);
   const divergenceRefusal = /\b(?:(?:massive|huge|total) divergence|totally different (?:project|task)|wires crossed|mix.?up|(?:not|doesn.?t) (?:match|align|relate)|wrong (?:project|objective))\b/i.test(prose)
     && /\b(?:hold up|whoa|wait|stop|confused|what.?s (?:going|happening))\b/i.test(prose);
   let learnedMatch = false;
@@ -61,7 +62,7 @@ export function detectRefusal(response, { learnedPatterns = [] } = {}) {
     const normalizedProse = prose.replace(/\s+/g, ' ').toLowerCase();
     for (const item of learnedPatterns) {
       const sig = typeof item === 'string' ? item : item?.signature;
-      if (typeof sig === 'string' && sig.length >= 20 && normalizedProse.includes(sig)) {
+      if (typeof sig === 'string' && sig.length >= 20 && normalizedProse.includes(sig.toLowerCase())) {
         learnedMatch = true;
         break;
       }
@@ -114,16 +115,18 @@ export function recencyWeight(updatedAt, now = Date.now(), halfLifeMs = 7 * 24 *
 }
 
 export function rankCandidates({ task, providers, learning, diagnosis, requiredTools = [], excludeCurrent = true, fingerprint }) {
+  if (!task || !Array.isArray(task.providers) || !providers || typeof providers.get !== 'function') return [];
+  const diagCategory = diagnosis?.category || 'unknown';
   const currentProvider = providers.get(task.providerId);
   const currentTier = providerTier(currentProvider);
   const escalationEnabled = task.policy?.escalation !== 'off';
   const escalatingFromLocal = escalationEnabled && currentTier === 'local'
-    && (ESCALATION_CATEGORIES.has(diagnosis?.category) || (task.recoveries || 0) >= 2);
+    && (ESCALATION_CATEGORIES.has(diagCategory) || (task.recoveries || 0) >= 2);
   const now = Date.now();
   return task.providers.map((id, index) => {
     const provider = providers.get(id), key = providerIdentity(id, provider);
     const tier = providerTier(provider);
-    const stat = learning?.stats?.find(item => item.providerKey === key && item.category === diagnosis.category);
+    const stat = learning?.stats?.find(item => item.providerKey === key && item.category === diagCategory);
     const successes = stat?.successes || 0, failures = stat?.failures || 0, samples = successes + failures;
     const confidence = (samples / (samples + 5)) * recencyWeight(stat?.updatedAt, now);
     const successEstimate = Number.isFinite(stat?.recencyEstimate) ? stat.recencyEstimate : (successes + 1) / (samples + 2);
@@ -154,7 +157,7 @@ export function rankCandidates({ task, providers, learning, diagnosis, requiredT
 
 /** Reorder provider list so the best initial provider is first, using learning data. */
 export function rankInitialProviders(providerIds, providers, learning) {
-  if (!learning?.stats?.length || providerIds.length < 2) return providerIds;
+  if (!Array.isArray(providerIds) || !learning?.stats?.length || providerIds.length < 2 || !providers || typeof providers.get !== 'function') return Array.isArray(providerIds) ? providerIds : [];
   const [pinned, ...rest] = providerIds;
   if (rest.length < 2) return providerIds;
   const scored = rest.map(id => {
@@ -164,10 +167,11 @@ export function rankInitialProviders(providerIds, providers, learning) {
     if (eligible) return { id, score: -1 };
     const completionStat = learning.stats.find(s => s.providerKey === key && s.category === 'completion');
     const restrictionStat = learning.stats.find(s => s.providerKey === key && s.category === 'content_restriction');
-    const completionSuccess = completionStat ? completionStat.successes / Math.max(1, completionStat.samples) : 0.5;
-    const restrictionRate = restrictionStat ? restrictionStat.failures / Math.max(1, restrictionStat.samples) : 0;
-    const completionSamples = completionStat?.samples || 0;
-    const confidence = completionSamples / (completionSamples + 3);
+    const compSamples = completionStat ? (completionStat.samples ?? ((completionStat.successes || 0) + (completionStat.failures || 0))) : 0;
+    const restSamples = restrictionStat ? (restrictionStat.samples ?? ((restrictionStat.successes || 0) + (restrictionStat.failures || 0))) : 0;
+    const completionSuccess = completionStat ? (completionStat.successes || 0) / Math.max(1, compSamples) : 0.5;
+    const restrictionRate = restrictionStat ? (restrictionStat.failures || 0) / Math.max(1, restSamples) : 0;
+    const confidence = compSamples / (compSamples + 3);
     return { id, score: completionSuccess * confidence - restrictionRate * 0.3 };
   });
   scored.sort((a, b) => b.score - a.score);

@@ -4,15 +4,39 @@
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   const buttons = document.querySelectorAll('[data-dictate]');
   let active;
+  const makeSessionId = () =>
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   function stop(cancel = false) {
     if (!active) return;
     const session = active;
-    if (native) native.postMessage({ id: session.id, action: cancel ? 'cancel' : 'stop' });
-    else if (cancel) session.recognition.abort();
-    else session.recognition.stop();
+    if (session.stopTimer) {
+      clearTimeout(session.stopTimer);
+      session.stopTimer = null;
+    }
+    try {
+      if (native) {
+        native.postMessage({ id: session.id, action: cancel ? 'cancel' : 'stop' });
+        if (!cancel) {
+          session.stopTimer = setTimeout(() => finish(session), 4000);
+        }
+      } else if (cancel) {
+        session.recognition?.abort?.();
+      } else {
+        session.recognition?.stop?.();
+      }
+    } catch {
+      finish(session);
+      return;
+    }
     if (cancel) finish(session);
   }
   function finish(session) {
+    if (session?.stopTimer) {
+      clearTimeout(session.stopTimer);
+      session.stopTimer = null;
+    }
     if (active !== session) return;
     session.button.setAttribute('aria-pressed', 'false');
     session.button.title = 'Dictate';
@@ -61,7 +85,7 @@
         return;
       }
       const session = {
-        id: crypto.randomUUID(),
+        id: makeSessionId(),
         input,
         button,
         start: input.selectionStart,
@@ -79,7 +103,7 @@
           speech.interimResults = true;
           speech.lang = navigator.language;
           speech.onresult = (e) =>
-            update(session, Array.from(e.results, (r) => r[0].transcript).join(' '), false);
+            update(session, Array.from(e.results, (r) => r[0]?.transcript || '').join(' '), false);
           speech.onerror = (e) => update(session, '', true, 'Dictation: ' + e.error);
           speech.onend = () => finish(session);
           speech.start();
@@ -91,7 +115,7 @@
   }
   window.addEventListener('godcode-dictation', (e) => {
     const d = e.detail;
-    if (active?.id === d.id) update(active, d.text, d.final, d.error);
+    if (d && active?.id === d.id) update(active, d.text, d.final, d.error);
   });
   document.addEventListener('submit', () => stop(true), true);
   document.getElementById('tree-dialog')?.addEventListener('close', () => stop(true));

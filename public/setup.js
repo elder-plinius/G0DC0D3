@@ -61,10 +61,7 @@ window.SetupUI = (() => {
     state.setup = result.setup;
   }
   async function defer(openModels = false) {
-    if (submitting) {
-      if (dialog.open) dialog.close();
-      return;
-    }
+    if (submitting) return;
     submitting = true; controls();
     try {
       await acknowledge('deferred');
@@ -75,14 +72,19 @@ window.SetupUI = (() => {
       if (dialog.open) dialog.close();
     }
     if (openModels) {
-      await openSettings('models');
-      $('#api-key-setup')?.scrollIntoView({ block: 'start' });
-      $('#api-key-input')?.focus({ preventScroll: true });
+      try {
+        await openSettings('models');
+        $('#api-key-setup')?.scrollIntoView({ block: 'start' });
+        $('#api-key-input')?.focus({ preventScroll: true });
+      } catch (error) {
+        if (typeof toast === 'function') toast(error.message || 'Could not open model settings.');
+      }
     }
   }
   async function complete() {
     if (loading || submitting || !data) return;
     submitting = true; controls();
+    let closed = false;
     try {
       for (const id of [...chosen]) {
         const connection = data.connections.find(item => item.id === id);
@@ -95,6 +97,7 @@ window.SetupUI = (() => {
       }
       await acknowledge('completed');
       dialog.close();
+      closed = true;
       await refresh();
       if ($('#settings-dialog').open) {
         await Promise.all([loadModelConnections(), typeof loadServices === 'function' ? loadServices() : Promise.resolve()]);
@@ -102,7 +105,11 @@ window.SetupUI = (() => {
       }
       window.TourUI?.offer();
     } catch (error) {
-      render(); setText('#setup-feedback', error.message + ' Any options already added are shown above.');
+      if (closed) {
+        if (typeof toast === 'function') toast(error.message || 'Setup completed, but refreshing workspace failed.');
+      } else {
+        render(); setText('#setup-feedback', error.message + ' Any options already added are shown above.');
+      }
     } finally { submitting = false; controls(); }
   }
   async function open() {
@@ -130,7 +137,7 @@ window.SetupUI = (() => {
   $('#setup-continue').addEventListener('click', complete);
   $('#setup-refresh').addEventListener('click', () => load(true));
   document.addEventListener('click', event => { if (event.target.closest('[data-open-setup]')) void open(); });
-  return { open, maybeOpen, disclosureHTML };
+  return { open, maybeOpen, disclosureHTML, openTour: () => window.TourUI?.open() };
 })();
 
 window.TourUI = (() => {

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { scopedPath, readBoundedFile } from './broker.mjs';
 
 const MAX_SESSIONS = 32;
+const SESSION_TTL_MS = 60 * 60 * 1000;
 const MAX_PREVIEW_FILE_BYTES = 4 * 1024 * 1024;
 const MAX_SNIPPET_BYTES = 512 * 1024;
 
@@ -45,7 +46,7 @@ export function buildPreviewCsp(token, host = null) {
 }
 
 function buildConsoleBridge(token) {
-  const safeToken = JSON.stringify(String(token));
+  const safeToken = JSON.stringify(String(token)).replace(/</g, '\\u003c');
   return `<script>(function(){var T=${safeToken};function send(lvl,msg){try{window.parent.postMessage({type:'g0d-preview-console',token:T,level:lvl,message:String(msg||'').slice(0,1000)},'*');}catch(e){}}function mkStore(){var m=Object.create(null);return{get length(){return Object.keys(m).length;},key:function(i){return Object.keys(m)[i]||null;},getItem:function(k){return Object.prototype.hasOwnProperty.call(m,String(k))?m[String(k)]:null;},setItem:function(k,v){m[String(k)]=String(v);},removeItem:function(k){delete m[String(k)];},clear:function(){m=Object.create(null);}};}['localStorage','sessionStorage'].forEach(function(n){try{void window[n];}catch(_){try{Object.defineProperty(window,n,{value:mkStore(),configurable:true});}catch(__){}}});window.addEventListener('error',function(e){if(e&&e.target&&e.target!==window&&(e.target.tagName==='SCRIPT'||e.target.tagName==='LINK')){send('warn','Blocked or missing resource: '+(e.target.src||e.target.href||'unknown'));return;}send('error',(e.message||'Script error')+(e.lineno?' (line '+e.lineno+')':''));},true);window.addEventListener('unhandledrejection',function(e){send('error','Unhandled rejection: '+(e.reason&&e.reason.message?e.reason.message:String(e.reason)));});var oe=console.error,ow=console.warn;console.error=function(){send('error',Array.prototype.map.call(arguments,String).join(' '));return oe.apply(console,arguments);};console.warn=function(){send('warn',Array.prototype.map.call(arguments,String).join(' '));return ow.apply(console,arguments);};`
     + `var inspOn=false,box=null,lbl=null,curEl=null;`
     + `function cssEsc(s){return String(s||'').replace(/[^a-zA-Z0-9_-]/g,function(c){return '\\\\'+c;});}`
@@ -64,8 +65,8 @@ function buildConsoleBridge(token) {
 export function injectPreviewBridge(html, token) {
   const bridge = buildConsoleBridge(token);
   const src = String(html || '');
-  if (/<head[^>]*>/i.test(src)) return src.replace(/<head[^>]*>/i, m => m + bridge);
-  if (/<html[^>]*>/i.test(src)) return src.replace(/<html[^>]*>/i, m => m + '<head>' + bridge + '</head>');
+  if (/<head(?:\s[^>]*)?>/i.test(src)) return src.replace(/<head(?:\s[^>]*)?>/i, m => m + bridge);
+  if (/<html(?:\s[^>]*)?>/i.test(src)) return src.replace(/<html(?:\s[^>]*)?>/i, m => m + '<head>' + bridge + '</head>');
   return '<!doctype html><html><head><meta charset="utf-8">' + bridge + '</head><body>' + src + '</body></html>';
 }
 
@@ -78,10 +79,21 @@ export function createPreviewRegistry(runtime) {
   const sessions = new Map();
 
   function remember(token, record) {
-    sessions.set(token, record);
+    const now = Date.now();
+    for (const [k, v] of [...sessions.entries()]) {
+      if (now - (v.lastAccessAt || v.createdAt || 0) > SESSION_TTL_MS) sessions.delete(k);
+    }
+    sessions.set(token, { ...record, lastAccessAt: now });
     while (sessions.size > MAX_SESSIONS) {
       const oldest = sessions.keys().next().value;
       sessions.delete(oldest);
+    }
+  }
+
+  function revokeTask(taskId) {
+    if (!taskId) return;
+    for (const [k, v] of [...sessions.entries()]) {
+      if (v.taskId === taskId) sessions.delete(k);
     }
   }
 
@@ -99,6 +111,9 @@ export function createPreviewRegistry(runtime) {
           || '';
       }
       if (!chosen) throw Object.assign(new Error('No HTML or SVG file found in this workspace to preview.'), { status: 400, code: 'NO_PREVIEW_ENTRY' });
+      if (!/\.(?:html?|svg)$/i.test(chosen) || chosen.split('/').some(seg => seg.startsWith('.'))) {
+        throw Object.assign(new Error('Workspace preview entry must be a non-hidden HTML or SVG file.'), { status: 400, code: 'INVALID_PREVIEW_ENTRY' });
+      }
       await scopedPath(task.workspace, chosen);
       remember(token, { kind: 'workspace', taskId: task.id, workspace: task.workspace, entry: chosen, createdAt: Date.now() });
       const encodedPath = chosen.split('/').map(encodeURIComponent).join('/');
@@ -144,11 +159,17 @@ export function createPreviewRegistry(runtime) {
 
   async function serve(token, rawRelPath, res, host = null) {
     const record = sessions.get(token);
-    if (!record) {
+    const now = Date.now();
+    if (!record || now - (record.lastAccessAt || record.createdAt || 0) > SESSION_TTL_MS) {
+      if (record) sessions.delete(token);
       res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
       res.end('Preview session expired or not found.');
       return;
     }
+    // LRU touch so actively viewed previews are never evicted by snippet previews.
+    sessions.delete(token);
+    record.lastAccessAt = now;
+    sessions.set(token, record);
     const commonHeaders = {
       'content-security-policy': buildPreviewCsp(token, host),
       'x-frame-options': 'SAMEORIGIN',
@@ -173,7 +194,8 @@ export function createPreviewRegistry(runtime) {
         res.end('Malformed preview path.');
         return;
       }
-      if (!relPath || relPath.endsWith('/')) relPath = (relPath || '') + record.entry;
+      if (!relPath) relPath = record.entry;
+      else if (relPath.endsWith('/')) relPath = relPath + 'index.html';
       const content = record.files.get(relPath) ?? record.files.get(relPath.replace(/^\.\//, ''));
       if (content === undefined) {
         res.writeHead(404, { ...commonHeaders, 'content-type': 'text/plain; charset=utf-8' });
@@ -196,6 +218,15 @@ export function createPreviewRegistry(runtime) {
       res.end(content);
       return;
     }
+    // Workspace preview: verify backing task still exists (revokes automatically on purgeTask/Burn Bag).
+    try {
+      runtime.getTask(record.taskId);
+    } catch {
+      sessions.delete(token);
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+      res.end('Preview session expired or task removed.');
+      return;
+    }
     let relPath;
     try {
       relPath = rawRelPath ? rawRelPath.split('/').map(decodeURIComponent).join('/') : record.entry;
@@ -205,12 +236,22 @@ export function createPreviewRegistry(runtime) {
       return;
     }
     if (!relPath || relPath.endsWith('/')) relPath = (relPath || '') + 'index.html';
+    const ext = path.extname(relPath).toLowerCase();
+    if (relPath.split('/').some(seg => seg.startsWith('.')) || !Object.hasOwn(MIME_TYPES, ext)) {
+      res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+      res.end('File type or hidden path is not permitted in workspace preview.');
+      return;
+    }
     let target;
     try {
-      const resolved = await scopedPath(record.workspace, relPath, { withStat: true });
-      target = resolved.target;
-      const bytes = await readBoundedFile(target, MAX_PREVIEW_FILE_BYTES, 'PREVIEW_SIZE', { expectedIdentity: resolved.stat });
-      const ext = path.extname(relPath).toLowerCase();
+      const readFileSafe = async () => {
+        const resolved = await scopedPath(record.workspace, relPath, { withStat: true });
+        target = resolved.target;
+        return readBoundedFile(target, MAX_PREVIEW_FILE_BYTES, 'PREVIEW_SIZE', { expectedIdentity: resolved.stat });
+      };
+      const bytes = typeof runtime.broker?.serialize === 'function'
+        ? await runtime.broker.serialize(record.taskId, readFileSafe)
+        : await readFileSafe();
       if (ext === '.html' || ext === '.htm') {
         const injected = injectPreviewBridge(bytes.toString('utf8'), token);
         res.writeHead(200, { ...commonHeaders, 'content-type': 'text/html; charset=utf-8' });
@@ -223,7 +264,7 @@ export function createPreviewRegistry(runtime) {
         res.end(injected);
         return;
       }
-      const mime = MIME_TYPES[ext] || 'application/octet-stream';
+      const mime = MIME_TYPES[ext];
       res.writeHead(200, { ...commonHeaders, 'content-type': mime });
       res.end(bytes);
     } catch (err) {
@@ -233,5 +274,5 @@ export function createPreviewRegistry(runtime) {
     }
   }
 
-  return { createSession, serve };
+  return { createSession, serve, revokeTask };
 }

@@ -2583,7 +2583,15 @@ export class AntigravityCliProvider extends CodexProvider {
               result = await invokeViaAcp(false, remainingMs);
             }
           } else {
-            result = await invokeViaAcp(false);
+            try {
+              result = await invokeViaAcp(false);
+            } catch (err) {
+              if (canManageSession) {
+                this.sessions.delete(taskId);
+                await this.acpPool.drop(`task:${taskId}`).catch(() => {});
+              }
+              throw err;
+            }
           }
         } catch (acpErr) {
           if (acpErr?.code === 'cancelled' || acpErr?.code === 'PROVIDER_CLOSED' || acpErr?.code === 'ETIMEDOUT' || acpErr?.code === 'quota_exhausted' || acpErr?.code === 'rate_limit' || signal?.aborted || this.closed) {
@@ -2853,7 +2861,6 @@ export class AcpHarnessProvider {
         effort: task.effort || this.cliSettings?.reasoningEffort || null,
         objective: task.objective || '',
         constraints: task.constraints || [],
-        contractVersion: task.contractVersion || 1,
       })).digest('hex');
 
       let entry = isEphemeral ? null : this.acpPool.get(effectiveKey);
@@ -2878,11 +2885,13 @@ export class AcpHarnessProvider {
           const mode = (!this.delegated || planMode)
             ? 'plan'
             : (execution?.enabled && hasExplicitWildcardAllow ? 'auto' : 'default');
+          const modelHasEffortSuffix = /-(?:low|medium|high|xhigh)$/i.test(String(this.model || ''));
+          const explicitEffort = this.cliSettings?.reasoningEffort || (task.effort && (!modelHasEffortSuffix || task.effort !== 'medium') ? task.effort : null);
           const sess = await client.createSession({
             cwd: effectiveCwd,
             model: this.model,
             mode,
-            effort: task.effort || this.cliSettings?.reasoningEffort,
+            effort: explicitEffort,
             signal,
           });
           if (this.closed || signal?.aborted) {
@@ -2911,14 +2920,98 @@ export class AcpHarnessProvider {
 
       const followups = Array.isArray(task.followups) ? task.followups : [];
       const newFollowups = followups.slice(entry.followupsCount || 0).map(f => String(f?.message || '')).filter(Boolean);
+      const failingChecks = Array.isArray(task.verification?.checks)
+        ? task.verification.checks.filter(c => c && c.status !== 'pass')
+        : [];
+      const verificationFeedback = failingChecks.length
+        ? [
+            'Verification failed on the previous attempt. Fix the root cause of every failing check below and re-run tests:',
+            ...failingChecks.slice(0, 6).map(c => {
+              const out = String(c.stderr || c.stdout || c.detail || '').trim().slice(0, 800);
+              return `- ${c.name || 'Check'} (${c.status}): ${out}`;
+            }),
+          ].join('\n')
+        : '';
+
+      // Pre-index workspace files on Turn 1 (bounded 36 KiB, prioritized by objective relevance).
+      // On large monorepos (>20 files), inline ONLY objective-referenced files and top-level manifests/docs
+      // so we never waste context tokens on unrelated alphabetical decoy modules.
+      let workspacePreload = '';
+      if (entry.turnCount === 0 && this.delegated && workspace && Array.isArray(context.files) && context.files.length > 0) {
+        const objectiveCorpus = [
+          String(task.objective || ''),
+          ...followups.map(f => String(f?.message || '')),
+        ].join('\n').toLowerCase();
+        const isObjectiveReferenced = (p = '') => {
+          const low = p.toLowerCase();
+          if (!low) return false;
+          if (objectiveCorpus.includes(low)) return true;
+          const base = path.posix.basename(low);
+          return base.length >= 6 && !/^(?:index|main|init|utils|types|config)\.[a-z]+$/.test(base) && objectiveCorpus.includes(base);
+        };
+        const isRootManifestOrDoc = (p = '') => /^(?:agents\.md|claude\.md|readme\.md|incident_report\.md|package\.json|pyproject\.toml|cargo\.toml|go\.mod|tsconfig\.json)$/i.test(p);
+        const isLargeRepo = context.files.length > 20;
+        const sortedFiles = [...context.files].sort((a, b) => {
+          const score = (p = '') => {
+            if (isObjectiveReferenced(p)) return 0;
+            if (isRootManifestOrDoc(p)) return 1;
+            const low = p.toLowerCase();
+            if (/^(?:src|app|lib|bin|pkg|internal|cmd|packages)\//.test(low)) return 2;
+            if (/^(?:test|tests|spec|__tests__)\//.test(low)) return 3;
+            return 4;
+          };
+          return score(a?.path) - score(b?.path) || String(a?.path || '').localeCompare(String(b?.path || ''));
+        });
+        const fileList = sortedFiles
+          .slice(0, 120)
+          .map(f => typeof f?.content === 'string' ? `${f.path} (${f.content.split('\n').length}L)` : f.path)
+          .join(', ');
+        const inlineBlocks = [];
+        let budget = 36 * 1024;
+        for (const f of sortedFiles) {
+          if (budget <= 512) break;
+          if (typeof f?.content !== 'string' || !f.path) continue;
+          if (/(?:^|\/)(?:package-lock\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|poetry\.lock)$/.test(f.path)) continue;
+          if (isLargeRepo && !isObjectiveReferenced(f.path) && !isRootManifestOrDoc(f.path)) continue;
+          if (f.content.length > 12 * 1024 || f.content.length > budget) continue;
+          inlineBlocks.push(`--- ${f.path} ---\n${f.content}`);
+          budget -= f.content.length;
+        }
+        const checkCmds = Array.isArray(task.checks) && task.checks.length
+          ? task.checks.map(c => c.command).filter(Boolean).join('; ')
+          : '';
+        const execProtocol = [
+          'Engineering Execution Protocol:',
+          '- Workspace files already inlined below are current — do not waste turns calling ls or read_file on unchanged inlined files.',
+          '- Contract & Edge-Case Audit first: before editing, map every public export, signature, HTTP/CLI contract, error code, immutability rule, encoding/escaping boundary, and concurrency/cleanup invariant required by the spec and existing callers.',
+          '- Batch coupled file edits cleanly; keep diffs minimal and preserve existing public interfaces and zero-dependency constraints unless told otherwise.',
+          '- Verify in one focused pass: run the workspace test command plus a concise inline check covering boundary/error paths (malformed input, edge values, special characters, concurrency/error handling) without leaving behind unrequested temporary files.',
+          '- As soon as verification passes cleanly, stop immediately with a concise summary of changes and verified results (no redundant re-runs).',
+        ].join('\n');
+        workspacePreload = [
+          `Workspace map (${sortedFiles.length} files): ${fileList}`,
+          checkCmds ? `Controller verification command(s): ${checkCmds}` : '',
+          execProtocol,
+          inlineBlocks.length
+            ? `Preloaded workspace files:\n${inlineBlocks.join('\n\n')}`
+            : '',
+        ].filter(Boolean).join('\n\n');
+      }
+
+      const rawObjective = String(task.objective || '');
+      const hasConstraintsInObjective = /\bConstraints:\n/i.test(rawObjective);
       const promptText = entry.turnCount === 0
         ? [
-            task.objective || '',
-            task.constraints?.length ? `Constraints:\n- ${task.constraints.join('\n- ')}` : '',
+            rawObjective,
+            !hasConstraintsInObjective && task.constraints?.length ? `Constraints:\n- ${task.constraints.join('\n- ')}` : '',
+            workspacePreload,
+            ...(followups.length ? ['Follow-up instructions:', ...followups.map((f, i) => `${i + 1}. ${String(f?.message || '').trim()}`).filter(Boolean)] : []),
+            verificationFeedback,
             task.overseerGuidance ? `Overseer Guidance: ${task.overseerGuidance}` : '',
           ].filter(Boolean).join('\n\n')
         : [
-            newFollowups.length ? newFollowups.join('\n\n') : 'Continue and complete the objective.',
+            newFollowups.length ? newFollowups.join('\n\n') : (verificationFeedback || 'Continue and complete the objective.'),
+            newFollowups.length && verificationFeedback ? verificationFeedback : '',
             task.overseerGuidance ? `Overseer Guidance: ${task.overseerGuidance}` : '',
           ].filter(Boolean).join('\n\n');
 

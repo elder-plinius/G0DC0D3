@@ -81,9 +81,12 @@ function renderDocumentPreview(pane, name, source) {
     const frame = document.createElement('iframe');
     frame.sandbox = '';
     frame.title = 'Preview of ' + name;
-    frame.srcdoc =
-      '<meta http-equiv="Content-Security-Policy" content="default-src &apos;none&apos;; style-src &apos;unsafe-inline&apos;; img-src data:">' +
-      text;
+    const cspMeta = '<meta http-equiv="Content-Security-Policy" content="default-src &apos;none&apos;; style-src &apos;unsafe-inline&apos;; img-src data:">';
+    frame.srcdoc = /<head\b[^>]*>/i.test(text)
+      ? text.replace(/<head\b[^>]*>/i, match => match + cspMeta)
+      : /^\s*<!doctype\b[^>]*>/i.test(text)
+        ? text.replace(/^\s*<!doctype\b[^>]*>/i, match => match + cspMeta)
+        : cspMeta + text;
     pane.replaceChildren(frame);
   } else {
     const pre = document.createElement('pre');
@@ -107,7 +110,7 @@ function renderDocumentPreview(pane, name, source) {
       : baseName === 'cmakelists.txt' ? 'cmake'
       : baseName.startsWith('.env') ? 'env'
       : extension;
-    const language = (typeof normalizeCodeLanguage === 'function' ? normalizeCodeLanguage(rawLang) : null) || fallbackAliases[rawLang] || rawLang;
+    const language = (typeof normalizeCodeLanguage === 'function' ? normalizeCodeLanguage(rawLang) : null) || (Object.hasOwn(fallbackAliases, rawLang) ? fallbackAliases[rawLang] : null) || rawLang;
     let content = text;
     if (extension === 'json') {
       pre.tabIndex = 0;

@@ -82,7 +82,13 @@ export const PERMISSION_PRESETS = Object.freeze({
   dontAsk: DONT_ASK_PRESET,
 });
 
-const UNSAFE_WILDCARD_BINARIES = new Set(['rm', 'dd', 'mkfs', 'sudo', 'su', 'chmod', 'chown', 'curl', 'wget', 'sh', 'bash', 'zsh', 'eval', 'exec', 'python', 'python3', 'node', 'perl', 'ruby']);
+const UNSAFE_WILDCARD_BINARIES = new Set([
+  'rm', 'dd', 'mkfs', 'sudo', 'su', 'chmod', 'chown', 'curl', 'wget',
+  'sh', 'bash', 'zsh', 'dash', 'ksh', 'fish', 'csh', 'tcsh', 'eval', 'exec',
+  'python', 'python3', 'node', 'deno', 'perl', 'ruby', 'php', 'lua',
+  'find', 'env', 'xargs', 'awk', 'gawk', 'sed', 'tar', 'npx', 'bunx',
+  'osascript', 'open', 'ssh', 'scp', 'rsync', 'nc', 'ncat',
+]);
 const TWO_WORD_PREFIX_BINARIES = new Set(['npm', 'pnpm', 'yarn', 'bun', 'git', 'cargo', 'go', 'docker', 'kubectl', 'make', 'pytest', 'uv', 'pip', 'swift']);
 
 export function derivePatternRule(toolName, args = {}) {
@@ -93,8 +99,12 @@ export function derivePatternRule(toolName, args = {}) {
     if (!parts.length) return null;
     const bin = parts[0].split('/').pop().toLowerCase();
     if (!/^[a-z0-9._-]+$/i.test(bin) || UNSAFE_WILDCARD_BINARIES.has(bin)) return null;
-    const sub = parts[1] && TWO_WORD_PREFIX_BINARIES.has(bin) && /^[a-z0-9:._-]+$/i.test(parts[1]) && !parts[1].startsWith('-') ? parts[1] : null;
-    const prefix = sub ? `${parts[0]} ${sub}` : parts[0];
+    let prefix = parts[0];
+    if (TWO_WORD_PREFIX_BINARIES.has(bin)) {
+      const sub = parts[1] && /^[a-z0-9:._-]+$/i.test(parts[1]) && !parts[1].startsWith('-') ? parts[1] : null;
+      if (!sub) return null; // Never derive broad `git*` or `docker*` from flag-only commands like `git --version`
+      prefix = `${parts[0]} ${sub}`;
+    }
     if (prefix.length > 80) return null;
     return { tool: 'process.run', pattern: `${prefix}*`, label: `${prefix} *` };
   }
@@ -195,8 +205,8 @@ export function toolTarget(toolName, args = {}) {
   if (toolName === 'web.search') return String(args.query || '');
   if (toolName === 'browser.open') return String(args.url || '');
   if (toolName === 'browser.act') return `${args.action || ''}${args.ref ? ` ${args.ref}` : args.selector ? ` ${args.selector}` : ''}`.trim();
-  if (toolName === 'browser.eval') return String(args.expression || '').slice(0, 120);
-  if (toolName === 'agent.spawn') return `${args.role || 'explore'}: ${String(args.prompt || '').slice(0, 120)}`;
+  if (toolName === 'browser.eval') return String(args.expression || '');
+  if (toolName === 'agent.spawn') return `${args.role || 'explore'}: ${String(args.prompt || '')}`;
   if (toolName === 'memory.save') return String(args.title || '');
   if (toolName === 'memory.delete') return String(args.id || '');
   if (toolName === 'memory.search' || toolName === 'task.history') return String(args.query || '');
@@ -217,12 +227,70 @@ export function globMatch(pattern, value) {
   return p === pattern.length;
 }
 
+function normalizeShellForDeny(command) {
+  return String(command || '')
+    .replace(/\\\r?\n/g, '')
+    .replace(/\\(.)/g, '$1')
+    .replace(/['"]/g, '')
+    .replace(/[ \t]+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function matchSemanticHardDeny(command) {
+  const norm = normalizeShellForDeny(command);
+  if (!norm) return null;
+  const segments = norm.split(/(?:&&|\|\||[;\n|])+/).map(s => s.trim()).filter(Boolean);
+  for (const seg of segments) {
+    const tokens = seg.split(' ').filter(Boolean);
+    if (!tokens.length) continue;
+    const cmd = tokens[0].split('/').pop();
+    if (cmd === 'sudo') return 'Block privilege escalation via sudo';
+    if (cmd.startsWith('mkfs')) return 'Block filesystem formatting commands';
+    if (cmd === 'dd' && tokens.some(t => t.startsWith('of=/dev/'))) return 'Block raw block-device writes';
+    if (cmd === 'rm') {
+      let hasR = false, hasF = false;
+      const targets = [];
+      for (const tok of tokens.slice(1)) {
+        if (tok === '--') continue;
+        if (tok === '--recursive') hasR = true;
+        else if (tok === '--force') hasF = true;
+        else if (tok.startsWith('-') && !tok.startsWith('--')) {
+          if (tok.includes('r') || tok.includes('R')) hasR = true;
+          if (tok.includes('f')) hasF = true;
+        } else {
+          targets.push(tok);
+        }
+      }
+      if (hasR && hasF && targets.some(t => t === '/' || t === '/*' || t === '~' || t.startsWith('~/') || t === '$home' || t.startsWith('$home/') || t === '${home}' || t.startsWith('${home}/'))) {
+        return 'Block destructive root/home deletion';
+      }
+    }
+    if (cmd === 'git') {
+      const pushIdx = tokens.indexOf('push');
+      if (pushIdx > 0) {
+        const pushArgs = tokens.slice(pushIdx + 1);
+        if (pushArgs.some(a => a === '-f' || a === '--force' || a.startsWith('--force-') || a.startsWith('+'))) {
+          return 'Block force push';
+        }
+      }
+    }
+  }
+  // Detect piped or evaluated remote script execution (curl/wget -> sh/bash/zsh/dash/ksh/python/node/eval)
+  if (/\b(?:curl|wget)\b[^;\n]*\|\s*(?:\/[^\s]*\/)?(?:sh|bash|zsh|dash|ksh|python3?|node|perl|ruby|eval)\b/.test(norm)
+    || /\b(?:sh|bash|zsh|dash|ksh|eval|source|\.)\b[^;\n]*(?:<\(|\$\()[^)]*\b(?:curl|wget)\b/.test(norm)) {
+    return 'Block piped remote shell execution';
+  }
+  return null;
+}
+
 /** Last-match-wins evaluation of permission rules. Defaults to { action: 'allow', rule: null }. */
 export function evaluatePermission(rules, toolName, args = {}) {
   const target = toolTarget(toolName, args);
   if (!Array.isArray(rules) || !rules.length) {
     return { action: 'allow', rule: null, target, reason: null };
   }
+  const hasHardShellDeny = toolName === 'process.run' && rules.some(r => r?.action === 'deny' && globMatch(r.tool, 'process.run') && typeof r.pattern === 'string' && r.pattern.includes('rm -rf'));
   let matched = null;
   for (const rule of rules) {
     if (!rule || typeof rule.tool !== 'string' || !VALID_ACTIONS.has(rule.action)) continue;
@@ -234,13 +302,23 @@ export function evaluatePermission(rules, toolName, args = {}) {
       const caseInsensitive = toolName === 'process.run' && rule.action === 'deny';
       const matches = targets.map(value => {
         if (isWildcardShellAllow && /[;&|`$<>()\r\n]/.test(value)) return false;
+        if (isWildcardShellAllow && rule.pattern.endsWith('*') && !rule.pattern.endsWith(' *')) {
+          const base = rule.pattern.slice(0, -1);
+          if (value !== base && !value.startsWith(base + ' ')) return false;
+        }
         return caseInsensitive
-          ? globMatch(rule.pattern.toLowerCase(), value.toLowerCase())
+          ? (globMatch(rule.pattern.toLowerCase(), value.toLowerCase()) || globMatch(rule.pattern.toLowerCase(), normalizeShellForDeny(value)))
           : globMatch(rule.pattern, value);
       });
       if (!(rule.action === 'allow' ? matches.every(Boolean) : matches.some(Boolean))) continue;
     }
     matched = rule;
+  }
+  if (hasHardShellDeny && matched?.action !== 'deny') {
+    const semanticReason = matchSemanticHardDeny(target);
+    if (semanticReason) {
+      return { action: 'deny', rule: { tool: 'process.run', action: 'deny', reason: semanticReason }, target, reason: semanticReason };
+    }
   }
   if (!matched) return { action: 'allow', rule: null, target, reason: null };
   return {
@@ -259,16 +337,17 @@ export function evaluatePermission(rules, toolName, args = {}) {
 export function insertTaskAllowRule(existingRules, allowRule) {
   const next = Array.isArray(existingRules) ? [...existingRules] : [];
   while (next.length >= MAX_RULES) {
-    const evictIdx = next.findIndex(r => r?.action === 'allow' && (r.pattern !== undefined || r.argsHash !== undefined));
+    let evictIdx = next.findIndex(r => r?.action === 'allow' && (r.pattern !== undefined || r.argsHash !== undefined));
+    if (evictIdx < 0) evictIdx = next.findIndex(r => r?.action === 'allow');
     if (evictIdx >= 0) next.splice(evictIdx, 1);
-    else next.shift();
+    else throw error('INVALID_PERMISSION_RULE', `Cannot add permission rule: all ${MAX_RULES} rule slots are occupied by non-evictable rules.`);
   }
   // Place allowRule AFTER custom ask/auto rules (so user approvals always take effect)
-  // while keeping matching deny rules (e.g. HARD_DENY_SHELL_RULES) trailing so safety denies still win.
+  // while keeping overlapping deny rules (e.g. HARD_DENY_SHELL_RULES) trailing so safety denies still win.
   const kept = [];
   const trailingMatchingDenies = [];
   for (const r of next) {
-    if (r?.action === 'deny' && globMatch(r.tool, allowRule.tool)) {
+    if (r?.action === 'deny' && (globMatch(r.tool, allowRule.tool) || globMatch(allowRule.tool, r.tool))) {
       trailingMatchingDenies.push(r);
     } else {
       kept.push(r);

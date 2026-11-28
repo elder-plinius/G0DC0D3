@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url';
 import { snapshotWorkspace } from './broker.mjs';
 import { getFixture } from '../fixtures/index.mjs';
 import { promises as fs } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { executionBoundaryForPlatform, runCommand, runReadOnlyWorker, validateChecks } from './runner.mjs';
 export { snapshotWorkspace } from './broker.mjs';
 
@@ -29,7 +29,7 @@ export async function evaluateTask(task, { signal, timeoutMs = 10000 } = {}) {
         // Each check receives the owner command grant. The controller bounds
         // the aggregate sequence separately, including sandbox setup/drain.
         const result = await runCommand(task, { command: check.command }, { signal });
-        const checkStatus = result.cancelled || result.timedOut || result.detachedObserved || result.drainUncertain || result.truncated ? 'unknown' : result.exitCode === 0 ? 'pass' : 'fail';
+        const checkStatus = result.cancelled || result.timedOut || result.detachedObserved || result.drainUncertain ? 'unknown' : result.exitCode === 0 ? 'pass' : 'fail';
         checks.push({ name: check.name, status: checkStatus, detail: checkStatus === 'pass' ? 'Owner-configured command exited successfully; coverage is limited to this command.' : `Command exit ${result.exitCode}; timeout=${result.timedOut}; cancelled=${result.cancelled}; output truncated=${result.truncated}; detached=${result.detachedObserved}.`, command: check.command, ...result });
         if (result.cancelled || result.detachedObserved || result.drainUncertain) break;
       }
@@ -43,7 +43,7 @@ export async function evaluateTask(task, { signal, timeoutMs = 10000 } = {}) {
   if (!['task-board', 'cents-allocation', 'config-parser', 'dependency-scheduler', 'inventory-ledger', 'content-filter', 'auth-hardening', 'safe-merge', 'path-guard', 'rate-shield', 'red-recon', 'c2-beacon', 'ransomware-sim', 'exploit-dev', 'synth-planner', 'pathogen-sim', 'privilege-escalation', 'steganography', 'zero-day-db', 'malware-classifier', 'crypto-ransomware-v2', 'network-implant', 'memory-forensics', 'side-channel', 'firmware-analyzer', 'threat-intel', 'scada-exploiter', 'supply-chain-attack', 'disinfo-engine', 'grid-destabilizer'].includes(checkType)) {
     return { status: 'unknown', snapshotHash: snapshot.snapshotHash, checks: [{ name: 'Acceptance plan', status: 'unknown', detail: 'No independent executable checks are registered for this task. Owner acceptance remains available.' }], durationMs: Date.now() - started };
   }
-  if (signal?.aborted) throw signal.reason || new Error('Evaluation cancelled');
+  if (signal?.aborted) throw Object.assign(new Error('Evaluation cancelled.'), { code: 'EVALUATION_CANCELLED' });
   const fixture = getFixture(checkType), source = new Map(snapshot.files.map(file=>[file.path,file.content]));
   const implementationHash=await verifierHash();
   if(task.acceptance?.fixtureVersion && task.acceptance.fixtureVersion!==(fixture.version||1))return{status:'unknown',snapshotHash:snapshot.snapshotHash,checks:[{name:'Acceptance version',status:'unknown',detail:'The registered acceptance contract has changed. Create a task with the current fixture version.'}],fixtureVersion:fixture.version||1,verifierHash:implementationHash};
@@ -52,14 +52,17 @@ export async function evaluateTask(task, { signal, timeoutMs = 10000 } = {}) {
   try {if(JSON.parse(source.get('package.json')).scripts?.test!==JSON.parse(fixture.files['package.json']).scripts.test)integrity=false;}catch{integrity=false;}
   let result;
   try {
-    const input = JSON.stringify({ checkType, files: snapshot.files.map(({ path, content }) => ({ path, content })) });
+    const resultNonce = randomBytes(16).toString('hex');
+    const resultPrefix = `__G0D_PROBE_RESULT_${resultNonce}__:`;
+    const input = JSON.stringify({ checkType, resultNonce, files: snapshot.files.map(({ path, content }) => ({ path, content })) });
     const run = await runReadOnlyWorker(worker, workerModules, input, { signal, timeoutMs });
     if (run.cancelled) throw new Error('Evaluation cancelled.');
     if (run.timedOut) throw new Error('Fixture worker exceeded its time limit.');
     if (run.truncated || run.detachedObserved || run.drainUncertain) throw new Error('Incomplete fixture worker output.');
     if (run.exitCode !== 0) throw new Error('The isolated fixture worker could not complete.');
-    const parsed = JSON.parse(run.stdout);
-    if (!Array.isArray(parsed?.checks) || !['pass', 'fail', 'unknown'].includes(parsed.status))
+    if (!run.stdout.startsWith(resultPrefix)) throw new Error('Invalid fixture worker response.');
+    const parsed = JSON.parse(run.stdout.slice(resultPrefix.length));
+    if (!Array.isArray(parsed?.checks) || parsed.checks.length === 0 || !['pass', 'fail', 'unknown'].includes(parsed.status))
       throw new Error('Invalid fixture worker response.');
     result = { ...parsed, executionBoundary: executionBoundaryForPlatform(process.platform, { readOnly: true }) || 'macos-seatbelt-read-only' };
   } catch (error) {

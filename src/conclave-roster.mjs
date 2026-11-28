@@ -659,6 +659,10 @@ export async function runExternalHarnessSubagent({
   });
 
   return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve({ ok: false, code: 'HARNESS_CANCELLED', error: 'External harness subagent cancelled.', harnessLabel, durationMs: Date.now() - started });
+      return;
+    }
     let stdout = '';
     let stderr = '';
     let stdoutBytes = 0;
@@ -694,7 +698,6 @@ export async function runExternalHarnessSubagent({
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      if (killTimer) { clearTimeout(killTimer); killTimer = null; }
       if (signal) signal.removeEventListener('abort', onAbort);
       resolve(res);
     };
@@ -734,6 +737,7 @@ export async function runExternalHarnessSubagent({
     });
 
     child.on('error', (err) => {
+      if (killTimer) { clearTimeout(killTimer); killTimer = null; }
       finish({ ok: false, code: 'HARNESS_SPAWN_ERROR', error: err.message || 'Failed to spawn harness CLI.', harnessLabel, durationMs: Date.now() - started });
     });
 

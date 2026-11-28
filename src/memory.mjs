@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { openSync, writeFileSync, fsyncSync, closeSync, renameSync, unlinkSync, chmodSync } from 'node:fs';
 import path from 'node:path';
+import { environmentSecrets, redactOutboundText } from './privacy.mjs';
 
 const error = (code, message) => Object.assign(new Error(message), { code });
 
@@ -139,8 +140,9 @@ export class MemoryStore {
     if (typeof content !== 'string' || !content.trim() || content.trim().length > 4000 || content.includes('\0')) {
       throw error('INVALID_MEMORY', 'Memory content must be 1–4000 characters without NUL bytes.');
     }
-    const cleanTitle = title.trim();
-    const cleanContent = content.trim();
+    const secrets = environmentSecrets();
+    const cleanTitle = redactOutboundText(title.trim(), secrets).text;
+    const cleanContent = redactOutboundText(content.trim(), secrets).text;
     const cleanScope = normalizeMemoryScope(scope);
     const cleanTags = normalizeTags(tags);
     const now = new Date().toISOString();
@@ -293,7 +295,7 @@ export class MemoryStore {
 
   relevantForTask(task, { limit = 6, maxChars = 1800 } = {}) {
     if (!task || task.fixtureId || task.crewMember) return [];
-    const projectScope = task.sourcePath ? `project:${task.sourcePath}` : null;
+    const projectScope = (task.sourcePath || task.workspace) ? `project:${task.sourcePath || task.workspace}` : null;
     const queryParts = [
       task.title || '',
       task.objective || '',

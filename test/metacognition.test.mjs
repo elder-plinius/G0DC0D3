@@ -226,8 +226,7 @@ test('End-to-end Ultra-Plinian Auto-Forge HTTP API, Arena Judge rubric propagati
     const dlgs = JSON.parse((await pool.evaluate('mc-ui', { expression: `[...document.querySelectorAll('dialog[open]')].map(d => d.id)` })).result);
     if (dlgs.length) await pool.act('mc-ui', { action: 'press', key: 'Escape', waitMs: 180 }, { privacy: { localOnly: false } });
     await pool.act('mc-ui', { action: 'click', selector: '#settings-open', waitMs: 300 }, { privacy: { localOnly: false } });
-    await pool.act('mc-ui', { action: 'click', selector: '#settings-tab-models', waitMs: 250 }, { privacy: { localOnly: false } });
-    await pool.act('mc-ui', { action: 'click', selector: '[data-models-subtab="routing"]', waitMs: 250 }, { privacy: { localOnly: false } });
+    await pool.act('mc-ui', { action: 'click', selector: '#settings-tab-autonomy', waitMs: 300 }, { privacy: { localOnly: false } });
     const uiCheck = JSON.parse((await pool.evaluate('mc-ui', {
       expression: `(() => ({
         btnCount: document.querySelectorAll('[data-router-metacog]').length,

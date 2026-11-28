@@ -118,7 +118,7 @@ const CODE_LANG_ALIASES = Object.freeze({
 function normalizeCodeLanguage(language) {
   const raw = String(language || '').trim().toLowerCase();
   if (!raw) return '';
-  return CODE_LANG_ALIASES[raw] || raw;
+  return Object.hasOwn(CODE_LANG_ALIASES, raw) ? CODE_LANG_ALIASES[raw] : raw;
 }
 
 function highlightCode(code, language) {
@@ -362,7 +362,7 @@ function formatMessageBody(text, markdown = false) {
     const content = part.slice(match[0].length).replace(/```$/, '');
     const fileWrite = tryFileWrite(content, language);
     if (fileWrite) return renderFileCard(fileWrite);
-    const highlighted = language ? highlightCode(content, language) : (typeof hljs !== 'undefined' ? hljs.highlightAuto(content).value : messageEscape(content));
+    const highlighted = highlightCode(content, language);
     const lineCount = content ? content.replace(/\n$/, '').split('\n').length : 0;
     const isCollapsible = lineCount >= 2;
     const startCollapsed = lineCount > 120;

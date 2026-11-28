@@ -6,7 +6,7 @@
 
   const SOUND_PACKS = Object.freeze([
     { id: 'glass', label: 'Crystal Glass', hint: 'Clean harmonic chime' },
-    { id: 'synth', label: 'Plinian Synth', hint: 'Warm polyphonic chord' },
+    { id: 'synth', label: 'Warm Synth', hint: 'Warm polyphonic chord' },
     { id: 'minimal', label: 'Studio Tap', hint: 'Soft, low-profile pulse' },
     { id: 'retro', label: 'Retro 8-bit', hint: 'Crisp chiptune arpeggio' },
     { id: 'system', label: 'macOS System', hint: 'Native macOS NSSound (falls back in browser)' },
@@ -47,7 +47,7 @@
       urgent: false,
     },
     conclave: {
-      label: 'Conclave squad or Arena finished',
+      label: 'Conclave squad or race finished',
       hint: 'Alert when a multi-agent squad or Diff Race finishes.',
       sampleTitle: 'Conclave finished',
       sampleBody: 'All parallel agents finished reporting results.',
@@ -219,16 +219,22 @@
     if (hasNativeBridge()) postNative({ action: 'permissionStatus' });
   }
 
+  let nativeRequestPending = false;
+
   async function requestNotificationPermission({ enableOnGrant = false } = {}) {
     if (hasNativeBridge()) {
       if (enableOnGrant) pendingEnableOnGrant = true;
+      nativeRequestPending = true;
       return new Promise(resolve => {
         let settled = false;
+        let timer = null;
         const onEvent = ev => {
           if (settled) return;
           // Ignore background permissionStatus probes while waiting for explicit requestPermission dialog
           if (ev?.detail?.source && ev.detail.source !== 'request') return;
           settled = true;
+          nativeRequestPending = false;
+          if (timer) { clearTimeout(timer); timer = null; }
           window.removeEventListener('godcode-alerts-permission', onEvent);
           const status = ev?.detail?.status || nativePermission || 'default';
           nativePermission = status;
@@ -243,10 +249,13 @@
         };
         window.addEventListener('godcode-alerts-permission', onEvent);
         postNative({ action: 'requestPermission' });
-        setTimeout(() => {
+        timer = setTimeout(() => {
           if (settled) return;
           settled = true;
+          nativeRequestPending = false;
+          pendingEnableOnGrant = false;
           window.removeEventListener('godcode-alerts-permission', onEvent);
+          emitChange();
           resolve(nativePermission || 'default');
         }, 30000);
       });
@@ -341,6 +350,7 @@
   if (typeof window !== 'undefined') {
     attachUnlockListeners();
     window.addEventListener('godcode-alerts-permission', ev => {
+      if (nativeRequestPending && (!ev?.detail?.source || ev.detail.source === 'request')) return;
       const status = ev?.detail?.status;
       if (typeof status === 'string') {
         nativePermission = status;

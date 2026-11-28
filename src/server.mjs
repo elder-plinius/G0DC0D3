@@ -1,15 +1,17 @@
 import { createVeniceCatalog, isCatalogModel, veniceEndpoint } from './venice-catalog.mjs';
 import { APP_VERSION } from './version.mjs';
+import { checkForUpdates } from './updates.mjs';
 import { VISUALIZER_CSP } from './visualizer.mjs';
 import { parameterLimits, intersectParameterLimits } from './conversation-controls.mjs';
 import http from 'node:http';
 import { createPromptCommands, revisePromptCommand } from './prompt-commands.mjs';
 import { WorktreeProjects } from './worktree-projects.mjs';
-import { promises as fs } from 'node:fs';
+import { promises as fs, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Runtime } from './runtime.mjs';
 import { CRON_PRESETS } from './cron.mjs';
+import { NorthStarManager, NORTHSTAR_TEMPLATES } from './northstar.mjs';
 import { evaluateTask } from './evaluator.mjs';
 import { environmentProviders, HttpProvider } from './providers.mjs';
 import { createProviderSettings, linuxSecretToolKeychain, nativeKeychain } from './provider-settings.mjs';
@@ -47,8 +49,8 @@ export const capabilities = [
   'Brokered file, search, patch, browser, memory, and sandboxed command tools',
   'ACP v1 persistent multi-harness coordination with live token & thinking streaming',
   'Conclave 2.0 multi-round councils, Brain 2.0 auto-memory/skills, and Live Browser 2.0 takeover + Auto-QA',
-  'Live Sidecar Visualizer (✦ Visualize) in a strict CSP-sandboxed dock with real-time SSE telemetry',
-  'AutoTune passive Empirical-Bayes hyperparameter optimization per model × domain × effort',
+  'Live Sidecar Visualizer (◈ Visualize) in a strict CSP-sandboxed dock with real-time SSE telemetry',
+  'HyperTuner passive Empirical-Bayes hyperparameter optimization per model × domain × effort',
   'Scoped macOS Seatbelt and Linux bubblewrap (bwrap) sandboxing + Hardened/Lockdown zero-telemetry privacy'
 ];
 export const limitations = [
@@ -56,7 +58,7 @@ export const limitations = [
   'Command execution requires macOS Seatbelt or Linux bubblewrap (bwrap) and an explicit owner grant.',
   'Scripted tests validate controller behavior, not universal model performance.',
   'Owner-configured checks establish only their recorded coverage; test success does not prove every requirement.',
-  'Provider capabilities and sampling parameter locks vary by model; AutoTune automatically skips locked parameters.',
+  'Provider capabilities and sampling parameter locks vary by model; HyperTuner automatically skips locked parameters.',
   'Local raw task history may contain source or secrets; diagnostic export redaction is best-effort.'
 ];
 
@@ -71,8 +73,8 @@ function publicTask(task,runtime) {
   return {...rest,pendingApproval:rest.pendingApproval||null,permissionRules:rest.permissionRules??null,todos:Array.isArray(rest.todos)?rest.todos:[],outcome:outcomeFor(task,runtime),crewBusy:Boolean(runtime?.crew.busy(task.id)),sourceBusy:Boolean(runtime?.sourceChanges.busy(task.id)),draining:!['running','recovering','verifying'].includes(task.status)&&Boolean(runtime?.runs.has(task.id)||runtime?.broker.locks.has(task.id))};
 }
 function taskSummary(task,runtime) {
-  const {id,title,objective,status,providerId,providers,calls,recoveries,createdAt,updatedAt,completionKind,fixtureId,sourcePath,workspaceKind,planMode,parentTaskId,version,eventSeq}=task;
-  return {id,title,objective,status,providerId,providers,calls,recoveries,createdAt,updatedAt,completionKind,fixtureId,sourcePath,workspaceKind,planMode:Boolean(planMode),parentTaskId:parentTaskId||null,version:Number(version)||0,eventSeq:Number(eventSeq)||0,pendingApproval:Boolean(task.pendingApproval),pendingApprovalTool:task.pendingApproval?.tool||null,pendingApprovalId:task.pendingApproval?.id||null,todoCount:Array.isArray(task.todos)?task.todos.length:0,outcome:outcomeFor(task,runtime)};
+  const {id,title,objective,status,providerId,providers,pendingProviders,calls,recoveries,createdAt,updatedAt,completionKind,fixtureId,sourcePath,workspaceKind,planMode,parentTaskId,version,eventSeq}=task;
+  return {id,title,objective,status,providerId,providers,pendingProviders:Array.isArray(pendingProviders)&&pendingProviders.length?pendingProviders:null,calls,recoveries,createdAt,updatedAt,completionKind,fixtureId,sourcePath,workspaceKind,planMode:Boolean(planMode),parentTaskId:parentTaskId||null,version:Number(version)||0,eventSeq:Number(eventSeq)||0,pendingApproval:Boolean(task.pendingApproval),pendingApprovalTool:task.pendingApproval?.tool||null,pendingApprovalId:task.pendingApproval?.id||null,todoCount:Array.isArray(task.todos)?task.todos.length:0,outcome:outcomeFor(task,runtime)};
 }
 const DISPLAY_TEXT_KEYS = new Set(['text', 'message', 'thinking']);
 function displayValue(value, depth = 0, key = '') {
@@ -124,6 +126,9 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
   const worktrees = new WorktreeProjects(runtime.store, { get: id => providers.get(id) ?? catalog.get(id) },
     { outboundOptions: () => runtime.outboundOptions() });
   runtime.worktrees = worktrees;
+  const northStar = new NorthStarManager({ dataDir, runtime });
+  await northStar.init();
+  runtime.northStar = northStar;
   const previews = createPreviewRegistry(runtime);
   async function loadSelected(ids) {
     if (Array.isArray(ids) && ids.some(id => isCatalogModel(id) || providers.get(id)?.baseUrl === veniceEndpoint)) await catalog.list();
@@ -279,6 +284,31 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
       if (rosterDelMatch) return send(res, 200, await runtime.deleteConclaveAgent(decodeURIComponent(rosterDelMatch[1])));
       if(req.method==='GET' && url.pathname==='/api/conclave/formations')return send(res,200,{formations:runtime.getConclaveFormations()});
       if(req.method==='POST' && url.pathname==='/api/conclave/formations')return send(res,201,runtime.saveConclaveFormation(await readBody(req)));
+      if(req.method==='GET' && url.pathname==='/api/conclave/leaderboard')return send(res,200,runtime.getConclaveLeaderboard());
+      if(req.method==='GET' && url.pathname==='/api/northstar')return send(res,200,{runs:northStar.listRuns(),summary:northStar.summary(),templates:NORTHSTAR_TEMPLATES});
+      if(req.method==='POST' && url.pathname==='/api/northstar') {
+        const body = await readBody(req);
+        const runObj = await northStar.createRun(body, { autoStart: Boolean(body.autoStart) });
+        return send(res,201,{run:runObj,summary:northStar.summary()});
+      }
+      const nsMatch = url.pathname.match(/^\/api\/northstar\/([a-zA-Z0-9_-]{4,64})(?:\/(start|pause|resume|steer|diff|apply))?$/);
+      if (nsMatch) {
+        const nsId = decodeURIComponent(nsMatch[1]);
+        const nsAction = nsMatch[2] || '';
+        if (req.method === 'GET' && !nsAction) {
+          const runObj = northStar.getRun(nsId);
+          const experiments = await northStar.getExperiments(nsId, 100);
+          const labLog = await northStar.getLabLog(nsId);
+          return send(res, 200, { run: runObj, experiments, labLog });
+        }
+        if (req.method === 'DELETE' && !nsAction) return send(res, 200, await northStar.deleteRun(nsId));
+        if (req.method === 'GET' && nsAction === 'diff') return send(res, 200, await northStar.getChampionDiff(nsId));
+        if (req.method === 'POST' && nsAction === 'start') { await readBody(req); return send(res, 200, { run: northStar.startRun(nsId) }); }
+        if (req.method === 'POST' && nsAction === 'resume') { await readBody(req); return send(res, 200, { run: northStar.resumeRun(nsId) }); }
+        if (req.method === 'POST' && nsAction === 'pause') { const body = await readBody(req); return send(res, 200, { run: await northStar.pauseRun(nsId, body.reason) }); }
+        if (req.method === 'POST' && nsAction === 'steer') { const body = await readBody(req); return send(res, 200, { run: await northStar.steerRun(nsId, body.note) }); }
+        if (req.method === 'POST' && nsAction === 'apply') { await readBody(req); return send(res, 200, await northStar.applyChampionToRepo(nsId)); }
+      }
       const formDelMatch = req.method === 'DELETE' && url.pathname.match(/^\/api\/conclave\/formations\/([^/]+)$/);
       if (formDelMatch) return send(res, 200, runtime.deleteConclaveFormation(decodeURIComponent(formDelMatch[1])));
       if(req.method==='POST' && url.pathname==='/api/conclave/run') {
@@ -286,13 +316,14 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
         let taskId = typeof body.taskId === 'string' && body.taskId.trim() ? body.taskId.trim() : null;
         let recordUserMessage = true;
         if (!taskId) {
+          const cleanMission = String(body.mission || '').trim();
+          if (!cleanMission) throw Object.assign(new Error('Conclave mission prompt is required.'), { code: 'INVALID_CONCLAVE', status: 400 });
           const requestedIds = Array.isArray(body.providerIds) && body.providerIds.length
             ? body.providerIds
             : [...providers.values()].filter(p => p.available !== false && p.kind !== 'scripted').map(p => p.id);
           const fallbackIds = requestedIds.length ? requestedIds : [...providers.values()].filter(p => p.available !== false).map(p => p.id);
           if (!fallbackIds.length) throw Object.assign(new Error('Connect at least one AI provider in Settings → Models before launching a Conclave.'), { code: 'NO_PROVIDER', status: 400 });
           await loadSelected(fallbackIds);
-          const cleanMission = String(body.mission || '').trim();
           const title = (body.formationName ? `${body.formationName}: ` : '✦ Conclave: ') + (cleanMission.slice(0, 56) || 'Multi-Agent Mission');
           const created = await createConversationTask(runtime, dataDir, {
             title,
@@ -435,6 +466,9 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
       }
       const memoryDeleteMatch=url.pathname.match(/^\/api\/memory\/([^/]+)$/);
       if(memoryDeleteMatch && req.method==='DELETE') {
+        if (runtime.getPrivacy().settings.ephemeralSession === true) {
+          return send(res, 403, { error: 'Ephemeral engagement mode is active; persistent memory mutations are paused.', code: 'EPHEMERAL_SESSION' });
+        }
         const result=runtime.memory.deleteMemory(decodeURIComponent(memoryDeleteMatch[1]));
         if(!result.deleted)return send(res,404,{error:'Memory not found',code:'MEMORY_NOT_FOUND'});
         return send(res,200,result);
@@ -451,12 +485,18 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
         return send(res,200,{ok:true,skills});
       }
       if(req.method==='POST' && url.pathname==='/api/skills') {
+        if (runtime.getPrivacy().settings.ephemeralSession === true) {
+          return send(res, 403, { error: 'Ephemeral engagement mode is active; persistent skill saves are paused.', code: 'EPHEMERAL_SESSION' });
+        }
         const body=await readBody(req);
         const skill=await saveUserSkill(dataDir,{name:body.name,description:body.description,body:body.body,mode:body.mode});
         return send(res,201,{ok:true,skill});
       }
       const skillDeleteMatch=url.pathname.match(/^\/api\/skills\/([^/]+)$/);
       if(skillDeleteMatch && req.method==='DELETE') {
+        if (runtime.getPrivacy().settings.ephemeralSession === true) {
+          return send(res, 403, { error: 'Ephemeral engagement mode is active; persistent skill mutations are paused.', code: 'EPHEMERAL_SESSION' });
+        }
         const result=await deleteUserSkill(dataDir,decodeURIComponent(skillDeleteMatch[1]));
         if(!result.deleted)return send(res,404,{error:'Skill not found',code:'SKILL_NOT_FOUND'});
         return send(res,200,result);
@@ -565,6 +605,11 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
         if(selected.some(provider=>!provider))return send(res,400,{error:'A selected model is unavailable. Refresh the model list.'});
         const models=selected.map(parameterLimits);
         return send(res,200,{models,fields:intersectParameterLimits(models),fetchedAt:discovered.fetchedAt,stale:discovered.stale,warning:discovered.warning});
+      }
+      if(req.method==='POST' && url.pathname==='/api/updates/check') {
+        await readBody(req).catch(() => ({}));
+        const result = await checkForUpdates({ currentVersion: APP_VERSION, privacy: runtime.getPrivacy().settings });
+        return send(res, 200, result);
       }
       if(req.method==='GET' && url.pathname==='/api/setup')return send(res,200,{setup:setup.state(),...await cliConnections.status({refresh:url.searchParams.get('refresh')==='1'})});
       if(req.method==='POST' && url.pathname==='/api/setup')return send(res,200,{setup:setup.acknowledge(await readBody(req))});
@@ -980,7 +1025,7 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
           return send(res, 200, runtime.broker.browser.getStatus(taskId));
         }
       }
-      const match=url.pathname.match(/^\/api\/tasks\/([^/]+)(?:\/(run|pause|resume|cancel|accept|report-refusal|overseer-consult|save-skill|visualize|visualizer|visualizer-telemetry|policy|providers|answer-race|message|export|patch|execution|checks|persona|effort|prompt|apply-preview|apply-source|inspect-apply|undo-apply|source-backup|hunk|generation|rewind|plan-mode|compact|checkpoints|permissions|approval|fork|transcript|commit|title))?$/);
+      const match=url.pathname.match(/^\/api\/tasks\/([^/]+)(?:\/(run|pause|resume|cancel|accept|report-refusal|overseer-consult|save-skill|visualize|visualizer|visualizer-telemetry|policy|providers|answer-race|race-crown|message|export|patch|execution|checks|persona|effort|prompt|apply-preview|apply-source|inspect-apply|undo-apply|source-backup|hunk|generation|rewind|plan-mode|compact|checkpoints|permissions|approval|fork|transcript|commit|title))?$/);
       if(match) {
         const [,id,action]=match;
         if(mutation&&runtime.getTask(id).crewMember)throw Object.assign(new Error('Control crew workers through their parent conversation.'),{code:'CREW_MEMBER'});
@@ -1124,8 +1169,10 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
           await readBody(req);
           if (worktrees.attachments.has(id) || worktrees.list().some(project => project.chatId === id))
             throw Object.assign(new Error('Remove this chat’s GodCode worktree before deleting the chat.'), { status: 409 });
+          const result = await runtime.purgeTask(id);
+          previews.revokeTask(id);
           for (const client of [...sseClients]) if (client.taskId === id) client.close();
-          return send(res,200,await runtime.purgeTask(id));
+          return send(res,200,result);
         }
         if(req.method==='PATCH'&&action==='policy')return send(res,200,{task:publicTask(runtime.updatePolicy(id,await readBody(req)),runtime)});
         if(req.method==='POST'&&action==='visualize') {
@@ -1192,6 +1239,11 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
           if (body.answerRace) await catalog.list();
           return send(res,200,{task:publicTask(runtime.setAnswerRace(id,body.answerRace),runtime)});
         }
+        if(req.method==='POST'&&action==='race-crown') {
+          const body=await readBody(req);
+          const result=runtime.crownRaceWinner(id,{winnerId:body.winnerId,raceId:body.raceId||null});
+          return send(res,200,{...result,task:publicTask(runtime.getTask(id),runtime)});
+        }
         if(req.method==='PATCH'&&action==='providers') {
           const body=await readBody(req),task=runtime.getTask(id);
           await loadSelected(body.providerIds);
@@ -1245,6 +1297,7 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
       staticFiles['/themes.css'] = ['themes.css','text/css'];
       staticFiles['/mermaid-lite.js'] = ['mermaid-lite.js','text/javascript'];
       staticFiles['/conclave.js'] = ['conclave.js','text/javascript'];
+      staticFiles['/northstar.js'] = ['northstar.js','text/javascript'];
       staticFiles['/browser-live.js'] = ['browser-live.js','text/javascript'];
       staticFiles['/alerts.js'] = ['alerts.js','text/javascript'];
       staticFiles['/brand-wordmark.ttf'] = ['brand-wordmark.ttf', 'font/ttf'];
@@ -1277,6 +1330,7 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
       server.closeIdleConnections();
       server.closeAllConnections?.();
       closePromise=(async()=>{
+        await northStar.close();
         await worktrees.close();
         const outcomes=await Promise.allSettled([new Promise(resolve=>server.close(()=>resolve())),runtime.close(),benchmarkPromise]);
         await session.close();
@@ -1287,7 +1341,13 @@ export async function createApp({dataDir=process.env.G0D_DATA_DIR || path.join(p
   };
 }
 
-if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)) {
+const isDirectMain = (argv1, metaUrl) => {
+  if (!argv1) return false;
+  const selfPath = fileURLToPath(metaUrl);
+  try { return realpathSync(argv1) === realpathSync(selfPath); }
+  catch { return path.resolve(argv1) === path.resolve(selfPath); }
+};
+if(isDirectMain(process.argv[1], import.meta.url)) {
   const envFile=path.join(path.dirname(fileURLToPath(import.meta.url)),'..', '.env');
   try{const lines=await fs.readFile(envFile,'utf8');for(const raw of lines.split(/\r?\n/)){const m=raw.match(/^\s*([A-Z_][A-Z0-9_]*)=(.*)$/);if(m&&!(m[1] in process.env)){let v=m[2].trim();if((v.startsWith('"')&&v.endsWith('"'))||(v.startsWith("'")&&v.endsWith("'")))v=v.slice(1,-1);process.env[m[1]]=v;}}}catch{}
   const dataDir = path.resolve(process.env.G0D_DATA_DIR || path.join(projectDir, '.g0dc0d3'));

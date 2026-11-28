@@ -5,7 +5,12 @@ import { readBoundedFile, sha256, stableJson } from './broker.mjs';
 import { publishablePath } from './workspaces.mjs';
 
 const fail = (code, message) => Object.assign(new Error(message), { code, status: 409 });
-const overlap = (a, b) => a === b || a.startsWith(b + path.sep) || b.startsWith(a + path.sep);
+const caseInsensitiveFs = process.platform === 'darwin' || process.platform === 'win32';
+const normPath = p => caseInsensitiveFs ? String(p || '').toLowerCase() : String(p || '');
+const overlap = (a, b) => {
+  const na = normPath(a), nb = normPath(b);
+  return na === nb || na.startsWith(nb + path.sep) || nb.startsWith(na + path.sep);
+};
 const hash = content => content === null ? null : sha256(content);
 const identity = stat => ({ dev: stat.dev, ino: stat.ino, birthtimeMs: stat.birthtimeMs });
 const same = (a, b) => stableJson(a) === stableJson(b);
@@ -185,7 +190,16 @@ export class SourceChanges {
     if ((await this.runtime.snapshotTask(id)).snapshotHash !== plan.snapshotHash) throw fail('SOURCE_PREVIEW_STALE', 'The task files changed. Preview again.');
     const files = await this.validateFiles(task, batch);
     this.assertSettled(id, plan);
-    const record = { ...plan, previewPaths, status: 'applying', files: files.map(file => ({ ...file, originalMode: file.observed.mode ?? 0o644 })), startedAt: new Date().toISOString() };
+    const recordFiles = [];
+    for (const file of files) {
+      let defaultMode = 0o644;
+      if (file.observed.mode === null && file.after !== null) {
+        const wsStat = await fs.lstat(path.join(task.workspace, file.path)).catch(() => null);
+        if (wsStat?.isFile() && (wsStat.mode & 0o111)) defaultMode = 0o755;
+      }
+      recordFiles.push({ ...file, originalMode: file.observed.mode ?? defaultMode });
+    }
+    const record = { ...plan, previewPaths, status: 'applying', files: recordFiles, startedAt: new Date().toISOString() };
     delete record.expiresAt;
     this.store.putSourceApplication(record, 'source.apply_started'); // Exact backups committed before any effect.
     this.plans.delete(previewId);

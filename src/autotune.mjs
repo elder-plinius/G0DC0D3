@@ -1,5 +1,5 @@
 /**
- * G0DC0D3 AutoTune — Passive Hierarchical Empirical-Bayes Hyperparameter Layer.
+ * G0DC0D3 HyperTuner — Passive Hierarchical Empirical-Bayes Hyperparameter Layer.
  *
  * Optimizes sampling hyperparameters per (model × task domain × reasoning effort)
  * using 5 curated macro-arms clamped strictly to each provider's live supported
@@ -79,6 +79,8 @@ const REWARD_SIGNAL_WEIGHTS = Object.freeze({
 });
 
 const DECAY = 0.96;
+const PASSIVE_ARM_DECAY = 0.992; // Gentle Discounted Thompson Sampling decay toward neutral uncertainty on drift
+const FAMILY_PASSIVE_DECAY = 0.992;
 const MAX_CELLS = 250;
 
 export function defaultAutoTuneState() {
@@ -198,18 +200,27 @@ function sampleBeta(alpha, beta, rng = Math.random) {
 }
 
 function computePosteriorForArm(state, { modelKey, family, domain, effort, profileId }) {
-  const prior = (DOMAIN_PRIORS[domain] || DOMAIN_PRIORS.general)[profileId] || [2, 2];
+  const rawPrior = (DOMAIN_PRIORS[domain] || DOMAIN_PRIORS.general)[profileId] || [2, 2];
   const famCell = state.familyCells[`${family}::${domain}::${effort}`]?.arms?.[profileId];
-  const exactCell = state.cells[`${modelKey}::${domain}::${effort}`]?.arms?.[profileId];
+  const exactCellObj = state.cells[`${modelKey}::${domain}::${effort}`]?.arms || {};
+  const exactCell = exactCellObj[profileId];
+  const totalExactObs = Object.values(exactCellObj).reduce((sum, x) => sum + (x?.n || 0), 0);
 
-  // Hierarchical Empirical Bayes pooling: family evidence gets 0.45 weight, exact model gets 1.0 weight.
-  const famWeight = 0.45;
-  const alpha = prior[0] + (famCell ? famCell.a * famWeight : 0) + (exactCell ? exactCell.a : 0);
-  const beta = prior[1] + (famCell ? famCell.b * famWeight : 0) + (exactCell ? exactCell.b : 0);
+  // Adaptive Hierarchical Empirical-Bayes shrinkage:
+  // 1) Domain prior dominates cold start (Turn 1-10) and smoothly relaxes toward weak neutral Beta(1,1)
+  //    as direct model observations grow — so anti-prior models & post-drift arms never snap back to a stale prior.
+  // 2) Family transfer starts strong (0.50) and yields cleanly as exact-model observations accumulate.
+  const priorBlend = 1 / (1 + totalExactObs / 14);
+  const priorA = 1.0 + (rawPrior[0] - 1.0) * priorBlend;
+  const priorB = 1.0 + (rawPrior[1] - 1.0) * priorBlend;
+  const famWeight = 0.50 / (1 + totalExactObs / 10);
+  const alpha = priorA + (famCell ? famCell.a * famWeight : 0) + (exactCell ? exactCell.a : 0);
+  const beta = priorB + (famCell ? famCell.b * famWeight : 0) + (exactCell ? exactCell.b : 0);
   const observations = (exactCell?.n || 0);
   const familyObservations = (famCell?.n || 0);
   const mean = alpha / (alpha + beta);
-  const confidence = Math.min(0.99, (observations + familyObservations * 0.45) / ((observations + familyObservations * 0.45) + 6));
+  const effectiveObs = observations + familyObservations * famWeight;
+  const confidence = Math.min(0.99, effectiveObs / (effectiveObs + 6));
   return { profileId, alpha, beta, mean, observations, familyObservations, confidence };
 }
 
@@ -217,7 +228,7 @@ function isSamplingLockedModel(provider, effort = 'medium') {
   const model = String(provider?.model || provider?.id || '').toLowerCase();
   const base = model.includes('/') ? model.split('/').pop() : model;
   if (/^(?:o1|o3|o4)(?:$|-)/.test(base)) return true;
-  if (/^gpt-[56](?:$|[.-])/.test(base) && String(effort || 'medium').toLowerCase() !== 'fast') return true;
+  if (/^gpt-[56](?:$|[.-])/.test(base)) return true;
   const proto = String(provider?.protocol || '').toLowerCase();
   if (proto === 'cli' || proto.startsWith('acp')) return true;
   return false;
@@ -235,7 +246,8 @@ export function clampProfileToProvider(profile, provider, manualGeneration = {},
   const applied = {};
   const skipped = [];
   const samplingLocked = isSamplingLockedModel(provider, effort);
-  const isAnthropic = String(provider?.protocol || '').toLowerCase() === 'anthropic';
+  const modelIdLower = String(provider?.model || provider?.id || '').toLowerCase();
+  const isAnthropic = String(provider?.protocol || '').toLowerCase() === 'anthropic' || /(?:^|\/|:)claude(?:$|-|_|\.)/.test(modelIdLower);
 
   for (const [key, rawVal] of Object.entries(profile?.params || {})) {
     if (manual[key] !== undefined) {
@@ -319,15 +331,16 @@ export function selectAutoTuneParams(stateInput, {
     chosen = posteriors.find(p => p.profileId === pinnedId) || bestArm;
     selectionMode = 'pinned';
   } else if (contextKind === 'retry' && previousProfileId && PROFILE_BY_ID.has(previousProfileId)) {
-    // Free exploration on retry/reframe: step to a distinct adjacent/higher-entropy arm!
+    // Posterior-ranked retry exploration: pick the strongest distinct alternative arm (can step
+    // DOWN to Surgical for strict JSON/code failures OR UP to Exploratory for stuck/creative turns).
     const prevIdx = PROFILE_ORDER.indexOf(previousProfileId);
-    const candidates = [
-      PROFILE_ORDER[Math.min(PROFILE_ORDER.length - 1, prevIdx + 1)],
-      PROFILE_ORDER[Math.max(0, prevIdx - 1)],
-      bestArm.profileId,
-    ].filter((id, i, arr) => id !== previousProfileId && arr.indexOf(id) === i);
-    const pickId = candidates[0] || bestArm.profileId;
-    chosen = posteriors.find(p => p.profileId === pickId) || bestArm;
+    const alternatives = posteriors.filter(p => p.profileId !== previousProfileId);
+    const ranked = alternatives.map(p => {
+      const dist = Math.abs(PROFILE_ORDER.indexOf(p.profileId) - prevIdx);
+      return { p, score: sampleBeta(p.alpha, p.beta, rng) + (dist === 1 ? 0.04 : 0) };
+    });
+    ranked.sort((a, b) => b.score - a.score);
+    chosen = ranked[0]?.p || bestArm;
     selectionMode = 'retry_explore';
   } else if (contextKind === 'arena' || state.mode === 'active') {
     // Full Thompson Sampling in Arena or Active mode
@@ -336,9 +349,19 @@ export function selectAutoTuneParams(stateInput, {
     chosen = drawn[0].p;
     selectionMode = chosen.profileId === bestArm.profileId ? 'exploit' : 'thompson_explore';
   } else {
-    // Passive mode: Safe Conservative Thompson Sampling (<=10% adjacent-only exploration)
+    // Passive mode: Safe Adaptive Conservative Thompson Sampling.
+    // Exploits ~90% when current best arm is healthy, with 3% global draw (valley-crossing) + 7% adjacent;
+    // when best arm empirically underperforms (<60% after >=3 obs), widens global exploration to 28% to recover from drift/anti-prior traps.
+    const underperforming = (bestArm.observations >= 3 && bestArm.mean < 0.60);
+    const globalExploreProb = underperforming ? 0.28 : 0.03;
+    const adjacentExploreProb = underperforming ? 0.07 : 0.07;
     const exploreRoll = rng();
-    if (exploreRoll < 0.10) {
+    if (exploreRoll < globalExploreProb) {
+      const drawn = posteriors.map(p => ({ p, score: sampleBeta(p.alpha, p.beta, rng) }));
+      drawn.sort((a, b) => b.score - a.score);
+      chosen = drawn[0].p;
+      selectionMode = chosen.profileId === bestArm.profileId ? 'exploit' : 'global_explore';
+    } else if (exploreRoll < globalExploreProb + adjacentExploreProb) {
       const adjacent = posteriors.filter(p => Math.abs(PROFILE_ORDER.indexOf(p.profileId) - bestIdx) <= 1);
       const drawn = adjacent.map(p => ({ p, score: sampleBeta(p.alpha, p.beta, rng) }));
       drawn.sort((a, b) => b.score - a.score);
@@ -364,24 +387,27 @@ export function selectAutoTuneParams(stateInput, {
     };
   }
 
-  // In Passive mode before any real data is observed for this model/family & domain (and not pinned/retry/arena),
-  // observe passively without mutating wire defaults so fresh sessions preserve exact provider defaults.
+  // In Passive mode before any real data is observed for this model OR its sibling family (and not pinned/retry/arena),
+  // observe passively without mutating wire defaults. Attribute the raw default observation to 'balanced' (neutral wire default)
+  // rather than confounding 'surgical'/'focused' with unapplied provider defaults.
   const totalCellObs = posteriors.reduce((sum, p) => sum + (p.observations || 0), 0);
-  if (state.mode === 'passive' && selectionMode !== 'pinned' && contextKind === 'normal' && totalCellObs < 1) {
+  const totalFamilyObs = posteriors.reduce((sum, p) => sum + (p.familyObservations || 0), 0);
+  if (state.mode === 'passive' && selectionMode !== 'pinned' && contextKind === 'normal' && totalCellObs < 1 && totalFamilyObs < 5) {
+    const defaultArm = posteriors.find(p => p.profileId === 'balanced') || chosen;
     return {
       active: false,
       observing: true,
       reason: 'passive_cold_start',
       generation: manualGeneration || {},
       receipt: {
-        profileId: profile.id,
-        profileLabel: profile.label,
+        profileId: 'balanced',
+        profileLabel: 'Balanced (Observing)',
         modelKey,
         family,
         domain: detectedDomain,
         effort: effortKey,
         selectionMode: 'observe',
-        winRatePct: Math.round(chosen.mean * 100),
+        winRatePct: Math.round(defaultArm.mean * 100),
         confidencePct: 0,
         observations: 0,
         applied: {},
@@ -439,26 +465,45 @@ export function recordAutoTuneOutcome(stateInput, {
   const eff = normalizeEffortKey(effort);
   const now = new Date().toISOString();
 
-  const updateMap = (map, key, wScale = 1) => {
-    const cell = map[key] ? { arms: { ...map[key].arms }, updatedAt: now } : { arms: {}, updatedAt: now };
-    const prev = cell.arms[profileId] || { a: 0, b: 0, n: 0 };
+  const updateMap = (map, key, wScale = 1, passiveDecay = PASSIVE_ARM_DECAY) => {
+    const prevArms = map[key]?.arms || {};
+    const nextArms = {};
+    // Discounted Thompson Sampling: gently decay unpulled arms in the same cell so stale pre-drift
+    // observations naturally relax toward the prior when provider weights change mid-flight.
+    for (const [armId, entry] of Object.entries(prevArms)) {
+      if (armId === profileId || !entry) continue;
+      nextArms[armId] = {
+        a: Math.round((entry.a * passiveDecay) * 10000) / 10000,
+        b: Math.round((entry.b * passiveDecay) * 10000) / 10000,
+        n: entry.n,
+      };
+    }
+    const prev = prevArms[profileId] || { a: 0, b: 0, n: 0 };
     const w = weight * wScale;
-    cell.arms[profileId] = {
+    nextArms[profileId] = {
       a: Math.round((prev.a * DECAY + reward * w) * 10000) / 10000,
       b: Math.round((prev.b * DECAY + (1 - reward) * w) * 10000) / 10000,
       n: prev.n + 1,
     };
-    map[key] = cell;
-    // Evict oldest cell if over MAX_CELLS
+    map[key] = { arms: nextArms, updatedAt: now };
+    // Observation-weighted eviction: protect high-observation learned cells from being evicted by 1-obs noise bursts.
     const keys = Object.keys(map);
     if (keys.length > MAX_CELLS) {
-      keys.sort((k1, k2) => String(map[k1]?.updatedAt || '').localeCompare(String(map[k2]?.updatedAt || '')));
+      const cellObs = (k) => Object.values(map[k]?.arms || {}).reduce((acc, x) => acc + (x?.n || 0), 0);
+      keys.sort((k1, k2) => {
+        const n1 = cellObs(k1), n2 = cellObs(k2);
+        const tier1 = n1 >= 5 ? 1 : 0;
+        const tier2 = n2 >= 5 ? 1 : 0;
+        if (tier1 !== tier2) return tier1 - tier2;
+        if (tier1 === 0 && n1 !== n2) return n1 - n2;
+        return String(map[k1]?.updatedAt || '').localeCompare(String(map[k2]?.updatedAt || ''));
+      });
       delete map[keys[0]];
     }
   };
 
-  updateMap(state.cells, `${modelKey}::${dom}::${eff}`, 1.0);
-  updateMap(state.familyCells, `${family}::${dom}::${eff}`, 0.7);
+  updateMap(state.cells, `${modelKey}::${dom}::${eff}`, 1.0, PASSIVE_ARM_DECAY);
+  updateMap(state.familyCells, `${family}::${dom}::${eff}`, 0.7, FAMILY_PASSIVE_DECAY);
   state.totalObservations += 1;
   return state;
 }

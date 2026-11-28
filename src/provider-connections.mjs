@@ -373,7 +373,7 @@ export async function createCliConnections({ dataDir, providers, environment = p
     const prevKeys = ownedProviderKeys(id);
     for (const key of prevKeys) {
       const prev = providers.get(key);
-      if (prev?.children?.size) throw fault('Wait for the active CLI request before changing its models or settings.', 'PROVIDER_BUSY', 409);
+      if (prev?.children?.size || prev?.inFlightSessions?.size) throw fault('Wait for the active CLI request before changing its models or settings.', 'PROVIDER_BUSY', 409);
     }
     for (const key of prevKeys) {
       const prev = providers.get(key);
@@ -651,7 +651,7 @@ export async function createCliConnections({ dataDir, providers, environment = p
         const keys = ownedProviderKeys(id);
         for (const key of keys) {
           const prev = providers.get(key);
-          if (prev?.children?.size) throw fault('Wait for the active CLI request before disconnecting.', 'PROVIDER_BUSY', 409);
+          if (prev?.children?.size || prev?.inFlightSessions?.size) throw fault('Wait for the active CLI request before disconnecting.', 'PROVIDER_BUSY', 409);
         }
         const next = {
           ...preferences,

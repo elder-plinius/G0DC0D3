@@ -22,6 +22,22 @@ let createSource = 'fixture';
 let importPreview = null;
 let importPreviewBusy = false;
 let importPreviewVersion = 0;
+let autoPreviewTimer = null;
+const RECENT_PROJECTS_KEY = 'g0dc0d3.recentProjects';
+const PENDING_PROJECT_KEY = 'g0dc0d3.pendingProject';
+let pendingProjectPreview = null;
+let pendingProjectPreviewSeq = 0;
+let pendingProject = (() => {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PENDING_PROJECT_KEY) || 'null');
+    if (raw && typeof raw.path === 'string' && raw.path.trim()) {
+      const cleaned = raw.path.trim().replace(/[\\/]+$/, '') || raw.path.trim();
+      const name = cleaned.split(/[\\/]/).filter(Boolean).pop() || cleaned;
+      return { path: cleaned, name, mode: raw.mode === 'worktree' ? 'worktree' : 'copy' };
+    }
+  } catch {}
+  return null;
+})();
 let routeTaskId = null;
 let routeDirty = false;
 let streamSource = null;
@@ -623,22 +639,38 @@ function renderComposer() {
   $('#composer-project').disabled = loading || createBusy;
   $('#composer-model').disabled = loading || createBusy;
   const label = projectLabel(task);
+  const attachedPending = !task && appMode === 'godcode' && pendingProject?.path ? pendingProject : null;
   setVisible('#composer-code-prefix', Boolean(task?.codeWorkspace));
-  setText('#composer-project-label', task?.codeWorkspace ? task.codeWorkspace.repository : label || (task?.workspaceKind === 'conversation' ? 'Attach repository' : 'Add project'));
+  setText('#composer-project-label', task?.codeWorkspace ? task.codeWorkspace.repository : label || attachedPending?.name || (task?.workspaceKind === 'conversation' ? 'Attach repository' : 'Add project'));
+  $('#composer-project').classList.toggle('has-project', Boolean(task?.codeWorkspace || task?.sourcePath || attachedPending));
   const preferred = providerById(newConversationProviders()[0]);
   const race = task ? task.answerRace : RecoveryUI.preferences().answerRace;
-  setText('#composer-model-label', race ? `${race.models?.length || 2} arena writers` : task ? providerById(task.providerId)?.label || task.providerId || 'Model' : preferred?.label || 'Connect model');
-  $('#composer-project').title = task?.workspaceKind === 'conversation' ? (task.codeWorkspace ? 'Open GodCode in this chat' : 'Attach a repository to this chat') : task ? 'Project locations and working copy' : 'Start a new task in a project copy';
+  const pendingNextId = task && Array.isArray(task.pendingProviders) && task.pendingProviders.length ? task.pendingProviders[0] : null;
+  const currentModelLabel = task ? providerById(task.providerId)?.label || task.providerId || 'Model' : preferred?.label || 'Connect model';
+  const pendingNextLabel = pendingNextId ? (providerById(pendingNextId)?.label || pendingNextId) : '';
+  setText('#composer-model-label', race ? `${race.models?.length || 2} Conclave writers` : pendingNextLabel ? `Next: ${pendingNextLabel}` : currentModelLabel);
+  $('#composer-model').classList.toggle('is-queued-model', Boolean(pendingNextLabel && !race));
+  $('#composer-project').title = attachedPending
+    ? `Attached project (${attachedPending.mode === 'worktree' ? 'Git Worktree' : 'Isolated Copy'}): ${attachedPending.path} — click to switch or detach`
+    : task?.workspaceKind === 'conversation'
+      ? (task.codeWorkspace ? 'Open GodCode or switch repository' : 'Attach a repository to this chat')
+      : task ? 'Project locations, recent repos, and worktrees' : 'Choose a recent project, browse a folder, or drop one here';
   setVisible('#composer-permissions', true);
   const permRulesNow = task && Array.isArray(task.permissionRules)
     ? task.permissionRules
     : (Array.isArray(state.permissions?.rules) ? state.permissions.rules : []);
   const permPresetNow = typeof detectPermissionPreset === 'function' ? detectPermissionPreset(permRulesNow) : (permRulesNow.length ? 'custom' : 'permissive');
-  const shortPermLabel = { permissive: 'Permissive', auto: 'Auto (AI)', acceptEdits: 'Accept Edits', safe: 'Safe', default: 'Ask All', dontAsk: 'CI' }[permPresetNow] || `Custom (${permRulesNow.length})`;
+  const shortPermLabel = { permissive: 'Autonomous', auto: 'AI Screened', acceptEdits: 'Auto-Edit', safe: 'Ask Shell', default: 'Ask All', dontAsk: 'Headless CI' }[permPresetNow] || `Custom (${permRulesNow.length})`;
   const cmdSuffix = task ? (task.execution?.enabled ? (task.execution.network ? ' · Cmd+Net' : ' · Cmd') : '') : '';
   setText('#composer-permissions-label', `${shortPermLabel}${cmdSuffix}`);
   $('#composer-permissions').title = `Permission Gate: ${shortPermLabel} (Shift+Tab to cycle, click to configure)`;
-  $('#composer-model').title = race ? 'View the Arena writers and judge' : task ? 'Change model for this chat' : 'Choose or connect a model';
+  $('#composer-model').title = race
+    ? 'View the Conclave writers and judge'
+    : pendingNextLabel
+      ? `Queued for your next message: ${pendingNextLabel} (current response continues on ${currentModelLabel})`
+      : task && ACTIVE.has(task.status)
+        ? 'Select a model for your next message while this response finishes'
+        : task ? 'Change model for this chat' : 'Choose or connect a model';
   setVisible('#composer-connect', !task && Boolean(composerErrors.get(key)) && !preferred);
   renderRecoveryControl(task, loading || !online);
   renderPlanModeControl(task, loading || !online);
@@ -695,18 +727,21 @@ function renderRecoveryControl(task, loading = false) {
   setVisible('#composer-race', !task || task.workspaceKind === 'conversation');
   $('#composer-race').classList.toggle('race-enabled', ultraOn);
   const arenaN = racing?.models?.length || state.router?.arenaSize || ultraRouterData?.settings?.arenaSize || 3;
-  $('#composer-race').textContent = routerMode === 'auto_route' && !racing
-    ? 'Ultra-Plinian · Auto ⌄'
+  const raceLabel = routerMode === 'auto_route' && !racing
+    ? 'Ultra-Plinian · Auto'
     : routerMode === 'auto_arena' && !racing
-      ? `Ultra-Plinian · Arena ${arenaN}× ⌄`
+      ? `Ultra-Plinian · Conclave ${arenaN}×`
       : racing
-        ? `Ultra-Plinian · Custom ${arenaN}× ⌄`
-        : 'Ultra-Plinian ⌄';
+        ? `Ultra-Plinian · Custom ${arenaN}×`
+        : 'Ultra-Plinian';
+  const raceLabelEl = $('#composer-race-label');
+  if (raceLabelEl) raceLabelEl.textContent = raceLabel;
+  else $('#composer-race').textContent = `${raceLabel} ⌄`;
   $('#composer-race').title = routerMode === 'auto_route' && !racing
     ? 'Ultra-Plinian Auto-Route · Click to switch mode'
     : ultraOn
       ? (view.enabled ? 'Ultra-Plinian + G0DM0D3 active · Click to configure' : 'Ultra-Plinian active · Click to configure')
-      : 'Ultra-Plinian mode (Off) · Click to enable Auto-Route or Arena';
+      : 'Ultra-Plinian mode (Off) · Click to enable Auto-Route or Conclave';
   $('#composer-race').disabled = loading || Boolean(task?.draining) || ACTIVE.has(task?.status);
 
   setText('#composer-ultra-label', view.label === 'G0DM0D3' || view.label === 'GodMode' ? 'GODMODƎ' : view.label);
@@ -717,9 +752,14 @@ function renderRecoveryControl(task, loading = false) {
     : ultraOn
       ? (task?.blocker?.message || (view.enabled ? 'G0DM0D3 + Ultra-Plinian · parallel writers with adaptive recovery fallback' : 'Ultra-Plinian · two writers and a judge'))
       : view.detail);
+  const recoveryStrip = document.querySelector('.recovery-strip');
+  if (recoveryStrip) {
+    const showStrip = Boolean(task && (ACTIVE.has(task.status) || task.blocker?.message || (task.recoveries || 0) > 0));
+    recoveryStrip.classList.toggle('is-idle', !showStrip);
+  }
   $('#composer-ultra').setAttribute('aria-checked', String(view.enabled));
   $('#composer-ultra').classList.toggle('enabled', view.enabled);
-  const setupLock = view.locked ? modelSelectionLock(task) : '';
+  const setupLock = view.locked ? (ACTIVE.has(task?.status) ? 'Wait for this response to finish or pause before changing the outage backup.' : modelSelectionLock(task)) : '';
   $('#composer-ultra').disabled = Boolean(setupLock) || loading || Boolean(task?.draining) || isCrewBusy(task) || task?.status === 'cancelled' || (typeof settingsBusy !== 'undefined' && settingsBusy) || (typeof recoveryToggleBusy !== 'undefined' && recoveryToggleBusy);
   $('#composer-ultra').title = setupLock || (ultraOn
     ? (view.enabled ? 'G0DM0D3 recovery is active alongside Ultra-Plinian (auto-recovers errors, declines & output limits).' : 'Turn on G0DM0D3 to auto-recover Ultra-Plinian errors, declines & output limits.')
@@ -1387,7 +1427,7 @@ function renderTaskMetaStrip(task) {
   if (!strip) return;
   if (!task) { setVisible('#task-meta-strip', false); strip.innerHTML = ''; return; }
   const provider = providerById(task.providerId);
-  const modelLabel = task.answerRace ? `${task.answerRace.models.length} Arena writers` : provider?.label || task.providerId || 'No model';
+  const modelLabel = task.answerRace ? `${task.answerRace.models.length} Conclave writers` : provider?.label || task.providerId || 'No model';
   const tier = String(provider?.tier || 'standard').toLowerCase();
   const calls = Number(task.calls ?? 0);
   const maxCalls = Number(task.policy?.maxCalls ?? 0);
@@ -1705,6 +1745,12 @@ async function executeSlashCommand(raw) {
     openSettings('schedules');
     return { handled: true };
   }
+  if (cmd === '/northstar' || cmd === '/climb' || cmd === '/autoresearch') {
+    clearInput();
+    if (window.G0DNorthStar?.openLauncher) window.G0DNorthStar.openLauncher(arg);
+    else openSettings('schedules');
+    return { handled: true };
+  }
   if (cmd === '/alerts' || cmd === '/notifications' || cmd === '/sounds') {
     clearInput();
     openSettings('notifications');
@@ -1955,6 +2001,10 @@ function closeAllPopovers(exceptId = null) {
     $('#effort-popover')?.classList.add('hidden');
     $('#composer-effort')?.setAttribute('aria-expanded', 'false');
   }
+  if (exceptId !== 'project-popover') {
+    $('#project-popover')?.classList.add('hidden');
+    $('#composer-project')?.setAttribute('aria-expanded', 'false');
+  }
   if (exceptId !== 'composer-options') {
     setComposerOptionsOpen(false);
   }
@@ -2200,8 +2250,53 @@ async function startConversation(raw, message = raw.trim()) {
   try {
     let preferences = {};
     try { preferences = JSON.parse(localStorage.getItem('g0dc0d3.defaults') || '{}'); } catch {}
+    const attached = appMode === 'godcode' && pendingProject?.path ? pendingProject : null;
+    if (attached && attached.mode === 'copy') {
+      let preview = pendingProjectPreview && pendingProjectPreview.sourceInput === attached.path && pendingProjectPreview.snapshotHash
+        ? pendingProjectPreview
+        : null;
+      if (!preview) {
+        const res = await api('/api/workspaces/preview', { method: 'POST', body: JSON.stringify({ sourcePath: attached.path }) });
+        preview = { ...res, sourceInput: attached.path };
+        pendingProjectPreview = preview;
+      }
+      const { task } = await api('/api/tasks', {
+        method: 'POST',
+        body: JSON.stringify({
+          sourcePath: preview.sourcePath,
+          previewHash: preview.snapshotHash,
+          objective: message,
+          providerIds,
+          persona: preferences.persona || 'plinian',
+          effort: draftEffort,
+          planMode: draftPlanMode,
+          policy: RecoveryUI.policy(null),
+          execution: { enabled: Boolean(state.executionAvailable), network: false, timeoutMs: 30000 },
+          checks: [],
+          ...(composerAttachments.length ? { attachments: composerAttachments.slice(0, 4) } : {}),
+        }),
+      });
+      createdId = task.id;
+      recordRecentProject(attached.path, 'copy');
+      if (composerScope === 'welcome') clearComposerAttachments();
+      if (composerDrafts.get('welcome') === raw) saveComposerDraft('welcome', '');
+      if (composerScope === 'welcome' && $('#composer-input').value === raw) { $('#composer-input').value = ''; resizeComposer(); }
+      state.tasks.unshift(task);
+      if (!selectedId && version === selectionVersion) await selectTask(task.id);
+      toast(`Started in ${attached.name} (isolated copy).`);
+      await refresh();
+      return;
+    }
     const { task } = await api('/api/conversations', { method: 'POST', body: JSON.stringify({ objective: message, providerIds, generation: generationDefaults(), answerRace:preferences.answerRace || null, ultraplinian: Boolean(preferences.answerRace), persona: preferences.persona || 'plinian', effort: draftEffort, policy: RecoveryUI.policy(null), planMode: appMode === 'godcode' ? draftPlanMode : false, ...(composerAttachments.length ? { attachments: composerAttachments.slice(0, 4) } : {}) }) });
     createdId = task.id;
+    if (attached && attached.mode === 'worktree') {
+      try {
+        await api(`/api/conversations/${encodeURIComponent(task.id)}/repository`, { method: 'POST', body: JSON.stringify({ repository: attached.path }) });
+        recordRecentProject(attached.path, 'worktree');
+      } catch (wtErr) {
+        toast(`Chat started — worktree note: ${wtErr.message}`);
+      }
+    }
     if (composerScope === 'welcome') clearComposerAttachments();
     if (composerDrafts.get('welcome') === raw) saveComposerDraft('welcome', '');
     if (composerScope === 'welcome' && $('#composer-input').value === raw) { $('#composer-input').value = ''; resizeComposer(); }
@@ -3168,8 +3263,8 @@ function renderUltraRouterSection() {
   const modeCards = [
     ['off', 'Off', 'Use your manually selected model & waterfall.'],
     ['auto_route', 'Auto-Route (Best Model)', 'Picks the highest-scoring endpoint per task domain & routes away from refusals.'],
-    ['auto_arena', 'Auto-Arena (2–4 Models + Judge)', 'Races your top 2–4 distinct model families & trains your personal Elo from the blind judge.'],
-    ['manual_arena', 'Manual Arena', 'Race any 2–4 connected models & judge below.']
+    ['auto_arena', 'Auto-Conclave (2–4 Models + Judge)', 'Races your top 2–4 distinct model families & trains your personal Elo from the blind judge.'],
+    ['manual_arena', 'Custom Conclave', 'Race any 2–4 connected models & judge below.']
   ];
   const domainTabs = domains.map(d => `<button type="button" class="ultra-domain-tab ${d.id === activeDom ? 'active' : ''}" data-router-domain="${escapeHTML(d.id)}" title="${escapeHTML(d.description)}">${escapeHTML(d.shortLabel)}</button>`).join('');
   const boardHtml = activeRows.length
@@ -3183,7 +3278,7 @@ function renderUltraRouterSection() {
   const metacogModes = [
     ['off', 'Off', 'Send your raw prompt without metacognitive scaffolding.'],
     ['smart', 'Smart Framing (0ms)', 'Instant domain × model-family framing, 100% cache-safe (Recommended).'],
-    ['auto_forge', 'Auto-Forge (LLM)', 'Smart framing + live LLM Megaprompt & Arena Judge rubric on complex Turn-1 tasks.']
+    ['auto_forge', 'Auto-Forge (LLM)', 'Smart framing + live LLM Megaprompt & Conclave Judge rubric on complex Turn-1 tasks.']
   ];
   const prevDetailsOpen = Boolean(container.querySelector('.ultra-json-details')?.open);
   const focusedInRouter = document.activeElement && container.contains(document.activeElement)
@@ -3202,7 +3297,7 @@ function renderUltraRouterSection() {
     <div class="ultra-metacog-block">
       <div class="ultra-metacog-head">
         <strong>✦ Task Metacognition &amp; Megaprompting</strong>
-        <span class="field-help">Calibrates task protocols &amp; Arena judge rubrics to the routed model family (or run <code>/forge &lt;prompt&gt;</code> anytime).</span>
+        <span class="field-help">Calibrates task protocols &amp; Conclave judge rubrics to the routed model family (or run <code>/forge &lt;prompt&gt;</code> anytime).</span>
       </div>
       <div class="ultra-metacog-modes" role="radiogroup" aria-label="Task metacognition mode">
         ${metacogModes.map(([id, title, desc]) => `<button type="button" class="ultra-metacog-btn ${metacogMode === id ? 'active' : ''}" data-router-metacog="${id}" ${ultraRouterBusy ? 'disabled' : ''}><strong>${title}</strong><span>${desc}</span></button>`).join('')}
@@ -3308,7 +3403,7 @@ function renderModelGroups() {
     return `<button type="button" class="model-group-chip ${isSel ? 'active' : ''}" data-select-model-group="${escapeHTML(group.id)}" aria-pressed="${isSel}"><span>${escapeHTML(group.shortName || group.name)}</span><span class="model-group-count">${escapeHTML(group.count)}</span></button>`;
   }).join('');
   const activeTask = settingsTaskId ? selectedData?.task : null;
-  const activeModelId = activeTask?.providerId || newConversationProviders()[0] || null;
+  const activeModelId = activeTask?.pendingProviders?.[0] || activeTask?.providerId || newConversationProviders()[0] || null;
   const modelLock = modelSelectionLock(activeTask);
   const ordered = orderedModelsForGroup(active);
   const hasCustomOrder = customWaterfallOrder.has(active.id);
@@ -3375,15 +3470,18 @@ async function applyModelGroup(groupId) {
   renderModelGroups();
   try {
     const task = settingsTaskId ? selectedData?.task : null;
-    if (task && !ACTIVE.has(task.status) && !task.draining) {
+    if (task && !task.draining && !isCrewBusy(task)) {
       const { task: updated } = await api(`/api/tasks/${encodeURIComponent(task.id)}/providers`, {
         method: 'PATCH',
         body: JSON.stringify({ providerIds: route })
       });
       if (selectedId === task.id && selectedData) renderSelected({ ...selectedData, task: updated }, true);
-      const msg = `Applied ${group.name} waterfall (${route.length} models).`;
+      const queued = Boolean(updated?.pendingProviders?.length);
+      const msg = queued
+        ? `Queued ${group.name} waterfall (${route.length} models) for your next message.`
+        : `Applied ${group.name} waterfall (${route.length} models).`;
       setModelFeedback(msg);
-      toast(`Applied ${group.shortName} waterfall (${route.length} models).`);
+      toast(queued ? `Queued ${group.shortName} waterfall for next message.` : `Applied ${group.shortName} waterfall (${route.length} models).`);
     } else {
       preferredProvider = route[0];
       try {
@@ -3875,7 +3973,7 @@ function eventDescription(event) {
     'tool.started': (() => { const s = humanizeToolStep({ type: 'tool.started', data }); return [s.verb, '⌁', 'tool', s.target]; })(),
     'tool.completed': (() => { const s = humanizeToolStep({ type: 'tool.completed', data }); return [s.verb, '⌁', s.isErr ? 'error' : 'tool', s.target]; })(),
     'tool.failed': (() => { const s = humanizeToolStep({ type: 'tool.failed', data }); return [s.verb, '!', 'error', s.target || data.error?.message || data.message || '']; })(),
-    'autotune.selected': ['AutoTune', '◈', 'info', `${data.profileLabel || data.profileId || 'Focused'}${data.applied?.temperature !== undefined ? ` (T=${data.applied.temperature})` : ''} · ${data.domain || 'general'} · ${data.winRatePct ?? 0}%`],
+    'autotune.selected': ['HyperTuner', '◈', 'info', `${data.profileLabel || data.profileId || 'Focused'}${data.applied?.temperature !== undefined ? ` (T=${data.applied.temperature})` : ''} · ${data.domain || 'general'} · ${data.winRatePct ?? 0}%`],
     'recovery.started': ['Recovery initiated', '↻', 'warning', data.incident?.message ?? data.reason ?? data.diagnosis ?? data.strategy ?? data.message ?? 'Resuming G0DM0D3 recovery.'],
     'routing.retry_scheduled': ['Retry scheduled', '↻', 'warning', `Attempt ${data.retry} of ${data.maxRetries}. Waiting until ${new Date(data.retryAt).toLocaleTimeString()}.`],
     'routing.profile_changed': ['Output allowance adjusted', '↻', 'warning', `${data.before?.maxOutputTokens} → ${data.requestProfile?.maxOutputTokens} tokens.`],
@@ -3957,7 +4055,7 @@ function conversationMessage({ role, text, time, provider, key, raw, outcome, th
   const scoreOutcomes = Array.isArray(score?.outcomes) && !score.grades?.length
     ? score.outcomes.map(o => `<div><strong>${escapeHTML(providerById(o.providerId)?.label || o.providerId)}</strong> <small>${escapeHTML(o.status || 'unknown')} · ${escapeHTML(duration(o.durationMs))}</small></div>`).join('')
     : '';
-  const scorecard = score ? `<details class="race-scorecard" data-disclosure="${escapeHTML(scoreKey)}" ${openDetails.has(scoreKey)?'open':''}><summary>${scoreTitle}</summary>${score.note ? `<p>${escapeHTML(score.note)}</p>` : `<p>Judge · ${escapeHTML(providerById(score.judgeId)?.label || score.judgeId)}</p>`}${(score.grades || []).map(g=>`<div><strong>${escapeHTML(providerById(g.providerId)?.label || g.providerId)} · ${escapeHTML(g.total)}/15${g.providerId===score.winnerId?' · selected':''}</strong><small>Fidelity ${escapeHTML(g.fidelity)} · Completeness ${escapeHTML(g.completeness)} · Clarity ${escapeHTML(g.clarity)}</small><p>${escapeHTML(g.reason)}</p></div>`).join('')}${scoreOutcomes}</details>` : '';
+  const scorecard = score ? `<details class="race-scorecard" data-disclosure="${escapeHTML(scoreKey)}" ${openDetails.has(scoreKey)?'open':''}><summary>${scoreTitle}</summary>${score.note ? `<p>${escapeHTML(score.note)}</p>` : `<p>Tastemaker Judge · ${escapeHTML(providerById(score.judgeId)?.label || score.judgeId)}</p>`}${(score.grades || []).map(g=>`<div class="scorecard-contender-row"><div class="scorecard-contender-top"><strong>${escapeHTML(providerById(g.providerId)?.label || g.providerId)} · ${escapeHTML(g.total)}/15${g.providerId===score.winnerId?' · ♛ winner':''}</strong><button type="button" class="button button-quiet race-crown-inline" data-inline-crown="${escapeHTML(g.providerId)}" data-inline-race-id="${escapeHTML(score.raceId || '')}" title="Crown this answer as your pick (+local Elo)">👑 Crown</button></div><small>Fidelity ${escapeHTML(g.fidelity)} · Completeness ${escapeHTML(g.completeness)} · Clarity ${escapeHTML(g.clarity)}</small><p>${escapeHTML(g.reason)}</p></div>`).join('')}${scoreOutcomes}</details>` : '';
   const copyBtn = text ? `<button type="button" class="copy-response" data-copy-text="${escapeHTML(text)}" title="${role === 'user' ? 'Copy message' : 'Copy response'}" aria-label="${role === 'user' ? 'Copy message' : 'Copy response'}"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="6" y="6" width="10" height="11" rx="2"/><path d="M12 6V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/></svg></button>` : '';
   const regenBtn = role === 'assistant' && Boolean(raw?.__isLatestRegeneratable)
     ? `<button type="button" class="copy-response regenerate-response" data-regenerate-last title="Regenerate response" aria-label="Regenerate response"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 10a5.5 5.5 0 1 1-1.6-3.9M15.5 4.5v3h-3"/></svg></button>`
@@ -4312,11 +4410,13 @@ function renderTimeline(events, total, task) {
       messages.push(`<details class="overseer-receipt conclave-verdict-receipt" data-disclosure="${escapeHTML(cKey)}" ${openDetails.has(cKey) ? 'open' : ''}><summary><span aria-hidden="true">✦</span><span class="overseer-receipt-title">Conclave · ${escapeHTML(cd.modeLabel || cd.mode || 'Council')} (${escapeHTML(cd.rounds || 2)} rounds)</span><span>${escapeHTML(specNames || `${entries.length} specialist contributions`)}${cd.durationMs ? ` · ${escapeHTML(duration(cd.durationMs))}` : ''}</span></summary><div class="overseer-receipt-body">${bbHtml || '<p class="field-help">No blackboard notes recorded.</p>'}</div></details>`);
     } else if (event.type === 'subagent.completed' && event.data?.ok && event.data?.summary) {
       flush();
+      lastFlushedSeq = Math.max(lastFlushedSeq, Number(event.seq || 0));
       const sa = event.data;
       const key = `subagent-${event.id ?? event.seq}`;
       messages.push(`<details class="subagent-card" data-disclosure="${escapeHTML(key)}" ${openDetails.has(key) ? 'open' : ''}><summary class="subagent-card-summary"><span class="subagent-badge">${escapeHTML(sa.role || 'explore')}</span><span class="subagent-provider">${escapeHTML(providerById(sa.providerId)?.label || sa.providerId || 'model')}</span><span class="subagent-meta">${escapeHTML(`${sa.calls || 1} call${sa.calls === 1 ? '' : 's'} · ${duration(sa.durationMs || 0)}`)}</span></summary><div class="subagent-card-body">${formatMessageBody(sa.summary, true)}</div></details>`);
     } else if (['overseer.advised', 'overseer.audited', 'overseer.coached'].includes(event.type)) {
       flush();
+      lastFlushedSeq = Math.max(lastFlushedSeq, Number(event.seq || 0));
       const description = eventDescription(event);
       const od = event.data || {};
       const oKey = `overseer-${event.id ?? event.seq}`;
@@ -4330,11 +4430,14 @@ function renderTimeline(events, total, task) {
         messages.push(`<div class="recovery-event"><span aria-hidden="true">✦</span><span><strong>${escapeHTML(description[0])}</strong> ${escapeHTML(description[3])}</span></div>`);
       }
     } else if (event.type === 'autotune.selected' && event.data) {
+      flush();
+      lastFlushedSeq = Math.max(lastFlushedSeq, Number(event.seq || 0));
       const at = event.data;
       const tTxt = at.applied?.temperature !== undefined ? `T=${at.applied.temperature}` : 'tuned';
       messages.push(`<div class="autotune-receipt"><span aria-hidden="true">◈</span><span><strong>HyperTuner</strong> · ${escapeHTML(at.profileLabel || at.profileId || 'Focused')} (${escapeHTML(tTxt)}) · ${escapeHTML(at.domain || 'general')} · ${escapeHTML(String(at.winRatePct ?? 0))}% win</span></div>`);
     } else if (['model.switched', 'providers.updated', 'routing.retry_scheduled', 'routing.strategy_changed', 'routing.profile_changed', 'routing.reframe_retry', 'overseer.judged', 'owner.refusal_reported', 'permission.auto_approved', 'hook.blocked', 'memory.auto_learned', 'skill.created'].includes(event.type)) {
       flush();
+      lastFlushedSeq = Math.max(lastFlushedSeq, Number(event.seq || 0));
       const description = eventDescription(event);
       messages.push(`<div class="recovery-event"><span aria-hidden="true">↻</span><span><strong>${escapeHTML(description[0])}</strong> ${escapeHTML(description[3])}</span></div>`);
     } else work.push(event);
@@ -4352,10 +4455,16 @@ function renderTimeline(events, total, task) {
     messages.push(`<details class="compact-summary-card" data-disclosure="${escapeHTML(compKey)}" ${openDetails.has(compKey) ? 'open' : ''}><summary><span class="compact-badge">Compacted</span><span>Fresh-eyes context summary${modCount ? ` · ${modCount} modified ${modCount === 1 ? 'file' : 'files'}` : ''}</span></summary><p class="compact-summary-note">${escapeHTML(ws.note || 'Earlier history summarized into fresh-eyes state to keep context crisp.')}</p></details>`);
   }
   if (ACTIVE.has(task.status)) {
-    const recent = [...events].reverse().find(e => ['model.request', 'tool.started', 'evaluation.started', 'routing.auto_continued'].includes(e.type));
+    const lastUserIdx = events.findLastIndex(e => ['user.message', 'user.messages.applied', 'conversation.rewound'].includes(e.type));
+    const lastUserSeq = lastUserIdx >= 0 ? Number(events[lastUserIdx]?.seq || 0) : 0;
+    const minRailSeq = Math.max(lastUserSeq, lastFlushedSeq);
+    const fullTurnEvents = lastUserIdx >= 0 ? events.slice(lastUserIdx + 1) : events;
+    const turnSlice = fullTurnEvents.filter(e => Number(e.seq || 0) > minRailSeq);
+
+    const recent = [...fullTurnEvents].reverse().find(e => ['model.request', 'tool.started', 'evaluation.started', 'routing.auto_continued'].includes(e.type));
     const activeProvLabel = providerById(task.providerId)?.label || task.providerId || '';
     const phase = task.answerRace
-      ? (events.findLast(e => e.type === 'race.dispatched')?.data.stage === 'grade' ? 'Grading parallel drafts' : `Drafting with ${task.answerRace.models?.length || 2} Arena writers`)
+      ? (events.findLast(e => e.type === 'race.dispatched')?.data.stage === 'grade' ? 'Grading parallel drafts' : `Drafting with ${task.answerRace.models?.length || 2} Conclave writers`)
       : recent?.type === 'routing.auto_continued'
         ? 'Continuing output'
         : task.status === 'verifying'
@@ -4371,23 +4480,33 @@ function renderTimeline(events, total, task) {
     // Note: pinned #todo-strip right above the composer already displays Plan progress; keep Live Rail focused on steps.
     const planHtml = '';
 
-    const lastUserIdx = events.findLastIndex(e => ['user.message', 'user.messages.applied', 'conversation.rewound'].includes(e.type));
-    const lastUserSeq = lastUserIdx >= 0 ? Number(events[lastUserIdx]?.seq || 0) : 0;
-    const minRailSeq = Math.max(lastUserSeq, lastFlushedSeq);
-    const turnSlice = (lastUserIdx >= 0 ? events.slice(lastUserIdx + 1) : events).filter(e => Number(e.seq || 0) > minRailSeq);
     const completedWorkerIds = new Set(events.filter(e => e.type === 'subagent.completed' && e.data?.workerId).map(e => e.data.workerId));
     const runningSidecars = events.filter(e => e.type === 'subagent.started' && e.data?.workerId && !completedWorkerIds.has(e.data.workerId));
-    const allTurnSteps = turnSlice.filter(e =>
-      ['tool.completed', 'tool.failed', 'evaluation.started', 'evaluation.completed', 'model.switched', 'routing.reframe_retry', 'subagent.completed'].includes(e.type)
+    const lastEvalCompletedSeq = turnSlice.reduce((m, e) => e.type === 'evaluation.completed' ? Math.max(m, Number(e.seq || 0)) : m, 0);
+    const allTurnSteps = turnSlice.filter(e => {
+      if (e.type === 'evaluation.started') return Number(e.seq || 0) > lastEvalCompletedSeq;
+      return ['tool.completed', 'tool.failed', 'evaluation.completed', 'model.switched', 'routing.reframe_retry', 'subagent.completed'].includes(e.type);
+    });
+    const finishedOpIds = new Set(
+      turnSlice
+        .filter(e => e.type === 'tool.completed' || e.type === 'tool.failed')
+        .map(e => e.data?.operationId || e.data?.callId)
+        .filter(Boolean)
     );
-    const activeStarted = recent?.type === 'tool.started' && Number(recent.seq || 0) > lastUserSeq && !allTurnSteps.some(e => e.seq > recent.seq) ? [recent] : [];
+    const lastToolDoneSeq = turnSlice.reduce((m, e) => (e.type === 'tool.completed' || e.type === 'tool.failed') ? Math.max(m, Number(e.seq || 0)) : m, 0);
+    const activeStarted = turnSlice.filter(e => {
+      if (e.type !== 'tool.started') return false;
+      const opId = e.data?.operationId || e.data?.callId;
+      if (opId) return !finishedOpIds.has(opId);
+      return Number(e.seq || 0) > lastToolDoneSeq;
+    });
     const combinedSteps = [...allTurnSteps, ...runningSidecars, ...activeStarted];
     const olderSteps = combinedSteps.length > 6 ? combinedSteps.slice(0, -6) : [];
     const latestSteps = combinedSteps.slice(-6);
     const renderRailStep = (ev) => {
       const s = humanizeToolStep(ev);
       const isRun = ev.type.endsWith('.started');
-      const stepKey = `live-step-${ev.id ?? ev.seq}`;
+      const stepKey = `step-${ev.id ?? ev.seq}`;
       const dotCls = isRun ? 'is-running' : (s.isErr ? 'is-err' : 'is-ok');
       const dotSym = isRun ? '◐' : (s.isErr ? '!' : '✓');
       return `<details class="live-rail-step ${dotCls}" data-disclosure="${escapeHTML(stepKey)}" ${openDetails.has(stepKey) ? 'open' : ''}><summary class="live-rail-row"><span class="live-rail-dot ${dotCls}" aria-hidden="true">${dotSym}</span><span class="live-rail-verb">${escapeHTML(s.verb)}</span><span class="live-rail-target" title="${escapeHTML(s.target)}">${escapeHTML(s.target)}</span>${s.badge ? `<span class="live-rail-badge kind-${escapeHTML(s.badgeKind)}">${escapeHTML(s.badge)}</span>` : ''}</summary><pre class="live-rail-peek" tabindex="0" role="region" aria-label="Step details">${escapeHTML(pretty(ev.data ?? {}))}</pre></details>`;
@@ -4408,9 +4527,9 @@ function renderTimeline(events, total, task) {
       : '<div class="live-rail-thought hidden" id="live-rail-thought"></div>';
 
     const stepCountChip = combinedSteps.length ? `<span class="live-rail-count">${combinedSteps.length} ${combinedSteps.length === 1 ? 'step' : 'steps'}</span>` : '';
-    const parsedRecent = recent?.time ? Date.parse(recent.time) : NaN;
+    const parsedTurnStart = fullTurnEvents[0]?.time ? Date.parse(fullTurnEvents[0].time) : NaN;
     const parsedUpdated = task.updatedAt ? Date.parse(task.updatedAt) : NaN;
-    const turnAnchorTime = Number.isFinite(parsedRecent) ? parsedRecent : (streamTurnStartedAt || (Number.isFinite(parsedUpdated) ? parsedUpdated : Date.now()));
+    const turnAnchorTime = Number.isFinite(parsedTurnStart) ? parsedTurnStart : (streamTurnStartedAt || (Number.isFinite(parsedUpdated) ? parsedUpdated : Date.now()));
     const elapsedSec = Math.max(0, Math.floor((Date.now() - turnAnchorTime) / 1000));
     const elapsedLabel = elapsedSec >= 60 ? `${Math.floor(elapsedSec / 60)}m ${elapsedSec % 60}s` : `${elapsedSec}s`;
     messages.push(`<section class="live-work-rail" aria-label="Active agent progress"><div class="live-work-head"><span class="spinner" aria-hidden="true"></span><span class="activity-label"><span class="activity-phase-text is-shimmer">${escapeHTML(phase)}</span></span><div class="live-rail-head-right">${stepCountChip}<span class="live-work-elapsed" data-turn-started="${escapeHTML(String(turnAnchorTime))}">${escapeHTML(elapsedLabel)}</span><button type="button" class="button button-quiet live-viz-btn" data-open-visualizer="1" title="Generate a live visual dashboard for what the agent is doing (/visualize)"><span aria-hidden="true">◈</span><span>Visualize</span></button></div></div>${thoughtTickerHtml}${planHtml}${trailHtml}</section><div id="stream-slot">${streamTaskId === task.id ? buildStreamPreviewHtml(openDetails) : ''}</div>`);
@@ -6008,6 +6127,7 @@ function syncArtifactDockForTask(data, taskChanged) {
   if (artifactDockState.open && artifactDockState.manualOverrideForKey === artifact.artifactKey) return;
   if (artifactDismissedKeys.has(artifact.artifactKey)) return;
   if (!qolPrefs.autoOpenPreview) return;
+  if (window.G0DVisualizer?.isOpen?.() || window.G0DConclave?.isOpen?.() || window.G0DBrowserLive?.isOpen?.()) return;
   if (artifact.source === 'workspace') {
     openLivePreview({ taskId: task.id, entry: artifact.entry, title: artifact.title, artifactKey: artifact.artifactKey, auto: true });
   } else {
@@ -6145,6 +6265,7 @@ function renderCommands() {
     { kind: 'action', title: 'Open project', detail: 'Work in a local source copy', keywords: 'import folder workspace', run: () => openCreate(undefined, { source: 'project' }) },
     { kind: 'action', title: 'Prompt commands', detail: 'Create and edit ! shortcuts', keywords: 'prompts bang shortcuts', run: () => openSettings('prompts') },
     { kind: 'action', title: 'Scheduled Jobs & Crons', detail: 'Create, run, or pause recurring & timed automations (/schedules)', keywords: 'cron schedule recurring timer automation jobs launchd /cron /schedules', run: () => openSettings('schedules') },
+    { kind: 'action', title: 'North Star AutoResearch (Hill-Climb)', detail: 'Launch multi-hour/multi-day git-atomic autonomous optimization (/northstar)', keywords: 'northstar autoresearch hill climb optimize overnight marathon /northstar /climb', run: () => window.G0DNorthStar?.openLauncher ? window.G0DNorthStar.openLauncher() : openSettings('schedules') },
     { kind: 'action', title: 'Sounds & Notifications Settings', detail: 'Configure optional chimes, sound packs, volume & OS notifications (/alerts)', keywords: 'sound chime audio notification alert banner bell volume dock /alerts /sounds /notifications', run: () => openSettings('notifications') },
     { kind: 'action', title: window.G0DAlerts?.get?.().muted ? 'Unmute Sounds & Notifications' : 'Mute Sounds & Notifications', detail: window.G0DAlerts?.get?.().muted ? 'Resume optional chimes and desktop alerts (/mute)' : 'Silence all chimes and desktop notifications — Do Not Disturb (/mute)', keywords: 'mute unmute silence quiet dnd do not disturb sound alert notification /mute', run: () => { if (!window.G0DAlerts) return; const next = !window.G0DAlerts.get().muted; window.G0DAlerts.update({ muted: next }); toast(next ? 'Sounds & notifications muted.' : 'Sounds & notifications unmuted.'); } },
     ...(task ? [
@@ -6174,18 +6295,20 @@ function renderCommands() {
     { kind: 'action', title: 'Open Live Browser Mirror (/browser)', detail: 'Watch your agent navigate, click, and test apps live or pop out a real Chromium window', keywords: 'browser live watch screencast window headless non-headless chrome /browser', run: () => window.G0DBrowserLive?.open() },
     { kind: 'action', title: 'Toggle Visible Browser Window', detail: 'Switch the contained agent browser between headless mirror and a real visible Chromium window', keywords: 'browser window visible non-headless popout chrome watch', run: () => { window.G0DBrowserLive?.open(); window.G0DBrowserLive?.toggleWindowMode(); } },
     { kind: 'action', title: 'Open Live Sidecar Visualizer (/visualize)', detail: 'Generate an isolated interactive HTML/SVG dashboard tracking what the agent is doing live', keywords: 'visualize visualizer dashboard chart graph watch monitor /visualize', run: () => window.G0DVisualizer?.open(selectedId, { autoGenerate: true }) },
-    { kind: 'action', title: 'Open The Conclave (Multi-Agent Stage)', detail: 'Visualize parallel subagents, Diff Races, and Arena councils (/conclave)', keywords: 'conclave swarm multi agent subagent crew arena council stage /conclave /swarm', run: () => window.G0DConclave?.open() },
+    { kind: 'action', title: 'Open The Conclave (Multi-Agent Stage)', detail: 'Visualize parallel subagents, Diff Races, and Conclave councils (/conclave)', keywords: 'conclave swarm multi agent subagent crew arena council stage /conclave /swarm', run: () => window.G0DConclave?.open() },
     { kind: 'action', title: 'Open Models & Subscriptions', detail: 'CLI logins, API keys, and local models', keywords: 'claude codex gemini copilot ollama key provider /model', run: () => openSettings('models', { subtab: 'connections' }) },
+    { kind: 'action', title: 'Configure HyperTuner (AutoTemp)', detail: 'Toggle Off / Passive / Active adaptive temperature & sampling profiles', keywords: 'hypertuner autotemp autotune temperature sampling bayes top_p min_p', run: () => openSettings('hypertuner') },
     { kind: 'action', title: 'System Prompts & Tool Schemas', detail: 'Inspect and edit every system prompt & JSON tool schema (/system)', keywords: 'system prompt tool schema transparency edit override /system /schemas', run: () => openSettings('system', { subtab: 'prompts' }) },
     { kind: 'action', title: 'Prefills & Message Shaping', detail: 'Experiment with system/user conditioning and assistant/reasoning prefills (/prefill)', keywords: 'prefill shaping conditioning think reasoning steering lab /prefill /inject', run: () => openSettings('system', { subtab: 'lab' }) },
     { kind: 'action', title: 'Open Overseer Quick Controls', detail: 'Toggle Overseer auto-recovery & soft-refusal judge', keywords: 'overseer judge refusal unblock recovery', run: () => toggleOverseerPopover(true) },
     { kind: 'action', title: 'Choose Theme…', detail: 'Switch between 10 dark & light workspace themes (/theme)', keywords: 'theme skin appearance dark light color /theme', run: () => window.G0DThemes?.togglePopover?.(true) },
-    { kind: 'action', title: 'Hardened Security Mode (Red Team / Bounty)', detail: 'Strict ZDR + secret scrubbing + Safe gate + Ephemeral Burn Bag', keywords: 'hardened security red team bounty opsec zdr privacy', run: () => { openSettings('privacy'); } },
+    { kind: 'action', title: 'Hardened Security Mode (Red Team / Bounty)', detail: 'Strict ZDR + secret scrubbing + Ask Shell gate + Ephemeral Burn Bag', keywords: 'hardened security red team bounty opsec zdr privacy', run: () => { openSettings('privacy'); } },
     { kind: 'action', title: 'Open Privacy & ZDR Shield', detail: 'Zero telemetry, Hardened/Lockdown, Target Scope & Burn Bag (/privacy)', keywords: 'privacy zdr zero telemetry airgap lockdown local only audit burn scope /privacy /zdr', run: () => openSettings('privacy') },
     { kind: 'action', title: 'Open Memory & Skills', detail: 'Cross-session memory and reusable /skills', keywords: 'remember memory skills slash commands /memory /skill', run: () => openSettings('memory') },
-    { kind: 'action', title: 'Open Permission Gate', detail: 'Safe guardrails, shell commands, and checks', keywords: 'permissions approval safe permissive guardrails tools', run: () => openSettings('tools') },
+    { kind: 'action', title: 'Open Permission Gate', detail: 'Ask Shell, Auto-Edit, Autonomous, shell commands, and checks', keywords: 'permissions approval ask shell auto-edit autonomous guardrails tools', run: () => openSettings('tools') },
     { kind: 'action', title: 'Keyboard Shortcuts', detail: 'View all keyboard hotkeys and slash commands (?)', keywords: 'shortcuts hotkeys keys help ?', run: () => { dismissDrawers(); if (!$('#shortcuts-dialog')?.open) $('#shortcuts-dialog')?.showModal(); } },
     { kind: 'action', title: 'Replay Quick Tour', detail: 'Walk through GODMODƎ and GODCODƎ highlights', keywords: 'tour onboarding walkthrough guide', run: () => { window.SetupUI?.openTour?.(); } },
+    { kind: 'action', title: 'Check for Updates', detail: 'Check GitHub Releases for a newer G0DM0D3 version (zero telemetry)', keywords: 'update upgrade version release latest check', run: () => { window.checkForUpdates?.({ openSettings: true }); } },
     { kind: 'action', title: 'Settings (⌘,)', detail: 'General preferences and adaptive recovery', keywords: 'preferences theme font recovery settings', run: () => openSettings('general') },
   ];
   const themeActions = window.G0DThemes ? window.G0DThemes.list().map(t => ({
@@ -6293,11 +6416,12 @@ function renderRouting(task) {
   if (changed) { routeTaskId = task.id; routeDirty = false; setText('#route-feedback', ''); }
   if ($('#settings-dialog')?.open && !settingsTaskId) return;
   const answered = task.workspaceKind === 'conversation' && task.completionKind === 'answered';
-  const blocked = ACTIVE.has(task.status) || (TERMINAL.has(task.status) && !answered) || task.draining || isCrewBusy(task);
-  const current = routeDirty && !changed ? new Set($$('#route-options input:checked').map(input => input.value)) : new Set(taskProviders(task));
+  const blocked = (TERMINAL.has(task.status) && !answered) || task.draining || isCrewBusy(task);
+  const routeBase = Array.isArray(task.pendingProviders) && task.pendingProviders.length ? task.pendingProviders : taskProviders(task);
+  const current = routeDirty && !changed ? new Set($$('#route-options input:checked').map(input => input.value)) : new Set(routeBase);
   const providers = state.providers.filter(provider => task.fixtureId || provider.kind !== 'scripted');
   const eligible = providers.filter(provider => provider.available !== false).map(provider=>provider.id);
-  const requested = routeDirty && !changed ? $('#route-preferred').value : taskProviders(task)[0];
+  const requested = routeDirty && !changed ? $('#route-preferred').value : routeBase[0];
   const preferred = catalogId(requested) || eligible.includes(requested) ? requested : eligible[0] || '';
   $('#route-preferred').value = preferred;
   setVisible('#route-fallback-group', !catalogId(preferred));
@@ -6311,8 +6435,11 @@ function renderRouting(task) {
     $('#route-options').innerHTML = markup; settingsListContents.set($('#route-options'),markup);
   }
   const activeRoute = orderedProviders(taskProviders(task), task.providerId || preferred);
-  setText('#model-current', formatRouteSummary(activeRoute.length ? activeRoute : [task.providerId || preferred], 'Active route'));
-  setText('#route-help', isCrewBusy(task) ? 'Finish or dismiss the crew to change models.' : task.draining ? 'Wait for the request to stop.' : ACTIVE.has(task.status) ? 'Pause the task to change its model route.' : answered ? 'Your next message uses this route.' : TERMINAL.has(task.status) ? 'This task is closed. Send a follow-up to continue.' : 'Your task, files and spent budget stay intact.');
+  const nextRoute = Array.isArray(task.pendingProviders) && task.pendingProviders.length ? task.pendingProviders : null;
+  setText('#model-current', nextRoute
+    ? `${formatRouteSummary(nextRoute, 'Next message route')} · Running: ${providerById(task.providerId)?.label || task.providerId || 'Model'}`
+    : formatRouteSummary(activeRoute.length ? activeRoute : [task.providerId || preferred], 'Active route'));
+  setText('#route-help', isCrewBusy(task) ? 'Finish or dismiss the crew to change models.' : task.draining ? 'Wait for the request to stop.' : ACTIVE.has(task.status) ? 'Response in progress — changes apply automatically to your next message.' : answered ? 'Your next message uses this route.' : TERMINAL.has(task.status) ? 'This task is closed. Send a follow-up to continue.' : 'Your task, files and spent budget stay intact.');
   $('#save-route').disabled = blocked || routeBusy || !preferred;
 }
 
@@ -6366,6 +6493,7 @@ function renderSelected(data, force = false, opts = {}) {
   if (!force && signature === detailSignature) return;
   window.G0DConclave?.syncTask(task);
   window.G0DVisualizer?.onTaskChanged?.(task?.id);
+  if (window.G0DVisualizer?.isOpen?.()) window.G0DVisualizer.scheduleTelemetryPush?.();
   const oldTaskId = $('#selected-id').dataset.fullId;
   const taskChanged = oldTaskId !== task.id;
   if (taskChanged && !artifactDockState.open && !document.body.classList.contains('inspector-open') && !window.G0DConclave?.isOpen?.() && !window.G0DBrowserLive?.isOpen?.() && !window.G0DVisualizer?.isOpen?.()) {
@@ -6728,6 +6856,7 @@ async function selectTask(id) {
     splitPaneFile = null;
     diffCommentTarget = null;
     closeArtifactDock({ recordDismiss: false });
+    window.G0DVisualizer?.onTaskChanged?.(id);
     composerAutocompleteState.hide?.();
     if (typeof clearComposerAttachments === 'function') clearComposerAttachments();
   }
@@ -6866,7 +6995,7 @@ function updateFixtureHelp() {
 
 function updateCreateAvailability() {
   const providers = $$('#create-providers input:checked');
-  const ready = createSource === 'fixture' ? Boolean($('#create-fixture').value) : Boolean(importPreview && importPreview.sourceInput === $('#create-source-path').value.trim() && $('#create-objective').value.trim());
+  const ready = createSource === 'fixture' ? Boolean($('#create-fixture').value) : Boolean($('#create-source-path').value.trim() && $('#create-objective').value.trim());
   $('#create-submit').disabled = createBusy || importPreviewBusy || !providers.length || !ready;
 }
 
@@ -6917,20 +7046,20 @@ function setCreateSource(mode) {
   renderCreateProviders();
 }
 
-async function previewImport() {
+async function previewImport({ silentError = false } = {}) {
   const sourcePath = $('#create-source-path').value.trim();
-  if (!sourcePath) { errorIn('#create-error', new Error('Enter an absolute project directory.')); return; }
+  if (!sourcePath) { if (!silentError) errorIn('#create-error', new Error('Enter an absolute project directory.')); return null; }
   const version = ++importPreviewVersion;
   importPreview = null;
   importPreviewBusy = true;
   $('#preview-import').disabled = true;
-  setText('#preview-import', 'Reading…');
+  setText('#preview-import', 'Scanning…');
   setVisible('#create-error', false);
   $('#import-preview').innerHTML = '';
   updateCreateAvailability();
   try {
     const preview = await api('/api/workspaces/preview', { method: 'POST', body: JSON.stringify({ sourcePath }) });
-    if (version !== importPreviewVersion || createSource !== 'project') return;
+    if (version !== importPreviewVersion || createSource !== 'project') return null;
     importPreview = { ...preview, sourceInput: sourcePath };
     const files = preview.files ?? [];
     const omitted = preview.omitted ?? [];
@@ -6940,9 +7069,14 @@ async function previewImport() {
       ? `<div class="suggested-checks"><span class="suggested-checks-label">Detected project checks (click to add)</span><div class="suggested-checks-list">${suggestedChecks.map(check => `<button type="button" class="check-chip ${existingLines.has(check.command) ? 'is-added' : ''}" data-add-check="${escapeHTML(check.command)}" title="Detected in ${escapeHTML(check.source)}"><span class="check-chip-plus" aria-hidden="true">${existingLines.has(check.command) ? '✓' : '+'}</span><span class="check-chip-name">${escapeHTML(check.name)}</span><code>${escapeHTML(check.command)}</code></button>`).join('')}</div></div>`
       : '';
     $('#import-preview').innerHTML = `<div class="import-summary"><strong>${files.length} ${files.length === 1 ? 'file' : 'files'} ready to copy</strong><span>${(Number(preview.totalBytes ?? 0) / 1024).toFixed(1)} KiB · ${omitted.length} omitted</span><p>${escapeHTML(preview.copyPolicy ?? 'Review the included and omitted paths. This is a source-file copy, not a complete environment snapshot.')}</p></div>${suggestedHtml}<details class="import-file-list"><summary>Included files (${files.length})</summary><ul>${files.map((file) => `<li><code>${escapeHTML(file.path)}</code><span>${escapeHTML(file.bytes ?? '')} B</span></li>`).join('')}</ul></details>${omitted.length ? `<details class="import-file-list"><summary>Omitted paths (${omitted.length})</summary><ul>${omitted.map((file) => `<li><code>${escapeHTML(file.path)}</code><span>${escapeHTML(file.reason)}</span></li>`).join('')}</ul></details>` : ''}`;
-  } catch (error) { if (version === importPreviewVersion) errorIn('#create-error', error); }
-  finally { if (version === importPreviewVersion) { importPreviewBusy = false; $('#preview-import').disabled = false; setText('#preview-import', 'Preview copy'); updateCreateAvailability(); } }
+    return importPreview;
+  } catch (error) {
+    if (version === importPreviewVersion && !silentError) errorIn('#create-error', error);
+    return null;
+  }
+  finally { if (version === importPreviewVersion) { importPreviewBusy = false; $('#preview-import').disabled = false; setText('#preview-import', importPreview ? 'Re-scan' : 'Preview copy'); updateCreateAvailability(); } }
 }
+window.G0DPreviewCreateImport = () => previewImport();
 
 function openCreate(fixtureId, options = {}) {
   captureComposerDraft();
@@ -6962,10 +7096,16 @@ function openCreate(fixtureId, options = {}) {
   if (fixtureId) $('#create-fixture').value = fixtureId;
   $('#create-scenario').innerHTML = '<option value="">Normal run (default)</option>' + (state.scenarios ?? []).filter((scenario) => scenario !== 'normal').map((scenario) => `<option value="${escapeHTML(scenario)}">${escapeHTML(humanize(scenario))}</option>`).join('');
   setCreateSource(options.source ?? 'fixture');
+  renderCreateRecentProjects();
+  const initialPath = (options.sourcePath ?? (options.source === 'project' ? pendingProject?.path : '') ?? '').trim();
+  if (createSource === 'project' && initialPath) {
+    $('#create-source-path').value = initialPath;
+    void previewImport({ silentError: true });
+  }
   updateFixtureHelp();
   dismissDrawers();
   if (!$('#create-dialog').open) $('#create-dialog').showModal();
-  if (createSource === 'project' && createProjectObjective) $('#create-source-path').focus();
+  if (createSource === 'project' && createProjectObjective && !initialPath) $('#create-source-path').focus();
 }
 
 async function createTask(event) {
@@ -6978,7 +7118,11 @@ async function createTask(event) {
   const request = { providerIds, persona: $('#create-persona').value, policy: { ...RecoveryUI.policy(null, liveProviders), mode: $('#create-mode').value, returnToPrimary: $('#create-return').value === 'yes' } };
   if (workflow) request.workflow = workflow;
   if (createSource === 'project') {
-    if (!importPreview || importPreview.sourceInput !== $('#create-source-path').value.trim()) { errorIn('#create-error', new Error('Preview the current source directory before creating its copy.')); return; }
+    const sourceInput = $('#create-source-path').value.trim();
+    if (!importPreview || importPreview.sourceInput !== sourceInput) {
+      const scanned = await previewImport();
+      if (!scanned) return;
+    }
     request.sourcePath = importPreview.sourcePath;
     request.previewHash = importPreview.snapshotHash;
     request.execution = { enabled: $('#create-execution').checked, network: $('#create-network').checked, timeoutMs: 30000 };
@@ -6997,6 +7141,10 @@ async function createTask(event) {
   setVisible('#create-error', false);
   try {
     const { task } = await api('/api/tasks', { method: 'POST', body: JSON.stringify(request) });
+    if (createSource === 'project' && request.sourcePath) {
+      recordRecentProject(request.sourcePath, 'copy');
+      setPendingProject(request.sourcePath, 'copy');
+    }
     if (createComposerOrigin && createSource === 'project') {
       saveComposerDraft(createComposerOrigin, '');
       composerErrors.delete(createComposerOrigin);
@@ -7064,7 +7212,7 @@ async function saveRoute(event, catalogRoute) {
     if (selectedId !== taskId) return;
     routeDirty = false;
     if (task && selectedData) renderSelected({ ...selectedData, task }, true);
-    setText('#route-feedback', task?.completionKind === 'answered' ? 'Saved for your next message.' : 'Saved.');
+    setText('#route-feedback', task?.pendingProviders?.length ? 'Queued for your next message.' : task?.completionKind === 'answered' ? 'Saved for your next message.' : 'Saved.');
     await refresh();
   } catch (error) { if (selectedId === taskId) { routeDirty=false; setText('#route-feedback', error.message); $('#route-feedback').classList.add('error'); } }
   finally { routeBusy = false; if (selectedData?.task) renderRouting(selectedData.task); if (focusKey && selectedId === taskId && $('#settings-dialog').open && settingsPane === 'models' && document.activeElement === document.body) $$('#route-form input').find(input=>input.name===focusKey.name && input.value===focusKey.value)?.focus({preventScroll:true}); }
@@ -7437,6 +7585,26 @@ document.addEventListener('click', (event) => {
     }).then(() => refresh()).catch(err => {
       toast(err.message || 'Could not continue response.');
       continueBtn.disabled = false;
+    });
+    return;
+  }
+  const inlineCrown = event.target.closest('[data-inline-crown]');
+  if (inlineCrown && selectedData?.task) {
+    const winnerId = inlineCrown.dataset.inlineCrown;
+    const raceId = inlineCrown.dataset.inlineRaceId || null;
+    inlineCrown.disabled = true;
+    api(`/api/tasks/${encodeURIComponent(selectedData.task.id)}/race-crown`, {
+      method: 'POST',
+      body: JSON.stringify({ winnerId, raceId })
+    }).then(res => {
+      const lbl = providerById(winnerId)?.label || winnerId;
+      const d = res.delta >= 0 ? `+${res.delta}` : String(res.delta);
+      toast(`👑 Crowned ${lbl} (${d} Elo → ${res.eloAfter} · ${res.tier?.label || 'Ranked'})`);
+      inlineCrown.textContent = `👑 Crowned (${d})`;
+      window.G0DConclave?.loadLeaderboard?.();
+    }).catch(err => {
+      toast(err.message || 'Could not crown contender.');
+      inlineCrown.disabled = false;
     });
     return;
   }
@@ -7850,11 +8018,21 @@ $('#composer-form')?.addEventListener('dragleave', event => {
   }
 });
 $('#composer-form')?.addEventListener('drop', event => {
-  $('#composer-form').classList.remove('is-drop-target');
+  $('#composer-form').classList.remove('is-drop-target', 'is-folder-drop-target');
   const files = [...(event.dataTransfer?.files || [])];
   if (files.length) {
     event.preventDefault();
     addComposerFiles(files, 'dropped ');
+    return;
+  }
+  const uriRaw = (event.dataTransfer?.getData('text/uri-list') || event.dataTransfer?.getData('text/plain') || '').trim();
+  if (uriRaw) {
+    const firstLine = uriRaw.split(/\r?\n/).find(l => l && !l.startsWith('#')) || '';
+    const candidate = firstLine.startsWith('file://') ? decodeURIComponent(firstLine.replace(/^file:\/\/(?:localhost)?/i, '')) : firstLine;
+    if (/^(\/|[A-Za-z]:[\\/])/.test(candidate)) {
+      event.preventDefault();
+      handleDroppedFolderPath(candidate);
+    }
   }
 });
 
@@ -7895,14 +8073,9 @@ $('#composer-input').addEventListener('keydown', (event) => {
     $('#composer-form').requestSubmit();
   }
 });
-$('#composer-project').addEventListener('click', () => {
-  const task = selectedData?.task;
-  if (task?.workspaceKind === 'conversation') { window.openChatCode(task); return; }
-  if (!task) { openCreate(undefined, { source: 'project', objective: $('#composer-input').value, composerOrigin: selectedId || 'welcome' }); return; }
-  const shortWs = task.workspace ? task.workspace.split(/[\\/]/).pop() || task.workspace : '';
-  $('#project-location').innerHTML = `<section class="project-location"><h3>Working copy</h3><code title="${escapeHTML(task.workspace)}">${escapeHTML(shortWs)}</code><p class="field-help">The agent edits this copy.</p></section>${task.sourcePath ? `<section class="project-location"><h3>Original project</h3><code>${escapeHTML(task.sourcePath)}</code><p class="field-help">Changes reach this folder only after reviewed Apply.</p></section>` : '<p class="field-help">Example project. Your own files are unchanged.</p>'}`;
-  dismissDrawers();
-  $('#project-dialog').showModal();
+$('#composer-project').addEventListener('click', (event) => {
+  event.stopPropagation();
+  toggleProjectPopover();
 });
 $('#project-new-task').addEventListener('click',()=>{ $('#project-dialog').close(); openCreate(undefined,{source:'project', objective:$('#composer-input').value,composerOrigin:selectedId || 'welcome'}); });
 $('#project-dialog').addEventListener('close',()=>$('#composer-project').focus());
@@ -7927,7 +8100,7 @@ $('#composer-options-toggle')?.addEventListener('click', (event) => {
 document.addEventListener('click', (event) => {
   const shell = $('#composer-shell');
   if (!shell?.classList.contains('composer-options-open')) return;
-  if (event.target.closest('#composer-shell, #effort-popover, #ultra-popover, #model-picker, dialog[open]')) return;
+  if (event.target.closest('#composer-shell, #effort-popover, #ultra-popover, #project-popover, #model-picker, dialog[open]')) return;
   setComposerOptionsOpen(false);
 });
 function closeUltraPopover() {
@@ -8008,11 +8181,11 @@ function renderUltraPopover() {
   const modes = [
     ['off', 'Off', 'Direct model & fallback waterfall', false],
     ['auto_route', 'Auto-Route', hasMultipleModels ? 'Best model per prompt + local Elo' : 'Single model active (add 2+ to route)', false],
-    ['auto_arena', 'Arena Race', hasMultipleModels ? `Race ${arenaSize} models blindly + judge` : 'Needs 2+ connected models', !hasMultipleModels],
+    ['auto_arena', 'Conclave Race', hasMultipleModels ? `Race ${arenaSize} models blindly + judge` : 'Needs 2+ connected models', !hasMultipleModels],
   ];
 
   const sizeSection = hasMultipleModels ? `
-    <div class="ultra-pop-seg-row" aria-label="Arena contender count">
+    <div class="ultra-pop-seg-row" aria-label="Conclave contender count">
       <span class="ultra-pop-seg-label">Contenders</span>
       <div class="ultra-pop-seg-pills">
         ${[2, 3, 4].map(n => `<button type="button" class="ultra-pop-pill${mode === 'auto_arena' && arenaSize === n ? ' active' : ''}" data-ultra-arena-size="${n}" ${ultraRouterBusy || (n > Math.max(2, totalLiveModels)) ? 'disabled' : ''}>${n}×</button>`).join('')}
@@ -8033,7 +8206,7 @@ function renderUltraPopover() {
       </div>
     </div>`;
 
-  const statusTag = mode === 'off' ? 'Off' : mode === 'auto_route' ? 'Auto-Route active' : mode === 'manual_arena' ? `Custom ${racing?.models?.length || 2}× Arena` : `Auto-Arena ${arenaSize}×`;
+  const statusTag = mode === 'off' ? 'Off' : mode === 'auto_route' ? 'Auto-Route active' : mode === 'manual_arena' ? `Custom ${racing?.models?.length || 2}× Conclave` : `Auto-Conclave ${arenaSize}×`;
   pop.innerHTML = `
     <div class="ultra-popover-head">
       <div><strong>Ultra-Plinian</strong><small>${escapeHTML(statusTag)}</small></div>
@@ -8049,7 +8222,7 @@ function renderUltraPopover() {
     ${customLineupBanner}
     ${metaSection}
     <div class="ultra-popover-foot">
-      <button type="button" class="button button-secondary ultra-pop-customize" data-ultra-open-settings="arena">⚙ Customize Arena &amp; Routing…</button>
+      <button type="button" class="button button-secondary ultra-pop-customize" data-ultra-open-settings="arena">⚙ Customize Conclave &amp; Routing…</button>
       <span class="ultra-pop-status">${escapeHTML(task ? 'This chat' : 'Default')}</span>
     </div>`;
   positionUltraPopover();
@@ -8079,7 +8252,7 @@ $('#ultra-popover')?.addEventListener('click', async event => {
   const openSettingsBtn = event.target.closest('[data-ultra-open-settings]');
   if (openSettingsBtn) {
     closeUltraPopover();
-    await openSettings('models', { subtab: 'routing' });
+    await openSettings('autonomy', { scrollTo: openSettingsBtn.dataset.ultraOpenSettings === 'arena' ? '#race-options' : '#ultra-router-section' });
     const raceEl = $('#race-options');
     const target = (openSettingsBtn.dataset.ultraOpenSettings === 'arena' && raceEl && !raceEl.hidden)
       ? raceEl
@@ -8093,9 +8266,9 @@ $('#ultra-popover')?.addEventListener('click', async event => {
     if ([2, 3, 4].includes(n)) {
       try {
         await applyUltraCustomArena(null);
-        await updateUltraRouter({ mode: 'auto_arena', arenaSize: n }, `Ultra-Plinian Arena set to ${n} contenders.`);
+        await updateUltraRouter({ mode: 'auto_arena', arenaSize: n }, `Ultra-Plinian Conclave set to ${n} contenders.`);
       } catch (err) {
-        toast(err.message || 'Could not update Arena size.');
+        toast(err.message || 'Could not update Conclave size.');
       }
       renderUltraPopover();
     }
@@ -8117,7 +8290,7 @@ $('#ultra-popover')?.addEventListener('click', async event => {
   const mode = modeBtn.dataset.ultraPopMode;
   try {
     await applyUltraCustomArena(null);
-    const label = mode === 'off' ? 'Off' : mode === 'auto_route' ? 'Auto-Route' : 'Arena Race';
+    const label = mode === 'off' ? 'Off' : mode === 'auto_route' ? 'Auto-Route' : 'Conclave Race';
     await updateUltraRouter({ mode }, `Ultra-Plinian set to ${label}.`);
   } catch (err) {
     toast(err.message || 'Could not update Ultra-Plinian mode.');
@@ -8158,6 +8331,10 @@ function renderEffortPopover() {
     </div>
     <div class="effort-pop-list" role="radiogroup" aria-label="Thinking effort level">
       ${entries.map(([id, meta]) => `<button type="button" class="ultra-pop-card effort-pop-card${current === id ? ' active' : ''}" role="radio" aria-checked="${current === id}" data-effort-choice="${id}" ${effortBusy ? 'disabled' : ''}><strong><span aria-hidden="true">${meta.icon}</span><span>${meta.label}</span></strong><span>${meta.desc}</span></button>`).join('')}
+    </div>
+    <div class="ultra-popover-foot">
+      <button type="button" class="button button-quiet effort-open-params" data-effort-open-params>Sampling &amp; Model controls…</button>
+      <button type="button" class="button button-quiet" data-effort-open-hypertuner>HyperTuner</button>
     </div>`;
   positionEffortPopover();
 }
@@ -8180,6 +8357,16 @@ $('#composer-effort')?.addEventListener('click', event => {
 
 $('#effort-popover')?.addEventListener('click', async event => {
   if (event.target.closest('[data-close-effort-popover]')) { closeEffortPopover(); return; }
+  if (event.target.closest('[data-effort-open-params]')) {
+    closeEffortPopover();
+    $('#composer-parameters')?.click();
+    return;
+  }
+  if (event.target.closest('[data-effort-open-hypertuner]')) {
+    closeEffortPopover();
+    if (typeof openSettings === 'function') openSettings('hypertuner');
+    return;
+  }
   const btn = event.target.closest('[data-effort-choice]');
   if (!btn) return;
   const level = btn.dataset.effortChoice;
@@ -8187,14 +8374,395 @@ $('#effort-popover')?.addEventListener('click', async event => {
   await setEffortLevel(selectedData?.task || null, level);
 });
 
+function normalizeProjectPath(raw) {
+  const s = String(raw ?? '').trim();
+  if (!s) return '';
+  if (s === '/' || /^[A-Za-z]:[\\/]?$/.test(s)) return s;
+  return s.replace(/[\\/]+$/, '');
+}
+
+function projectBaseName(folderPath) {
+  const clean = normalizeProjectPath(folderPath);
+  return clean.split(/[\\/]/).filter(Boolean).pop() || clean;
+}
+
+function projectParentDir(folderPath) {
+  const clean = normalizeProjectPath(folderPath);
+  const parts = clean.split(/[\\/]/);
+  if (parts.length <= 2) return clean;
+  return parts.slice(0, -1).join('/');
+}
+
+function loadRecentProjects() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(RECENT_PROJECTS_KEY) || '[]');
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .filter(item => item && typeof item.path === 'string' && item.path.trim())
+      .slice(0, 8)
+      .map(item => {
+        const clean = normalizeProjectPath(item.path);
+        return {
+          path: clean,
+          name: item.name || projectBaseName(clean),
+          mode: item.mode === 'worktree' ? 'worktree' : 'copy',
+          lastUsed: Number(item.lastUsed || 0),
+        };
+      });
+  } catch { return []; }
+}
+
+function saveRecentProjects(list) {
+  try { localStorage.setItem(RECENT_PROJECTS_KEY, JSON.stringify(list.slice(0, 8))); } catch {}
+}
+
+function recordRecentProject(folderPath, mode = 'copy') {
+  const clean = normalizeProjectPath(folderPath);
+  if (!clean) return;
+  const current = loadRecentProjects().filter(item => item.path !== clean);
+  current.unshift({ path: clean, name: projectBaseName(clean), mode: mode === 'worktree' ? 'worktree' : 'copy', lastUsed: Date.now() });
+  saveRecentProjects(current);
+  renderCreateRecentProjects();
+  renderProjectPopover();
+}
+window.G0DRecordRecentProject = recordRecentProject;
+
+function removeRecentProject(folderPath) {
+  const clean = normalizeProjectPath(folderPath);
+  saveRecentProjects(loadRecentProjects().filter(item => item.path !== clean));
+  renderCreateRecentProjects();
+  renderProjectPopover();
+}
+
+function renderCreateRecentProjects() {
+  const bar = $('#create-recent-projects');
+  if (!bar) return;
+  const recent = loadRecentProjects();
+  if (!recent.length) { bar.classList.add('hidden'); bar.innerHTML = ''; return; }
+  bar.classList.remove('hidden');
+  bar.innerHTML = `<span class="recent-projects-label">Recent</span>${recent.slice(0, 5).map(item => `<button type="button" class="recent-project-chip" data-recent-create-path="${escapeHTML(item.path)}" title="${escapeHTML(item.path)}"><span>${escapeHTML(item.name)}</span></button>`).join('')}`;
+}
+
+async function scanPendingProjectPreview(folderPath) {
+  const clean = normalizeProjectPath(folderPath);
+  if (!clean) return;
+  const seq = ++pendingProjectPreviewSeq;
+  pendingProjectPreview = { sourceInput: clean, loading: true, error: null };
+  renderProjectPopover();
+  try {
+    const res = await api('/api/workspaces/preview', { method: 'POST', body: JSON.stringify({ sourcePath: clean }) });
+    if (seq !== pendingProjectPreviewSeq || pendingProject?.path !== clean) return;
+    pendingProjectPreview = {
+      ...res,
+      sourceInput: clean,
+      fileCount: Array.isArray(res.files) ? res.files.length : 0,
+      omittedCount: Array.isArray(res.omitted) ? res.omitted.length : 0,
+      loading: false,
+      error: null,
+    };
+  } catch (err) {
+    if (seq !== pendingProjectPreviewSeq || pendingProject?.path !== clean) return;
+    pendingProjectPreview = { sourceInput: clean, loading: false, error: err?.message || 'Unable to scan folder' };
+  }
+  renderProjectPopover();
+}
+
+function setPendingProject(folderPath, mode = 'copy', { notify = false } = {}) {
+  const clean = normalizeProjectPath(folderPath);
+  if (!clean) {
+    pendingProject = null;
+    pendingProjectPreview = null;
+    pendingProjectPreviewSeq += 1;
+    try { localStorage.removeItem(PENDING_PROJECT_KEY); } catch {}
+    renderComposer();
+    renderProjectPopover();
+    if (notify) toast('Detached project.');
+    return;
+  }
+  const normalizedMode = mode === 'worktree' ? 'worktree' : 'copy';
+  pendingProject = { path: clean, name: projectBaseName(clean), mode: normalizedMode };
+  try { localStorage.setItem(PENDING_PROJECT_KEY, JSON.stringify(pendingProject)); } catch {}
+  recordRecentProject(clean, normalizedMode);
+  if (normalizedMode === 'copy') {
+    if (!pendingProjectPreview || pendingProjectPreview.sourceInput !== clean || pendingProjectPreview.error) {
+      void scanPendingProjectPreview(clean);
+    }
+  } else {
+    pendingProjectPreview = null;
+  }
+  renderComposer();
+  renderProjectPopover();
+  if (notify) toast(`Attached ${pendingProject.name} (${normalizedMode === 'worktree' ? 'Git Worktree' : 'Isolated Copy'}).`);
+}
+
+function handleDroppedFolderPath(folderPath) {
+  const clean = normalizeProjectPath(folderPath);
+  if (!clean) return;
+  if ($('#create-dialog')?.open) {
+    setCreateSource('project');
+    $('#create-source-path').value = clean;
+    void previewImport();
+    toast(`Loaded ${projectBaseName(clean)} into New Task.`);
+    return;
+  }
+  if ($('#tree-dialog')?.open) {
+    const input = $('#tree-folder');
+    if (input) input.value = clean;
+    toast(`Loaded ${projectBaseName(clean)} into Git Worktrees.`);
+    return;
+  }
+  const task = selectedData?.task;
+  if (task?.workspaceKind === 'conversation' && typeof window.openChatCode === 'function') {
+    recordRecentProject(clean, 'worktree');
+    void window.openChatCode(task).then(() => {
+      const input = $('#tree-folder');
+      if (input) input.value = clean;
+    });
+    toast(`Ready to attach ${projectBaseName(clean)} worktree.`);
+    return;
+  }
+  if (appMode !== 'godcode') applyAppMode('godcode', { persist: true, notify: false, switchView: false });
+  if (selectedId) newConversation();
+  setPendingProject(clean, pendingProject?.mode || 'copy', { notify: true });
+  $('#composer-input')?.focus();
+}
+
+window.G0DAttachProjectFromPicker = (folder) => {
+  const clean = normalizeProjectPath(folder);
+  if (!clean) return;
+  const task = selectedData?.task;
+  if (task?.workspaceKind === 'conversation' && typeof window.openChatCode === 'function') {
+    closeProjectPopover();
+    recordRecentProject(clean, 'worktree');
+    void window.openChatCode(task).then(() => {
+      const input = $('#tree-folder');
+      if (input) input.value = clean;
+    });
+    return;
+  }
+  if (appMode !== 'godcode') applyAppMode('godcode', { persist: true, notify: false, switchView: false });
+  setPendingProject(clean, pendingProject?.mode || 'copy', { notify: true });
+  closeProjectPopover();
+  $('#composer-input')?.focus();
+};
+
+window.addEventListener('godcode-folder-drag', event => {
+  const active = Boolean(event?.detail?.active);
+  $('#composer-form')?.classList.toggle('is-folder-drop-target', active);
+});
+window.addEventListener('godcode-folder-drop', event => {
+  $('#composer-form')?.classList.remove('is-folder-drop-target');
+  const dirPath = typeof event?.detail?.path === 'string' ? event.detail.path : '';
+  if (dirPath) handleDroppedFolderPath(dirPath);
+});
+
+function closeProjectPopover() {
+  const pop = $('#project-popover');
+  if (!pop || pop.classList.contains('hidden')) return;
+  pop.classList.add('hidden');
+  $('#composer-project')?.setAttribute('aria-expanded', 'false');
+  lastDialogCloseAt = Date.now();
+}
+
+function positionProjectPopover() {
+  const pop = $('#project-popover');
+  const btn = $('#composer-project');
+  if (!pop || !btn || pop.classList.contains('hidden')) return;
+  const rect = btn.getBoundingClientRect();
+  const popW = Math.min(400, window.innerWidth - 24);
+  const left = Math.max(12, Math.min(window.innerWidth - popW - 12, rect.left));
+  const bottom = Math.max(12, window.innerHeight - rect.top + 8);
+  pop.style.left = `${Math.round(left)}px`;
+  pop.style.bottom = `${Math.round(bottom)}px`;
+}
+
+function openProjectLocationsDialog(task) {
+  if (!task) return;
+  const shortWs = task.workspace ? task.workspace.split(/[\\/]/).pop() || task.workspace : '';
+  $('#project-location').innerHTML = `<section class="project-location"><h3>Working copy</h3><code title="${escapeHTML(task.workspace)}">${escapeHTML(shortWs)}</code><p class="field-help">The agent edits this copy.</p></section>${task.sourcePath ? `<section class="project-location"><h3>Original project</h3><code>${escapeHTML(task.sourcePath)}</code><p class="field-help">Changes reach this folder only after reviewed Apply.</p></section>` : '<p class="field-help">Example project. Your own files are unchanged.</p>'}`;
+  dismissDrawers();
+  $('#project-dialog').showModal();
+}
+
+function renderProjectPopover() {
+  const pop = $('#project-popover');
+  if (!pop || pop.classList.contains('hidden')) return;
+  const task = selectedData?.task || null;
+  const recent = loadRecentProjects();
+  const hasNativeBrowse = Boolean(window.webkit?.messageHandlers?.chooseRepository);
+  let activeHtml = '';
+  if (task) {
+    const label = task.codeWorkspace ? task.codeWorkspace.repository : (projectLabel(task) || 'Current workspace');
+    const pathLine = task.sourcePath || task.codeWorkspace?.root || task.workspace || '';
+    activeHtml = `
+      <div class="project-pop-active">
+        <div class="project-pop-active-top">
+          <strong>${escapeHTML(label)}</strong>
+          <span class="project-pop-item-badge">${task.codeWorkspace ? 'Worktree' : task.sourcePath ? 'Copy' : 'Chat'}</span>
+        </div>
+        ${pathLine ? `<code class="project-pop-path" title="${escapeHTML(pathLine)}">${escapeHTML(pathLine)}</code>` : ''}
+        <div class="project-pop-actions-row">
+          ${task.workspaceKind === 'conversation' ? `<button type="button" class="button button-secondary" data-project-open-worktree>${task.codeWorkspace ? 'Open Git Worktree…' : 'Attach Git Worktree…'}</button>` : `<button type="button" class="button button-secondary" data-project-inspect>Inspect paths</button>`}
+          <button type="button" class="button button-quiet" data-project-new-task>New project task…</button>
+        </div>
+      </div>`;
+  } else if (pendingProject) {
+    let statusLine = '';
+    if (pendingProject.mode === 'worktree') {
+      statusLine = '<p class="project-pop-preview">Starts a conversation attached to a dedicated Git worktree branch.</p>';
+    } else if (pendingProjectPreview?.sourceInput === pendingProject.path) {
+      if (pendingProjectPreview.loading) statusLine = '<p class="project-pop-preview">Scanning project files…</p>';
+      else if (pendingProjectPreview.error) statusLine = `<p class="project-pop-preview is-error">${escapeHTML(pendingProjectPreview.error)}</p>`;
+      else statusLine = `<p class="project-pop-preview">✓ ${pendingProjectPreview.fileCount} files (${(Number(pendingProjectPreview.totalBytes || 0) / 1024).toFixed(1)} KiB) ready · press Enter to start</p>`;
+    }
+    activeHtml = `
+      <div class="project-pop-active">
+        <div class="project-pop-active-top">
+          <strong title="${escapeHTML(pendingProject.path)}">${escapeHTML(pendingProject.name)}</strong>
+          <button type="button" class="button button-quiet" data-project-detach>Detach</button>
+        </div>
+        <code class="project-pop-path" title="${escapeHTML(pendingProject.path)}">${escapeHTML(pendingProject.path)}</code>
+        <div class="project-pop-mode-switch" role="radiogroup" aria-label="Workspace isolation mode">
+          <button type="button" class="project-pop-mode-btn${pendingProject.mode === 'copy' ? ' active' : ''}" role="radio" aria-checked="${pendingProject.mode === 'copy'}" data-project-mode="copy">Isolated Copy</button>
+          <button type="button" class="project-pop-mode-btn${pendingProject.mode === 'worktree' ? ' active' : ''}" role="radio" aria-checked="${pendingProject.mode === 'worktree'}" data-project-mode="worktree">Git Worktree</button>
+        </div>
+        ${statusLine}
+      </div>`;
+  }
+
+  const recentHtml = recent.length
+    ? `<div class="project-pop-recent">${recent.map(item => {
+        const isCurrent = !task && pendingProject?.path === item.path;
+        return `<div class="project-pop-item${isCurrent ? ' active' : ''}"><button type="button" class="project-pop-item-main" data-project-pick="${escapeHTML(item.path)}" data-project-pick-mode="${escapeHTML(item.mode)}" title="${escapeHTML(item.path)}"><span class="project-pop-item-name">${escapeHTML(item.name)}</span><span class="project-pop-item-dir">${escapeHTML(projectParentDir(item.path))}</span></button><span class="project-pop-item-badge">${item.mode === 'worktree' ? 'Worktree' : 'Copy'}</span><button type="button" class="project-pop-item-remove" data-project-remove="${escapeHTML(item.path)}" aria-label="Remove ${escapeHTML(item.name)} from recent projects">×</button></div>`;
+      }).join('')}</div>`
+    : `<p class="project-pop-empty">Paste a folder path above${hasNativeBrowse ? ', click Browse…,' : ''} or drag any repo folder onto the composer.</p>`;
+
+  pop.innerHTML = `
+    <div class="ultra-popover-head">
+      <div><strong>Project</strong><small>${task ? 'Active session' : (pendingProject ? 'Ready to run' : 'Pick or drop a folder')}</small></div>
+      <button type="button" class="icon-button" data-close-project-popover aria-label="Close project picker">×</button>
+    </div>
+    ${activeHtml}
+    <form class="project-pop-quick-form" data-project-quick-form>
+      <input type="text" data-project-quick-input placeholder="/path/to/repo" value="${!task && pendingProject ? escapeHTML(pendingProject.path) : ''}" aria-label="Project folder path" autocomplete="off" spellcheck="false">
+      ${hasNativeBrowse ? '<button type="button" class="button button-secondary" data-project-browse>Browse…</button>' : ''}
+      <button type="submit" class="button button-primary">Attach</button>
+    </form>
+    <div class="project-pop-section-label"><span>Recent projects</span><span>${recent.length ? `${recent.length}/8` : ''}</span></div>
+    ${recentHtml}
+    <div class="ultra-popover-foot">
+      <button type="button" class="button button-quiet ultra-pop-advanced" data-project-advanced>Full task setup…</button>
+      <button type="button" class="button button-quiet ultra-pop-advanced" data-project-fixtures>Example projects</button>
+    </div>`;
+  positionProjectPopover();
+}
+
+function toggleProjectPopover(force) {
+  const pop = $('#project-popover');
+  if (!pop) return;
+  const open = typeof force === 'boolean' ? force : pop.classList.contains('hidden');
+  if (!open) { closeProjectPopover(); return; }
+  closeAllPopovers('project-popover');
+  pop.classList.remove('hidden');
+  $('#composer-project')?.setAttribute('aria-expanded', 'true');
+  renderProjectPopover();
+  if (!selectedData?.task && pendingProject?.mode === 'copy' && (!pendingProjectPreview || pendingProjectPreview.sourceInput !== pendingProject.path)) {
+    void scanPendingProjectPreview(pendingProject.path);
+  }
+}
+
+$('#project-popover')?.addEventListener('click', event => {
+  event.stopPropagation();
+  if (event.target.closest('[data-close-project-popover]')) { closeProjectPopover(); return; }
+  if (event.target.closest('[data-project-browse]')) { window.G0DDesktopBrowse?.('popover'); return; }
+  if (event.target.closest('[data-project-detach]')) { setPendingProject(null, 'copy', { notify: true }); return; }
+  const modeBtn = event.target.closest('[data-project-mode]');
+  if (modeBtn && pendingProject) {
+    setPendingProject(pendingProject.path, modeBtn.dataset.projectMode, { notify: false });
+    return;
+  }
+  const rmBtn = event.target.closest('[data-project-remove]');
+  if (rmBtn) { removeRecentProject(rmBtn.dataset.projectRemove); return; }
+  const pickBtn = event.target.closest('[data-project-pick]');
+  if (pickBtn) {
+    const pickedPath = pickBtn.dataset.projectPick;
+    const pickedMode = pickBtn.dataset.projectPickMode || 'copy';
+    const task = selectedData?.task;
+    closeProjectPopover();
+    if (task?.workspaceKind === 'conversation' && typeof window.openChatCode === 'function') {
+      void window.openChatCode(task).then(() => {
+        const input = $('#tree-folder');
+        if (input) input.value = pickedPath;
+      });
+    } else if (task) {
+      openCreate(undefined, { source: 'project', sourcePath: pickedPath, objective: $('#composer-input').value, composerOrigin: selectedId || 'welcome' });
+    } else {
+      setPendingProject(pickedPath, pickedMode, { notify: true });
+      $('#composer-input')?.focus();
+    }
+    return;
+  }
+  if (event.target.closest('[data-project-open-worktree]')) {
+    const task = selectedData?.task;
+    closeProjectPopover();
+    if (task && typeof window.openChatCode === 'function') window.openChatCode(task);
+    return;
+  }
+  if (event.target.closest('[data-project-inspect]')) {
+    const task = selectedData?.task;
+    closeProjectPopover();
+    openProjectLocationsDialog(task);
+    return;
+  }
+  if (event.target.closest('[data-project-new-task]') || event.target.closest('[data-project-advanced]')) {
+    closeProjectPopover();
+    openCreate(undefined, { source: 'project', sourcePath: pendingProject?.path || selectedData?.task?.sourcePath || '', objective: $('#composer-input').value, composerOrigin: selectedId || 'welcome' });
+    return;
+  }
+  if (event.target.closest('[data-project-fixtures]')) {
+    closeProjectPopover();
+    openCreate();
+    return;
+  }
+});
+
+$('#project-popover')?.addEventListener('submit', event => {
+  const form = event.target.closest('[data-project-quick-form]');
+  if (!form) return;
+  event.preventDefault();
+  const val = normalizeProjectPath(form.querySelector('[data-project-quick-input]')?.value || '');
+  if (!val) return;
+  const task = selectedData?.task;
+  closeProjectPopover();
+  if (task?.workspaceKind === 'conversation' && typeof window.openChatCode === 'function') {
+    recordRecentProject(val, 'worktree');
+    void window.openChatCode(task).then(() => {
+      const input = $('#tree-folder');
+      if (input) input.value = val;
+    });
+  } else if (task) {
+    openCreate(undefined, { source: 'project', sourcePath: val, objective: $('#composer-input').value, composerOrigin: selectedId || 'welcome' });
+  } else {
+    setPendingProject(val, pendingProject?.mode || 'copy', { notify: true });
+    $('#composer-input')?.focus();
+  }
+});
+
 document.addEventListener('click', event => {
   const pop = $('#ultra-popover');
   if (pop && !pop.classList.contains('hidden') && !pop.contains(event.target) && !event.target.closest('#composer-race')) closeUltraPopover();
   const epop = $('#effort-popover');
   if (epop && !epop.classList.contains('hidden') && !epop.contains(event.target) && !event.target.closest('#composer-effort')) closeEffortPopover();
+  const ppop = $('#project-popover');
+  if (ppop && !ppop.classList.contains('hidden') && !ppop.contains(event.target) && !event.target.closest('#composer-project')) closeProjectPopover();
 });
-window.addEventListener('resize', () => { positionUltraPopover(); positionEffortPopover(); });
+window.addEventListener('resize', () => { positionUltraPopover(); positionEffortPopover(); positionProjectPopover(); });
 document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && $('#project-popover') && !$('#project-popover').classList.contains('hidden')) {
+    event.preventDefault();
+    closeProjectPopover();
+    return;
+  }
   if (event.key === 'Escape' && $('#effort-popover') && !$('#effort-popover').classList.contains('hidden')) {
     event.preventDefault();
     closeEffortPopover();
@@ -8977,8 +9545,12 @@ document.addEventListener('keydown', (event) => {
   if(taskMenu){taskMenu.open=false;$('summary',taskMenu)?.focus();event.preventDefault();return;}
   if (document.body.classList.contains('inspector-open')) { setInspector(false, true); event.preventDefault(); return; }
   if (narrowLayout.matches && document.body.classList.contains('sidebar-open')) { setSidebar(false); $('#sidebar-toggle').focus(); event.preventDefault(); return; }
+  const zoomOverlay = $('.preview-overlay');
+  if (zoomOverlay) { zoomOverlay.remove(); event.preventDefault(); return; }
   if (artifactDockState.open && !artifactDockState.inspectMode && !artifactDockState.fullscreen) { closeArtifactDock({ recordDismiss: true }); event.preventDefault(); return; }
   if (window.G0DVisualizer?.isOpen?.()) { window.G0DVisualizer.close(); event.preventDefault(); return; }
+  if (window.G0DConclave?.isOpen?.()) { window.G0DConclave.close(); event.preventDefault(); return; }
+  if (window.G0DBrowserLive?.isOpen?.()) { window.G0DBrowserLive.close(); event.preventDefault(); return; }
   const activeTaskNow = selectedData?.task?.id === selectedId ? selectedData.task : null;
   if (activeTaskNow && ACTIVE.has(activeTaskNow.status) && !$('#composer-input')?.value?.trim()) {
     event.preventDefault();
@@ -9050,8 +9622,33 @@ $('#create-dialog').addEventListener('close', () => {
   }
   renderComposer();
 });
-$('#create-source-path').addEventListener('input', () => { importPreview = null; importPreviewVersion += 1; importPreviewBusy = false; $('#preview-import').disabled = false; setText('#preview-import', 'Preview copy'); $('#import-preview').innerHTML = ''; updateCreateAvailability(); });
-$('#preview-import').addEventListener('click', previewImport);
+$('#create-recent-projects')?.addEventListener('click', (event) => {
+  const chip = event.target.closest('[data-recent-create-path]');
+  if (!chip) return;
+  const val = chip.dataset.recentCreatePath || '';
+  if (!val) return;
+  $('#create-source-path').value = val;
+  void previewImport();
+});
+$('#create-source-path').addEventListener('input', () => {
+  importPreview = null;
+  importPreviewVersion += 1;
+  importPreviewBusy = false;
+  $('#preview-import').disabled = false;
+  setText('#preview-import', 'Preview copy');
+  $('#import-preview').innerHTML = '';
+  updateCreateAvailability();
+  clearTimeout(autoPreviewTimer);
+  const val = $('#create-source-path').value.trim();
+  if (createSource === 'project' && /^(\/|~\/|[A-Za-z]:[\\/])/.test(val) && val.length >= 2) {
+    autoPreviewTimer = setTimeout(() => {
+      if (createSource === 'project' && $('#create-source-path').value.trim() === val) {
+        void previewImport({ silentError: true });
+      }
+    }, 350);
+  }
+});
+$('#preview-import').addEventListener('click', () => previewImport());
 $('#create-form').addEventListener('submit', createTask);
 
 
@@ -9111,7 +9708,7 @@ $('#overseer-popover')?.addEventListener('click', async event => {
   }
   if (event.target.closest('[data-overseer-pop-settings]')) {
     toggleOverseerPopover(false);
-    openSettings('models', { subtab: 'overseer' });
+    openSettings('autonomy', { scrollTo: '#overseer-section' });
   }
 });
 $('#overseer-popover')?.addEventListener('change', event => {
@@ -9235,6 +9832,7 @@ window.toast = toast;
     { cmd: '/skill', hint: 'Save reusable skill (/skill save <name> <instructions>)' },
     { cmd: '/privacy', hint: 'Open Privacy & ZDR Shield (zero telemetry & egress controls)' },
     { cmd: '/schedules', hint: 'Open Scheduled Jobs & Cron Automations (/cron)' },
+    { cmd: '/northstar', hint: 'Launch a multi-hour North Star AutoResearch hill-climb (/climb)' },
     { cmd: '/cron', hint: 'Manage recurring cron jobs & timers' },
     { cmd: '/alerts', hint: 'Configure optional sounds & desktop notifications' },
     { cmd: '/mute', hint: 'Toggle Do Not Disturb (mute / unmute sounds & alerts)' },
@@ -9434,7 +10032,7 @@ try { const saved = JSON.parse(localStorage.getItem('g0dc0d3.recentModels') || '
 function modelSelectionLock(task) {
   if (!task) return '';
   if (isCrewBusy(task)) return 'Finish or dismiss the crew to change models.';
-  if (ACTIVE.has(task.status) || task.draining) return 'Models can be changed when this response finishes or is paused.';
+  if (task.draining) return 'Workspace work is still settling; try again in a moment.';
   if (TERMINAL.has(task.status) && !(task.workspaceKind === 'conversation' && task.completionKind === 'answered')) return 'Send a follow-up to continue this task before changing models.';
   return '';
 }
@@ -9560,7 +10158,10 @@ const PICKER_BUCKET_LABELS = {
 
 function renderModelPicker() {
   if (!$('#model-picker').open) return;
-  const task = pickerTask(), selected = task?.providerId || newConversationProviders()[0];
+  const task = pickerTask();
+  const isTaskActive = Boolean(task && ACTIVE.has(task.status));
+  const pendingNext = task && Array.isArray(task.pendingProviders) && task.pendingProviders.length ? task.pendingProviders[0] : null;
+  const selected = pendingNext || task?.providerId || newConversationProviders()[0];
   const previous = pickerModels[pickerIndex]?.id;
   const rawQuery = $('#model-picker-search').value.trim();
   const query = rawQuery.toLowerCase();
@@ -9629,7 +10230,12 @@ function renderModelPicker() {
   setText('#model-picker-scope', task ? 'This chat' : 'New chats');
   setText('#model-picker-count', pickerLoading ? 'Loading…' : `${totalMatches} ${totalMatches === 1 ? 'model' : 'models'}`);
   const race = task ? task.answerRace : RecoveryUI.preferences().answerRace;
-  setText('#model-picker-note', lock || (race ? 'Ultra-Plinian is on. This selects the model used when comparison is off.' : task ? 'Select a model for your next message.' : 'Select the default for new chats.'));
+  const activeNote = isTaskActive
+    ? (pendingNext
+        ? `Queued for your next message: ${providerById(pendingNext)?.label || pendingNext}. Current turn finishes on ${providerById(task.providerId)?.label || task.providerId}.`
+        : 'Response in progress — pick a model for your next message.')
+    : null;
+  setText('#model-picker-note', lock || activeNote || (race ? 'Ultra-Plinian is on. This selects the model used when comparison is off.' : task ? 'Select a model for your next message.' : 'Select the default for new chats.'));
   const rowsHtml = pickerModels.map((p,i) => {
     const name = p.label || p.model || p.id;
     const isOr = p.id?.startsWith('openrouter:') || p.catalogProvider === 'openrouter';
@@ -9655,6 +10261,8 @@ function renderModelPicker() {
       meta?.priceLabel || formatOpenRouterPrice(p.pricing) || '',
       meta?.contextLabel || formatOpenRouterContext(p.contextWindow) || '',
       meta?.zdr?.label || '',
+      isTaskActive && pendingNext && p.id === task.providerId ? 'Running now' : '',
+      isTaskActive && pendingNext && p.id === pendingNext ? 'Queued next' : '',
       recentModels.includes(p.id) && p.id !== selected ? 'Recent' : ''
     ].filter(Boolean).join(' · ');
     const badge = p.id === selected ? '✓' : p.catalogAdd ? '+' : '';
@@ -9747,9 +10355,14 @@ async function selectModel(id, {scope = pickerScope, backup} = {}) {
   routeBusy = true;
   renderModelPicker();
   try {
+    let queuedNext = false;
+    let keptActive = false;
     if (task) {
+      const wasActive = ACTIVE.has(task.status);
       const response = await api(`/api/tasks/${encodeURIComponent(scope)}/providers`, {method:'PATCH', body:JSON.stringify({providerIds})});
       if (selectedId === scope && selectedData) { routeDirty = false; renderSelected({...selectedData,task:response.task},true); }
+      queuedNext = wasActive && Boolean(response.task?.pendingProviders?.length);
+      keptActive = wasActive && !queuedNext;
     } else {
       preferredProvider = id;
       preferredVeniceBackup = catalogId(id) ? {primary:id,id:providerIds[1] || null} : null;
@@ -9761,11 +10374,15 @@ async function selectModel(id, {scope = pickerScope, backup} = {}) {
     recentModels = [id,...recentModels.filter(other => other !== id)].slice(0,5);
     try { localStorage.setItem('g0dc0d3.recentModels',JSON.stringify(recentModels)); } catch {}
     renderComposer();
+    const pickedLabel = providerById(id)?.label || id;
+    if (queuedNext) toast(`Queued ${pickedLabel} for your next message.`);
+    else if (keptActive) toast(`Kept ${pickedLabel} for your next message.`);
     if ($('#settings-dialog').open) {
       renderModelSettings();
-      const pickedLabel = providerById(id)?.label || id;
       const fbCount = Math.max(0, providerIds.length - 1);
-      const msg = fbCount > 0 ? `Selected ${pickedLabel} (+${fbCount} fallback${fbCount === 1 ? '' : 's'}).` : `Selected ${pickedLabel}.`;
+      const msg = queuedNext
+        ? `Queued ${pickedLabel} for your next message.`
+        : fbCount > 0 ? `Selected ${pickedLabel} (+${fbCount} fallback${fbCount === 1 ? '' : 's'}).` : `Selected ${pickedLabel}.`;
       setModelFeedback(msg);
     }
     return true;
@@ -9843,7 +10460,12 @@ window.G0DVisualizer = (function initG0DVisualizer() {
   let isOpen = false;
   let isExpanded = false;
   let activeTaskId = null;
+  let mountedTaskId = null;
   let generating = false;
+  let genSeq = 0;
+  let genAbort = null;
+  let lastMountedUrl = '';
+  let lastMountedAt = 0;
   let telemetryTimer = null;
   let pollInterval = null;
   let versionNonce = 0;
@@ -9912,8 +10534,7 @@ window.G0DVisualizer = (function initG0DVisualizer() {
       const instr = input?.value?.trim() || '';
       const tid = activeTaskId || selectedId;
       if (!tid) { toast('Select a task first.'); return; }
-      if (input) input.value = '';
-      generate(tid, instr);
+      generate(tid, instr, input);
     });
     $('#viz-iframe')?.addEventListener('load', () => {
       pushTelemetryNow();
@@ -9948,6 +10569,21 @@ window.G0DVisualizer = (function initG0DVisualizer() {
     btn.setAttribute('aria-pressed', String(isOpen));
   }
 
+  function resetStage() {
+    mountedTaskId = null;
+    lastMountedUrl = '';
+    lastMountedAt = 0;
+    const iframe = $('#viz-iframe');
+    if (iframe) {
+      iframe.classList.add('hidden');
+      iframe.removeAttribute('srcdoc');
+      iframe.src = 'about:blank';
+    }
+    $('#viz-empty')?.classList.remove('hidden');
+    const sub = $('#viz-subtitle');
+    if (sub) sub.textContent = 'Isolated sidecar telemetry dashboard';
+  }
+
   function mountIframe(taskId, vizUrl = null) {
     const iframe = $('#viz-iframe');
     const empty = $('#viz-empty');
@@ -9955,6 +10591,9 @@ window.G0DVisualizer = (function initG0DVisualizer() {
     versionNonce += 1;
     const base = vizUrl || `/api/tasks/${encodeURIComponent(taskId)}/visualizer`;
     const sep = base.includes('?') ? '&' : '?';
+    mountedTaskId = taskId;
+    lastMountedUrl = base;
+    lastMountedAt = Date.now();
     iframe.removeAttribute('srcdoc');
     iframe.src = `${base}${sep}v=${versionNonce}`;
     iframe.classList.remove('hidden');
@@ -9962,16 +10601,17 @@ window.G0DVisualizer = (function initG0DVisualizer() {
   }
 
   async function pushTelemetryNow() {
-    if (!isOpen || !activeTaskId) return;
+    if (!isOpen || !activeTaskId || mountedTaskId !== activeTaskId) return;
     const tid = activeTaskId;
     const iframe = $('#viz-iframe');
     if (!iframe || iframe.classList.contains('hidden') || !iframe.contentWindow) return;
     try {
       const payload = await api(`/api/tasks/${encodeURIComponent(tid)}/visualizer-telemetry`);
-      if (!isOpen || activeTaskId !== tid) return;
+      if (!isOpen || activeTaskId !== tid || mountedTaskId !== tid) return;
       const iframeNow = $('#viz-iframe');
       if (payload && typeof payload === 'object' && iframeNow?.contentWindow) {
-        iframeNow.contentWindow.postMessage({ ...payload, type: 'g0d:viz' }, '*');
+        const { visualizerUrl: _omitTokenUrl, ...safePayload } = payload;
+        iframeNow.contentWindow.postMessage({ ...safePayload, type: 'g0d:viz' }, '*');
         const sub = $('#viz-subtitle');
         if (sub && payload?.task) {
           const ops = Object.values(payload.toolCounts || {}).reduce((a, b) => a + Number(b || 0), 0);
@@ -9990,36 +10630,48 @@ window.G0DVisualizer = (function initG0DVisualizer() {
     }, 350);
   }
 
-  async function generate(taskId, instruction = '') {
+  async function generate(taskId, instruction = '', refineInputEl = null) {
     if (!taskId) return;
     activeTaskId = taskId;
     if (!isOpen) await open(taskId, { autoGenerate: false });
-    if (generating) return;
+    if (mountedTaskId && mountedTaskId !== taskId) resetStage();
+    genAbort?.abort();
+    const ac = new AbortController();
+    genAbort = ac;
+    const seq = ++genSeq;
     generating = true;
+    const savedInstr = instruction;
+    if (refineInputEl && savedInstr) refineInputEl.value = '';
     setStatus(instruction ? 'Refining…' : 'Forging…', true, false);
     try {
       const res = await api(`/api/tasks/${encodeURIComponent(taskId)}/visualize`, {
         method: 'POST',
         body: JSON.stringify({ instruction }),
+        signal: ac.signal,
       });
-      if (!isOpen || activeTaskId !== taskId) return;
+      if (seq !== genSeq || !isOpen || activeTaskId !== taskId) return;
       mountIframe(taskId, res?.url || null);
       setStatus(res?.generatedBy && res.generatedBy !== 'deterministic_fallback' ? 'Live · AI' : 'Live', false, false);
     } catch (err) {
+      if (err?.name === 'AbortError' || seq !== genSeq) return;
+      if (refineInputEl && savedInstr && !refineInputEl.value) refineInputEl.value = savedInstr;
       if (isOpen && activeTaskId === taskId) {
         setStatus('Error', false, true);
         toast(err.message || 'Could not generate visualizer.');
       }
     } finally {
-      generating = false;
-      const regen = $('#viz-regen-btn');
-      if (regen) regen.disabled = false;
-      const refBtn = $('#viz-refine-submit');
-      if (refBtn) refBtn.disabled = false;
-      const refInput = $('#viz-refine-input');
-      if (refInput) refInput.disabled = false;
-      const emptyBtn = $('#viz-empty-start');
-      if (emptyBtn) { emptyBtn.disabled = false; emptyBtn.textContent = '◈ Generate Visualizer'; }
+      if (seq === genSeq) {
+        generating = false;
+        if (genAbort === ac) genAbort = null;
+        const regen = $('#viz-regen-btn');
+        if (regen) regen.disabled = false;
+        const refBtn = $('#viz-refine-submit');
+        if (refBtn) refBtn.disabled = false;
+        const refInput = $('#viz-refine-input');
+        if (refInput) refInput.disabled = false;
+        const emptyBtn = $('#viz-empty-start');
+        if (emptyBtn) { emptyBtn.disabled = false; emptyBtn.textContent = '◈ Generate Visualizer'; }
+      }
     }
   }
 
@@ -10031,6 +10683,15 @@ window.G0DVisualizer = (function initG0DVisualizer() {
     }
     ensureShell();
     closeAllRightDocks({ except: 'visualizer' });
+
+    if (mountedTaskId !== tid) {
+      genAbort?.abort();
+      genAbort = null;
+      genSeq += 1;
+      generating = false;
+      resetStage();
+      setStatus('Ready', false, false);
+    }
 
     activeTaskId = tid;
     isOpen = true;
@@ -10065,19 +10726,20 @@ window.G0DVisualizer = (function initG0DVisualizer() {
     if (autoGenerate) {
       await generate(tid, '');
     } else {
-      const iframe = $('#viz-iframe');
-      if (iframe) { iframe.classList.add('hidden'); iframe.removeAttribute('srcdoc'); iframe.src = 'about:blank'; }
-      $('#viz-empty')?.classList.remove('hidden');
-      const sub = $('#viz-subtitle');
-      if (sub) sub.textContent = 'Isolated sidecar telemetry dashboard';
+      resetStage();
       setStatus('Ready', false, false);
     }
   }
 
   function close() {
+    genAbort?.abort();
+    genAbort = null;
+    genSeq += 1;
+    generating = false;
     isOpen = false;
     isExpanded = false;
     activeTaskId = null;
+    resetStage();
     const dock = dockEl();
     if (dock) {
       dock.classList.add('hidden');
@@ -10090,8 +10752,6 @@ window.G0DVisualizer = (function initG0DVisualizer() {
       eb.title = 'Expand visualizer';
       eb.setAttribute('aria-label', 'Expand visualizer');
     }
-    const sub = $('#viz-subtitle');
-    if (sub) sub.textContent = 'Isolated sidecar telemetry dashboard';
     document.body.classList.remove('visualizer-open');
     if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
     if (telemetryTimer) { clearTimeout(telemetryTimer); telemetryTimer = null; }
@@ -10105,6 +10765,11 @@ window.G0DVisualizer = (function initG0DVisualizer() {
 
   function onReadyEvent(taskId, delta) {
     if (isOpen && activeTaskId === taskId && !generating) {
+      const nextUrl = delta?.url || `/api/tasks/${encodeURIComponent(taskId)}/visualizer`;
+      if (mountedTaskId === taskId && lastMountedUrl === nextUrl && Date.now() - lastMountedAt < 2500) {
+        scheduleTelemetryPush();
+        return;
+      }
       mountIframe(taskId, delta?.url || null);
       setStatus('Live', false, false);
     }

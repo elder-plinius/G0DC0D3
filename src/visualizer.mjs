@@ -306,7 +306,14 @@ export async function generateTaskVisualizer({
           generatedBy = provider.label || provider.model || provider.id || 'sidecar';
         }
       }
-    } catch {}
+    } catch (err) {
+      if (signal?.aborted || err?.name === 'AbortError') {
+        throw Object.assign(new Error('Visualizer generation cancelled.'), { name: 'AbortError', code: 'VISUALIZER_CANCELLED' });
+      }
+    }
+  }
+  if (signal?.aborted) {
+    throw Object.assign(new Error('Visualizer generation cancelled.'), { name: 'AbortError', code: 'VISUALIZER_CANCELLED' });
   }
 
   if (!html) html = buildFallbackVisualizerHtml(payload);

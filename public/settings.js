@@ -3,61 +3,51 @@
 const choice = (name, value, label) => `<label><input type="radio" name="${name}" value="${value}"><span>${label}</span></label>`;
 const SETTINGS_ICONS = {
   general: '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3"/><path d="M10 2.5v2M10 15.5v2M3.5 10h2M14.5 10h2M4.7 4.7l1.4 1.4M13.9 13.9l1.4 1.4M15.3 4.7l-1.4 1.4M6.1 13.9l-1.4 1.4"/></svg>',
-  notifications: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3a4.5 4.5 0 0 0-4.5 4.5v2.7L4 12.6v1.2h12v-1.2l-1.5-2.4V7.5A4.5 4.5 0 0 0 10 3z"/><path d="M8.3 15.8a1.9 1.9 0 0 0 3.4 0"/></svg>',
-  shortcuts: '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="5" width="15" height="10" rx="2"/><path d="M5.5 8.5h1M8.5 8.5h1M11.5 8.5h1M14.5 8.5h.5M6.5 11.5h7"/></svg>',
   models: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.5 12 8l5.5 2-5.5 2-2 5.5L8 12l-5.5-2L8 8z"/></svg>',
-  recovery: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 7.5A6 6 0 1 0 16 11"/><path d="M15.5 3.5v4h-4"/></svg>',
+  autonomy: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6h12M4 10h12M4 14h12"/><circle cx="7.5" cy="6" r="1.8"/><circle cx="13" cy="10" r="1.8"/><circle cx="9" cy="14" r="1.8"/></svg>',
   memory: '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6.5"/><circle cx="10" cy="10" r="2.5"/><path d="M10 3.5v2M10 14.5v2"/></svg>',
-  prompts: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 5.5h12M4 10h8M4 14.5h10"/><circle cx="15.5" cy="10" r="1.5"/></svg>',
   schedules: '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6.8"/><path d="M10 6.2V10l2.8 1.8"/></svg>',
   tools: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="m10 2.5 6 2.8v4.8c0 3.8-2.6 6.3-6 7.4-3.4-1.1-6-3.6-6-7.4V5.3z"/></svg>',
-  privacy: '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="4.5" y="9" width="11" height="8" rx="2"/><path d="M7 9V6.5a3 3 0 0 1 6 0V9"/></svg>',
-  system: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6.5 7 3.5 10l3 3M13.5 7l3 3-3 3M11.2 5l-2.4 10"/></svg>',
-  advanced: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 6h13M3.5 10h13M3.5 14h13"/><circle cx="7" cy="6" r="1.6"/><circle cx="13" cy="10" r="1.6"/><circle cx="8.5" cy="14" r="1.6"/></svg>',
+  developer: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6.5 7 3.5 10l3 3M13.5 7l3 3-3 3M11.2 5l-2.4 10"/></svg>',
 };
 const SETTINGS_GROUPS = [
   {
-    label: 'Workspace',
+    label: 'Workspace & AI',
     tabs: [
-      { id: 'general', label: 'General', hint: 'Themes, text & workflow' },
-      { id: 'notifications', label: 'Sounds & Alerts', hint: 'Chimes, banners & mute', badgeId: 'settings-badge-notifications' },
-      { id: 'shortcuts', label: 'Shortcuts', hint: 'Hotkeys & /commands' },
+      { id: 'general', label: 'General', hint: 'Themes, workflow, sounds & updates', badgeId: 'settings-badge-general' },
+      { id: 'models', label: 'Models', hint: 'API keys, CLI logins, local stacks & catalog', badgeId: 'settings-badge-models' },
+      { id: 'autonomy', label: 'Autonomy & Tuning', hint: 'GODMODƎ recovery, routing, Conclave, Overseer & HyperTuner', badgeId: 'settings-badge-autonomy' },
+      { id: 'memory', label: 'Instructions & Skills', hint: 'Global rules, memory, /skills & !commands' },
     ],
   },
   {
-    label: 'Intelligence',
+    label: 'Operations & Safety',
     tabs: [
-      { id: 'models', label: 'Models & APIs', hint: 'Keys, catalog & routing', badgeId: 'settings-badge-models' },
-      { id: 'recovery', label: 'Recovery', hint: 'GODMODƎ failover & limits', badgeId: 'settings-badge-recovery' },
-    ],
-  },
-  {
-    label: 'Customization',
-    tabs: [
-      { id: 'memory', label: 'Instructions & Memory', hint: 'Rules, facts & /skills' },
-      { id: 'prompts', label: 'Prompt Commands', hint: 'Saved !chat shortcuts' },
-      { id: 'schedules', label: 'Schedules & Crons', hint: 'Recurring & timed jobs', badgeId: 'settings-badge-schedules' },
-    ],
-  },
-  {
-    label: 'Safety & System',
-    tabs: [
-      { id: 'tools', label: 'Tools & Permissions', hint: 'Gate, shell & hooks', badgeId: 'settings-badge-tools' },
-      { id: 'privacy', label: 'Privacy & ZDR', hint: 'Zero telemetry & airgap', badgeId: 'settings-badge-privacy' },
-      { id: 'system', label: 'System Lab', hint: 'Prompts, schemas & prefills', badgeId: 'settings-badge-system' },
-      { id: 'advanced', label: 'Diagnostics', hint: 'Export, storage & bench' },
+      { id: 'schedules', label: 'Schedules & Runs', hint: 'Recurring crons & North Star autonomous runs', badgeId: 'settings-badge-schedules' },
+      { id: 'tools', label: 'Permissions & Privacy', hint: 'Permission gate, shell, hooks, ZDR & airgap', badgeId: 'settings-badge-tools' },
+      { id: 'developer', label: 'Developer', hint: 'System prompts, tool schemas, prefills & diagnostics', badgeId: 'settings-badge-developer' },
     ],
   },
 ];
+const SETTINGS_TAB_ALIASES = Object.freeze({
+  notifications: { pane: 'general', scrollTo: '#settings-section-notifications' },
+  shortcuts: { pane: 'general', scrollTo: '#settings-section-shortcuts' },
+  hypertuner: { pane: 'autonomy', scrollTo: '#autotune-card' },
+  recovery: { pane: 'autonomy', scrollTo: '#settings-section-recovery' },
+  prompts: { pane: 'memory', scrollTo: '#settings-section-prompts' },
+  privacy: { pane: 'tools', scrollTo: '#settings-section-privacy' },
+  system: { pane: 'developer', scrollTo: '#settings-section-system' },
+  advanced: { pane: 'developer', scrollTo: '#settings-section-advanced' },
+});
 const SETTINGS_TABS = SETTINGS_GROUPS.flatMap(g => g.tabs);
 document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" class="modal settings-modal" aria-labelledby="settings-title">
   <header class="modal-header settings-header">
     <div class="settings-header-copy">
       <h2 id="settings-title">Settings</h2>
-      <p class="settings-header-sub">Tune workspace, models, rules, permissions, and privacy — changes save automatically.</p>
+      <p class="settings-header-sub">Changes save automatically on this device.</p>
     </div>
     <div class="settings-header-actions">
-      <div class="settings-context" id="settings-context-bar">
+      <div class="settings-context hidden" id="settings-context-bar">
         <div id="settings-scope-choices" class="segmented" aria-label="Settings apply to"><button type="button" data-settings-scope="task" aria-pressed="true">This chat</button><button type="button" data-settings-scope="defaults" aria-pressed="false">New chats</button></div>
         <span id="settings-scope" class="settings-scope-pill"></span>
       </div>
@@ -73,7 +63,7 @@ document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" clas
     </div>
     ${SETTINGS_GROUPS.map((group, gIdx) => `<div class="settings-nav-group"><span class="settings-nav-group-label">${group.label}</span>${group.tabs.map((tab, tIdx) => {
       const first = gIdx === 0 && tIdx === 0;
-      return `<button type="button" role="tab" id="settings-tab-${tab.id}" aria-controls="settings-pane-${tab.id}" aria-selected="${first}" tabindex="${first ? 0 : -1}" data-settings-tab="${tab.id}"><span class="settings-tab-icon" aria-hidden="true">${SETTINGS_ICONS[tab.id] || ''}</span><span class="settings-tab-text"><strong>${tab.label}</strong><small>${tab.hint}</small></span>${tab.badgeId ? `<span class="settings-nav-badge hidden" id="${tab.badgeId}"></span>` : ''}</button>`;
+      return `<button type="button" role="tab" id="settings-tab-${tab.id}" aria-controls="settings-pane-${tab.id}" aria-selected="${first}" tabindex="${first ? 0 : -1}" data-settings-tab="${tab.id}" title="${tab.hint}"><span class="settings-tab-icon" aria-hidden="true">${SETTINGS_ICONS[tab.id] || ''}</span><span class="settings-tab-text"><strong>${tab.label}</strong></span>${tab.badgeId ? `<span class="settings-nav-badge hidden" id="${tab.badgeId}"></span>` : ''}</button>`;
     }).join('')}</div>`).join('')}
   </nav>
   <div class="settings-body">
@@ -118,146 +108,123 @@ document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" clas
         <div class="setting-row"><div><h3>Inference connections &amp; permissions</h3><p>Review local CLI logins, API keys, and what each connection allows.</p></div><button type="button" class="button button-secondary" data-open-setup>Review setup</button></div>
         <div class="setting-row"><div><h3>Get to know GODMODƎ</h3><p>A 1-minute tour of GODMODƎ recovery, Ultra-Plinian, and model controls.</p></div><button type="button" class="button button-secondary" data-open-tour>Take a quick tour</button></div>
       </div>
-    </section>
 
-    <section id="settings-pane-notifications" role="tabpanel" aria-labelledby="settings-tab-notifications" hidden>
-      <header class="settings-pane-head">
-        <h3>Sounds &amp; Notifications</h3>
-        <p>Optional local audio cues, desktop banners, and macOS Dock attention when long runs finish or pause for approval — 100% local on this device.</p>
-      </header>
-
-      <div class="settings-card">
+      <div class="settings-card" id="settings-updates-card">
         <div class="settings-card-head">
-          <h4>Master Controls</h4>
-          <p>Quickly silence everything (Do Not Disturb) or test your current sound and notification setup.</p>
-        </div>
-        <div class="setting-row">
-          <label for="alerts-muted">Mute all sounds &amp; notifications (Do Not Disturb)<small>Silence every chime, banner, and Dock bounce without losing your settings. Shortcut: <code>/mute</code>.</small></label>
-          <div class="setting-row-controls">
-            <button type="button" class="button button-secondary settings-test-chime" id="alerts-test-all">Test alert</button>
-            <input type="checkbox" role="switch" class="toggle" id="alerts-muted" data-alert-bool="muted">
-          </div>
-        </div>
-      </div>
-
-      <div class="settings-card">
-        <div class="settings-card-head">
-          <h4>Sound Effects</h4>
-          <p>Choose an optional synthesized sound pack or native macOS system chimes, plus volume level.</p>
-        </div>
-        <div class="setting-row">
-          <label for="alerts-sounds-enabled">Enable sound effects<small>Play distinct audio cues for completions, approvals, errors, crons, and Conclave runs.</small></label>
-          <input type="checkbox" role="switch" class="toggle" id="alerts-sounds-enabled" data-alert-bool="soundsEnabled">
-        </div>
-        <div class="setting-row alerts-pack-row">
-          <div>
-            <h3>Sound pack</h3>
-            <p>Click any pack to select and preview its chime.</p>
-          </div>
-          <div class="alerts-pack-grid" id="alerts-pack-grid" role="radiogroup" aria-label="Sound pack">
-            <button type="button" class="alerts-pack-btn" role="radio" aria-checked="false" data-alert-pack="glass"><strong>Crystal Glass</strong><small>Harmonic chime</small></button>
-            <button type="button" class="alerts-pack-btn" role="radio" aria-checked="false" data-alert-pack="synth"><strong>Plinian Synth</strong><small>Warm chord</small></button>
-            <button type="button" class="alerts-pack-btn" role="radio" aria-checked="false" data-alert-pack="minimal"><strong>Studio Tap</strong><small>Subtle pulse</small></button>
-            <button type="button" class="alerts-pack-btn" role="radio" aria-checked="false" data-alert-pack="retro"><strong>Retro 8-bit</strong><small>Chiptune blip</small></button>
-            <button type="button" class="alerts-pack-btn" role="radio" aria-checked="false" data-alert-pack="system"><strong>macOS System</strong><small>Native NSSound</small></button>
-          </div>
-        </div>
-        <div class="setting-row">
-          <label for="alerts-volume">Sound volume<small>Adjust playback loudness for chimes on this device.</small></label>
-          <div class="alerts-volume-control">
-            <input type="range" id="alerts-volume" min="0" max="100" step="5" value="65" aria-label="Sound volume">
-            <span class="alerts-volume-val" id="alerts-volume-val">65%</span>
-          </div>
-        </div>
-        <div class="setting-row">
-          <label for="alerts-sound-unfocused">Only play sounds when app is unfocused<small>Stay silent while you are actively looking at G0DM0D3, and chime only when you switch away.</small></label>
-          <input type="checkbox" role="switch" class="toggle" id="alerts-sound-unfocused" data-alert-bool="onlySoundWhenUnfocused">
-        </div>
-      </div>
-
-      <div class="settings-card">
-        <div class="settings-card-head">
-          <h4>Desktop Notifications</h4>
-          <p>Opt-in OS banners (native macOS Notification Center in the desktop app, or Browser Notifications). Clicking a banner jumps straight to that chat.</p>
-        </div>
-        <div class="setting-row">
-          <label for="alerts-notifs-enabled">Enable desktop notifications<small>Off by default. Turning this on asks macOS or your browser for local notification permission.</small></label>
-          <input type="checkbox" role="switch" class="toggle" id="alerts-notifs-enabled" data-alert-bool="notificationsEnabled">
+          <h4>Software Updates</h4>
+          <p>Manual, zero-telemetry release checks against official GitHub Releases. Nothing phones home automatically.</p>
         </div>
         <div class="setting-row">
           <div>
-            <h3>System permission</h3>
-            <p id="alerts-perm-detail">Checking notification permission on this device…</p>
+            <h3>Installed version <span class="meta-chip" id="settings-app-version">v0.3.0</span></h3>
+            <p id="settings-update-summary">Checks only when you click the button. Blocked automatically in Local-Only mode.</p>
           </div>
-          <div class="setting-row-controls">
-            <span class="alerts-perm-pill" id="alerts-perm-pill">Not requested</span>
-            <button type="button" class="button button-secondary settings-test-chime" id="alerts-request-perm">Allow</button>
-            <button type="button" class="button button-quiet settings-test-chime" id="alerts-test-notif">Test banner</button>
+          <button type="button" class="button button-secondary" id="settings-check-updates">Check for updates</button>
+        </div>
+        <div id="settings-update-result" class="update-status-card hidden" role="status" aria-live="polite"></div>
+      </div>
+
+      <div id="settings-section-notifications" class="settings-subsection">
+        <div class="settings-card">
+          <div class="settings-card-head">
+            <h4>Sounds &amp; Notifications</h4>
+            <p>Optional local chimes, desktop banners, and Do Not Disturb — 100% local on this device.</p>
           </div>
-        </div>
-        <div class="setting-row">
-          <label for="alerts-only-unfocused">Only show banners when app is unfocused<small>Avoid redundant OS popups while G0DM0D3 is already in front of you.</small></label>
-          <input type="checkbox" role="switch" class="toggle" id="alerts-only-unfocused" data-alert-bool="onlyWhenUnfocused">
-        </div>
-        <div class="setting-row" id="alerts-dock-row">
-          <label for="alerts-dock-bounce">Bounce macOS Dock icon when backgrounded<small>Gently bounce the G0DM0D3 Dock icon in the desktop app when a background run completes or needs approval.</small></label>
-          <input type="checkbox" role="switch" class="toggle" id="alerts-dock-bounce" data-alert-bool="dockBounce">
+          <div class="setting-row">
+            <label for="alerts-muted">Mute all sounds &amp; notifications (Do Not Disturb)<small>Silence every chime, banner, and Dock bounce without losing your settings. Shortcut: <code>/mute</code>.</small></label>
+            <div class="setting-row-controls">
+              <button type="button" class="button button-secondary settings-test-chime" id="alerts-test-all">Test alert</button>
+              <input type="checkbox" role="switch" class="toggle" id="alerts-muted" data-alert-bool="muted">
+            </div>
+          </div>
+          <div class="setting-row">
+            <label for="alerts-sounds-enabled">Enable sound effects<small>Play distinct audio cues for completions, approvals, errors, crons, and Conclave runs.</small></label>
+            <input type="checkbox" role="switch" class="toggle" id="alerts-sounds-enabled" data-alert-bool="soundsEnabled">
+          </div>
+          <div class="setting-row alerts-pack-row">
+            <div>
+              <h3>Sound pack</h3>
+              <p>Click any pack to select and preview its chime.</p>
+            </div>
+            <div class="alerts-pack-grid" id="alerts-pack-grid" role="radiogroup" aria-label="Sound pack">
+              <button type="button" class="alerts-pack-btn" role="radio" aria-checked="false" data-alert-pack="glass"><strong>Crystal Glass</strong><small>Harmonic chime</small></button>
+              <button type="button" class="alerts-pack-btn" role="radio" aria-checked="false" data-alert-pack="synth"><strong>Warm Synth</strong><small>Warm chord</small></button>
+              <button type="button" class="alerts-pack-btn" role="radio" aria-checked="false" data-alert-pack="minimal"><strong>Studio Tap</strong><small>Subtle pulse</small></button>
+              <button type="button" class="alerts-pack-btn" role="radio" aria-checked="false" data-alert-pack="retro"><strong>Retro 8-bit</strong><small>Chiptune blip</small></button>
+              <button type="button" class="alerts-pack-btn" role="radio" aria-checked="false" data-alert-pack="system"><strong>macOS System</strong><small>Native NSSound</small></button>
+            </div>
+          </div>
+          <div class="setting-row">
+            <label for="alerts-volume">Sound volume<small>Adjust playback loudness for chimes on this device.</small></label>
+            <div class="alerts-volume-control">
+              <input type="range" id="alerts-volume" min="0" max="100" step="5" value="65" aria-label="Sound volume">
+              <span class="alerts-volume-val" id="alerts-volume-val">65%</span>
+            </div>
+          </div>
+          <div class="setting-row">
+            <label for="alerts-notifs-enabled">Enable desktop notifications<small>Opt-in OS banners. Clicking a banner jumps straight to that chat.</small></label>
+            <input type="checkbox" role="switch" class="toggle" id="alerts-notifs-enabled" data-alert-bool="notificationsEnabled">
+          </div>
+          <details class="settings-disclosure">
+            <summary>Fine-tune desktop banners &amp; per-event alerts</summary>
+            <div class="setting-row">
+              <label for="alerts-sound-unfocused">Only play sounds when app is unfocused<small>Stay silent while you are actively looking at G0DM0D3.</small></label>
+              <input type="checkbox" role="switch" class="toggle" id="alerts-sound-unfocused" data-alert-bool="onlySoundWhenUnfocused">
+            </div>
+            <div class="setting-row">
+              <div>
+                <h3>System permission</h3>
+                <p id="alerts-perm-detail">Checking notification permission on this device…</p>
+              </div>
+              <div class="setting-row-controls">
+                <span class="alerts-perm-pill" id="alerts-perm-pill">Not requested</span>
+                <button type="button" class="button button-secondary settings-test-chime" id="alerts-request-perm">Allow</button>
+                <button type="button" class="button button-quiet settings-test-chime" id="alerts-test-notif">Test banner</button>
+              </div>
+            </div>
+            <div class="setting-row">
+              <label for="alerts-only-unfocused">Only show banners when app is unfocused<small>Avoid redundant OS popups while G0DM0D3 is already in front of you.</small></label>
+              <input type="checkbox" role="switch" class="toggle" id="alerts-only-unfocused" data-alert-bool="onlyWhenUnfocused">
+            </div>
+            <div class="setting-row" id="alerts-dock-row">
+              <label for="alerts-dock-bounce">Bounce macOS Dock icon when backgrounded<small>Gently bounce the G0DM0D3 Dock icon in the desktop app when a background run completes or needs approval.</small></label>
+              <input type="checkbox" role="switch" class="toggle" id="alerts-dock-bounce" data-alert-bool="dockBounce">
+            </div>
+            <div class="setting-row"><label for="alerts-ev-completed">Task or reply finished<small>When an active build, edit, or long chat answer finishes.</small></label><div class="setting-row-controls"><button type="button" class="button button-quiet alerts-event-play" data-alert-preview="completed">Play</button><input type="checkbox" role="switch" class="toggle" id="alerts-ev-completed" data-alert-event="completed"></div></div>
+            <div class="setting-row"><label for="alerts-ev-approval">Approval required<small>When a tool call or shell command pauses waiting for your permission.</small></label><div class="setting-row-controls"><button type="button" class="button button-quiet alerts-event-play" data-alert-preview="approval">Play</button><input type="checkbox" role="switch" class="toggle" id="alerts-ev-approval" data-alert-event="approval"></div></div>
+            <div class="setting-row"><label for="alerts-ev-error">Error, blocked, or paused<small>When a run fails, hits a budget limit, or gets blocked and needs attention.</small></label><div class="setting-row-controls"><button type="button" class="button button-quiet alerts-event-play" data-alert-preview="error">Play</button><input type="checkbox" role="switch" class="toggle" id="alerts-ev-error" data-alert-event="error"></div></div>
+            <div class="setting-row"><label for="alerts-ev-schedule">Scheduled cron or North Star milestone<small>When a scheduled job completes or a North Star run hits a new record.</small></label><div class="setting-row-controls"><button type="button" class="button button-quiet alerts-event-play" data-alert-preview="schedule">Play</button><input type="checkbox" role="switch" class="toggle" id="alerts-ev-schedule" data-alert-event="schedule"></div></div>
+            <div class="setting-row"><label for="alerts-ev-conclave">Conclave squad or race finished<small>When a multi-agent Conclave squad or Race reports its verdict.</small></label><div class="setting-row-controls"><button type="button" class="button button-quiet alerts-event-play" data-alert-preview="conclave">Play</button><input type="checkbox" role="switch" class="toggle" id="alerts-ev-conclave" data-alert-event="conclave"></div></div>
+          </details>
         </div>
       </div>
 
-      <div class="settings-card">
-        <div class="settings-card-head">
-          <h4>Notify Me On…</h4>
-          <p>Choose which events trigger sounds and desktop banners, and preview each event’s signature tone.</p>
-        </div>
-        <div class="setting-row"><label for="alerts-ev-completed">Task or reply finished<small>When an active build, edit, or long chat answer finishes.</small></label><div class="setting-row-controls"><button type="button" class="button button-quiet alerts-event-play" data-alert-preview="completed">Play</button><input type="checkbox" role="switch" class="toggle" id="alerts-ev-completed" data-alert-event="completed"></div></div>
-        <div class="setting-row"><label for="alerts-ev-approval">Approval required<small>When a tool call or shell command pauses waiting for your permission.</small></label><div class="setting-row-controls"><button type="button" class="button button-quiet alerts-event-play" data-alert-preview="approval">Play</button><input type="checkbox" role="switch" class="toggle" id="alerts-ev-approval" data-alert-event="approval"></div></div>
-        <div class="setting-row"><label for="alerts-ev-error">Error, blocked, or paused<small>When a run fails, hits a budget limit, or gets blocked and needs attention.</small></label><div class="setting-row-controls"><button type="button" class="button button-quiet alerts-event-play" data-alert-preview="error">Play</button><input type="checkbox" role="switch" class="toggle" id="alerts-ev-error" data-alert-event="error"></div></div>
-        <div class="setting-row"><label for="alerts-ev-schedule">Scheduled cron job finished<small>When a recurring or one-shot automation completes in the background.</small></label><div class="setting-row-controls"><button type="button" class="button button-quiet alerts-event-play" data-alert-preview="schedule">Play</button><input type="checkbox" role="switch" class="toggle" id="alerts-ev-schedule" data-alert-event="schedule"></div></div>
-        <div class="setting-row"><label for="alerts-ev-conclave">Conclave squad or Arena finished<small>When a multi-agent squad or Diff Race reports its results.</small></label><div class="setting-row-controls"><button type="button" class="button button-quiet alerts-event-play" data-alert-preview="conclave">Play</button><input type="checkbox" role="switch" class="toggle" id="alerts-ev-conclave" data-alert-event="conclave"></div></div>
-      </div>
-    </section>
-
-    <section id="settings-pane-shortcuts" role="tabpanel" aria-labelledby="settings-tab-shortcuts" hidden>
-      <header class="settings-pane-head">
-        <h3>Keyboard Shortcuts &amp; Slash Commands</h3>
-        <p>Fast keyboard navigation and composer commands across GODMODƎ and GODCODƎ.</p>
-      </header>
-      <div class="settings-card">
-        <div class="settings-card-head">
-          <h4>Navigation &amp; Workspace</h4>
-          <p>Move between panels, tabs, and threads without lifting your hands.</p>
-        </div>
-        <div class="shortcuts-table">
-          <div class="shortcut-row"><span>Open Command Palette</span><kbd>⌘ K</kbd></div>
-          <div class="shortcut-row"><span>Open Settings</span><kbd>⌘ ,</kbd></div>
-          <div class="shortcut-row"><span>New chat / thread</span><kbd>⌘ N</kbd></div>
-          <div class="shortcut-row"><span>Focus message composer</span><kbd>/</kbd></div>
-          <div class="shortcut-row"><span>Stop active generation or close dialog</span><kbd>Esc</kbd></div>
-          <div class="shortcut-row"><span>Switch GODMODƎ / GODCODƎ mode</span><kbd>⌘ ⇧ G</kbd></div>
-          <div class="shortcut-row"><span>Toggle Plan / Build mode</span><kbd>⌘ ⇧ P</kbd></div>
-          <div class="shortcut-row"><span>Cycle Permission Gate preset</span><kbd>Shift + Tab</kbd></div>
-          <div class="shortcut-row"><span>Switch workspace tabs (Conversation → Activity)</span><kbd>1 – 5</kbd></div>
-          <div class="shortcut-row"><span>Previous / next tab or changed file</span><span class="shortcut-keys"><kbd>[ ]</kbd><kbd>j / k</kbd></span></div>
-          <div class="shortcut-row"><span>Paste screenshot into composer</span><kbd>⌘ V</kbd></div>
-          <div class="shortcut-row"><span>Zoom in / out / reset (desktop app)</span><span class="shortcut-keys"><kbd>⌘ +</kbd><kbd>⌘ -</kbd><kbd>⌘ 0</kbd></span></div>
-          <div class="shortcut-row"><span>Search inside Settings</span><kbd>⌘ F</kbd></div>
-          <div class="shortcut-row"><span>Show quick shortcuts overlay</span><kbd>?</kbd></div>
-        </div>
-      </div>
-      <div class="settings-card">
-        <div class="settings-card-head">
-          <h4>Composer Slash Commands</h4>
-          <p>Type <code>/</code> in the composer for instant autocomplete.</p>
-        </div>
-        <div class="shortcuts-table">
-          <div class="shortcut-row"><span>Switch modes &amp; reasoning effort</span><code>/godmode · /godcode · /effort · /fast</code></div>
-          <div class="shortcut-row"><span>Multi-agent, live browser &amp; megaprompts</span><code>/conclave · /browser · /forge · /ultra</code></div>
-          <div class="shortcut-row"><span>Schedules, crons &amp; sound alerts</span><code>/schedules · /cron · /alerts · /mute</code></div>
-          <div class="shortcut-row"><span>Planning, git undo &amp; thread branching</span><code>/plan · /build · /diff · /undo · /fork</code></div>
-          <div class="shortcut-row"><span>Context compaction &amp; export</span><code>/compact · /export · /model</code></div>
-          <div class="shortcut-row"><span>Memory, skills &amp; engineering workflows</span><code>/remember · /memory · /skill · /review · /test</code></div>
-          <div class="shortcut-row"><span>Prompt transparency &amp; privacy shortcuts</span><code>/system · /schemas · /prefill · /privacy · /zdr</code></div>
+      <div id="settings-section-shortcuts" class="settings-subsection">
+        <div class="settings-card">
+          <div class="setting-row settings-row-bare">
+            <div>
+              <h3>Keyboard Shortcuts &amp; Slash Commands</h3>
+              <p>Press <kbd>?</kbd> anytime outside Settings for the quick cheat sheet.</p>
+            </div>
+            <button type="button" class="button button-secondary" id="settings-open-shortcuts-modal">Open shortcuts overlay (?)</button>
+          </div>
+          <details class="settings-disclosure">
+            <summary>Browse hotkeys &amp; /commands reference</summary>
+            <div class="shortcuts-table">
+              <div class="shortcut-row"><span>Open Command Palette</span><kbd>⌘ K</kbd></div>
+              <div class="shortcut-row"><span>Open Settings</span><kbd>⌘ ,</kbd></div>
+              <div class="shortcut-row"><span>New chat / thread</span><kbd>⌘ N</kbd></div>
+              <div class="shortcut-row"><span>Focus message composer</span><kbd>/</kbd></div>
+              <div class="shortcut-row"><span>Stop active generation or close dialog</span><kbd>Esc</kbd></div>
+              <div class="shortcut-row"><span>Switch GODMODƎ / GODCODƎ mode</span><kbd>⌘ ⇧ G</kbd></div>
+              <div class="shortcut-row"><span>Toggle Plan / Build mode</span><kbd>⌘ ⇧ P</kbd></div>
+              <div class="shortcut-row"><span>Cycle Permission Gate preset</span><kbd>Shift + Tab</kbd></div>
+              <div class="shortcut-row"><span>Switch workspace tabs (Conversation → Activity)</span><kbd>1 – 5</kbd></div>
+              <div class="shortcut-row"><span>Modes, effort &amp; Conclave</span><code>/godmode · /godcode · /effort · /conclave · /northstar</code></div>
+              <div class="shortcut-row"><span>Planning, git undo &amp; memory</span><code>/plan · /build · /undo · /fork · /remember · /skill</code></div>
+              <div class="shortcut-row"><span>Privacy, lab &amp; schedules</span><code>/privacy · /zdr · /system · /prefill · /schedules · /mute</code></div>
+            </div>
+          </details>
         </div>
       </div>
     </section>
@@ -265,22 +232,26 @@ document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" clas
     <section id="settings-pane-models" role="tabpanel" aria-labelledby="settings-tab-models" hidden>
       <header class="settings-pane-head">
         <h3>Models &amp; APIs</h3>
-        <p>Connect 5 CLI subscriptions (Claude Code, Codex, Google Antigravity, Gemini, Copilot), 8 cloud APIs, or local &amp; HuggingFace stacks (Ollama, LM Studio, llama.cpp, vLLM, MLX, TGI).</p>
+        <p>Connect CLI subscriptions, cloud API keys, or local &amp; HuggingFace stacks, then search and pin models from one unified catalog.</p>
       </header>
       <div class="transparency-subtabs models-subtabs" role="tablist" aria-label="Models sections">
         <button type="button" class="transparency-subtab active" data-models-subtab="connections" role="tab" aria-selected="true">Connections &amp; Keys</button>
-        <button type="button" class="transparency-subtab" data-models-subtab="catalog" role="tab" aria-selected="false">Catalog &amp; Backups</button>
-        <button type="button" class="transparency-subtab" data-models-subtab="routing" role="tab" aria-selected="false">Routing &amp; Arena</button>
-        <button type="button" class="transparency-subtab" data-models-subtab="overseer" role="tab" aria-selected="false">Overseer</button>
+        <button type="button" class="transparency-subtab" data-models-subtab="catalog" role="tab" aria-selected="false">Catalog</button>
+      </div>
+      <div id="unified-catalog-bar" class="settings-card unified-catalog-bar hidden" aria-label="Unified model catalog filter">
+        <div class="unified-catalog-top">
+          <input type="search" id="unified-catalog-search" placeholder="Search all connected catalogs (e.g. claude, neon, gpt-5.4, deepseek, abliterated)…" aria-label="Search all connected catalogs" autocomplete="off" spellcheck="false">
+        </div>
+        <div id="unified-catalog-pills" class="transparency-cat-pills" role="group" aria-label="Filter catalog by provider"></div>
       </div>
     </section>
 
-    <section id="settings-pane-recovery" role="tabpanel" aria-labelledby="settings-tab-recovery" hidden>
+    <section id="settings-pane-autonomy" role="tabpanel" aria-labelledby="settings-tab-autonomy" hidden>
       <header class="settings-pane-head">
-        <h3>GODMODƎ Recovery &amp; Limits</h3>
-        <p>Unified control over automatic failover, retry budgets, timeouts, and long-output auto-continuation.</p>
+        <h3>Autonomy, Routing &amp; Tuning</h3>
+        <p>Unified control over GODMODƎ automatic recovery, HyperTuner sampling, Ultra-Plinian routing, Conclave races, and Overseer.</p>
       </header>
-      <div class="settings-card">
+      <div id="settings-section-recovery" class="settings-card">
         <div class="settings-card-head">
           <h4>Automatic Recovery (GODMODƎ)</h4>
           <p>When a model declines, times out, or stalls, GODMODƎ automatically retries or switches to a working fallback model.</p>
@@ -290,36 +261,32 @@ document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" clas
         <div class="setting-row"><label for="settings-return">Return to preferred model<small>Switch back to your primary model once a fallback gets the task moving.</small></label><input type="checkbox" role="switch" class="toggle" id="settings-return" data-policy="returnToPrimary"></div>
         <div class="setting-row"><label for="settings-sticky-refusal">Stick with working model after decline<small>Keep using the model that helped until it fails, instead of bouncing back to one that just declined.</small></label><input type="checkbox" role="switch" class="toggle" id="settings-sticky-refusal" data-policy="stickyOnRefusal"></div>
         <div class="setting-row"><label for="settings-learning">Learn from outcomes<small>Remember which models succeed best for different tasks — stored locally on this device only.</small></label><input type="checkbox" role="switch" class="toggle" id="settings-learning" data-policy="learning"></div>
-        <div class="settings-limits">
-          <label>Retry limit<span class="settings-field-hint">Max recovery attempts before asking you</span><input id="settings-attempts" data-policy="maxAttempts" type="number" min="0" max="100" required></label>
-          <label>Model call limit<span class="settings-field-hint">Max total turns per task before pausing (default 250)</span><input id="settings-calls" data-policy="maxCalls" type="number" min="1" max="5000" required></label>
-        </div>
-      </div>
-
-      <div class="settings-card">
-        <div class="settings-card-head">
-          <h4>Behavior, Timeouts &amp; Continuations</h4>
-          <p>Fine-tune how the runtime handles declines, long-running reasoning turns, truncated replies, and stalled loops.</p>
-        </div>
-        <fieldset class="plain-fieldset"><legend>Recovery behavior</legend><div class="recovery-choices">${[['adaptive','GODMODƎ enabled (Recommended — adapts strategy & model)'],['ask','Ask me before switching or retrying'],['switch_model','Switch models only'],['prompt_strategies','Change prompt approach only'],['hybrid','Change approach first, then switch model']].map(([value,label])=>choice('settings-mode',value,label)).join('')}</div></fieldset>
-        <div class="setting-row"><label for="settings-auto-continue">Auto-continue truncated replies<small>Automatically stitch follow-up continuations when a model hits its single-turn output token limit.</small></label><input type="checkbox" role="switch" class="toggle" id="settings-auto-continue" data-policy="autoContinue"></div>
-        <div class="settings-limits settings-limits-three">
-          <label>Request timeout (seconds)<span class="settings-field-hint">High scales ≥360s, Max ≥600s</span><input id="settings-timeout" data-policy="requestTimeoutMs" type="number" min="0.01" max="900" step="0.01" required></label>
-          <label>No-progress limit<span class="settings-field-hint">Turns before intervening (default 6)</span><input id="settings-stalls" data-policy="maxNoProgressTurns" type="number" min="2" max="30" required></label>
-          <label>Max continuation hops<span class="settings-field-hint">Auto-stitch passes (0–12, default 6)</span><input id="settings-max-continuations" data-policy="maxContinuations" type="number" min="0" max="12" required></label>
-        </div>
-        <div class="settings-field-block">
-          <label class="field-label" for="settings-strategies">Recovery approaches</label>
-          <input id="settings-strategies" data-policy="strategies" type="text">
-          <p class="field-help">Comma-separated strategy names. Retries preserve your original request and permissions.</p>
-        </div>
+        <details class="settings-disclosure">
+          <summary>Advanced recovery limits, timeouts &amp; strategies</summary>
+          <div class="settings-limits">
+            <label>Retry limit<span class="settings-field-hint">Max recovery attempts before asking you</span><input id="settings-attempts" data-policy="maxAttempts" type="number" min="0" max="100" required></label>
+            <label>Model call limit<span class="settings-field-hint">Max total turns per task before pausing (default 250)</span><input id="settings-calls" data-policy="maxCalls" type="number" min="1" max="5000" required></label>
+          </div>
+          <fieldset class="plain-fieldset"><legend>Recovery behavior</legend><div class="recovery-choices">${[['adaptive','GODMODƎ enabled (Recommended — adapts strategy & model)'],['ask','Ask me before switching or retrying'],['switch_model','Switch models only'],['prompt_strategies','Change prompt approach only'],['hybrid','Change approach first, then switch model']].map(([value,label])=>choice('settings-mode',value,label)).join('')}</div></fieldset>
+          <div class="setting-row"><label for="settings-auto-continue">Auto-continue truncated replies<small>Automatically stitch follow-up continuations when a model hits its single-turn output token limit.</small></label><input type="checkbox" role="switch" class="toggle" id="settings-auto-continue" data-policy="autoContinue"></div>
+          <div class="settings-limits settings-limits-three">
+            <label>Request timeout (seconds)<span class="settings-field-hint">High scales ≥360s, Max ≥600s</span><input id="settings-timeout" data-policy="requestTimeoutMs" type="number" min="0.01" max="900" step="0.01" required></label>
+            <label>No-progress limit<span class="settings-field-hint">Turns before intervening (default 6)</span><input id="settings-stalls" data-policy="maxNoProgressTurns" type="number" min="2" max="30" required></label>
+            <label>Max continuation hops<span class="settings-field-hint">Auto-stitch passes (0–12, default 6)</span><input id="settings-max-continuations" data-policy="maxContinuations" type="number" min="0" max="12" required></label>
+          </div>
+          <div class="settings-field-block">
+            <label class="field-label" for="settings-strategies">Recovery approaches</label>
+            <input id="settings-strategies" data-policy="strategies" type="text">
+            <p class="field-help">Comma-separated strategy names. Retries preserve your original request and permissions.</p>
+          </div>
+        </details>
       </div>
     </section>
 
     <section id="settings-pane-tools" role="tabpanel" aria-labelledby="settings-tab-tools" hidden>
       <header class="settings-pane-head">
-        <h3>Tools &amp; Permissions</h3>
-        <p>Control what actions the AI can run on its own — like editing files, executing shell commands, or browsing the web.</p>
+        <h3>Permissions &amp; Privacy</h3>
+        <p>Control what actions the AI can run locally and where your prompts are allowed to travel (zero telemetry, ZDR, and airgap).</p>
       </header>
 
       <section class="settings-card permission-gate-section" id="permission-gate-section">
@@ -328,32 +295,32 @@ document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" clas
             <h4>Permission Gate</h4>
             <p class="field-help" id="permission-gate-scope-note">Pick a preset below to decide whether tools run automatically or pause for your approval.</p>
           </div>
-          <span class="meta-chip" id="permission-gate-badge">Safe</span>
+          <span class="meta-chip" id="permission-gate-badge">Ask Shell &amp; Deletes</span>
         </div>
         <div class="permission-presets" role="group" aria-label="Permission presets">
           <button type="button" class="permission-preset-card" data-permission-preset="permissive" aria-pressed="false">
-            <strong>Permissive (Auto-Run)</strong>
-            <span>Tools run automatically inside workspace guardrails without confirmation prompts.</span>
+            <strong>Autonomous (Auto-Run)</strong>
+            <span>Runs edits and workspace commands automatically without confirmation prompts (hard blocks still apply).</span>
           </button>
           <button type="button" class="permission-preset-card" data-permission-preset="auto" aria-pressed="false">
-            <strong>Auto · AI Judge (Recommended)</strong>
-            <span>Overseer checks shell, deletes &amp; fetches; pauses only on risky ops.</span>
+            <strong>AI Screened (Overseer)</strong>
+            <span>Overseer screens shell commands, deletes &amp; fetches; pauses only when an action looks high-impact.</span>
           </button>
           <button type="button" class="permission-preset-card" data-permission-preset="acceptEdits" aria-pressed="false">
-            <strong>Accept Edits</strong>
-            <span>Auto-approve file edits; ask before shell commands, deletes &amp; commits.</span>
+            <strong>Auto-Edit · Ask Commands</strong>
+            <span>Auto-approves file edits; pauses to ask before shell commands, deletes &amp; commits.</span>
           </button>
           <button type="button" class="permission-preset-card" data-permission-preset="safe" aria-pressed="false">
-            <strong>Safe Guardrails</strong>
-            <span>Ask before any shell command or file deletion; block destructive ops.</span>
+            <strong>Ask Shell &amp; Deletes</strong>
+            <span>Auto-allows reads; pauses to confirm shell commands, file deletions &amp; destructive ops.</span>
           </button>
           <button type="button" class="permission-preset-card" data-permission-preset="default" aria-pressed="false">
-            <strong>Ask Everything</strong>
-            <span>Confirm every edit, delete, shell command, and git commit.</span>
+            <strong>Ask Every Action</strong>
+            <span>Pauses to confirm every file edit, delete, shell command, and git commit.</span>
           </button>
           <button type="button" class="permission-preset-card" data-permission-preset="dontAsk" aria-pressed="false">
-            <strong>Don’t Ask (CI)</strong>
-            <span>Silently deny shell, deletes &amp; commits without pausing.</span>
+            <strong>Headless CI (No Prompts)</strong>
+            <span>Never prompts; silently denies shell commands, deletes &amp; commits for unattended runs.</span>
           </button>
         </div>
         <p class="field-help settings-tip-bar">Shortcut: press <kbd>Shift+Tab</kbd> in the composer anytime to cycle permission modes. Custom rules below are evaluated top-to-bottom (last match wins).</p>
@@ -404,34 +371,84 @@ document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" clas
         </div>
         <div id="hooks-list"></div>
       </section>
-    </section>
-
-    <section id="settings-pane-prompts" role="tabpanel" aria-labelledby="settings-tab-prompts" hidden>
-      <header class="settings-pane-head">
-        <h3>Prompt Commands</h3>
-        <p>Save reusable <code>!shortcuts</code> so you never have to re-type favorite instructions. Type <code>!</code> in the composer to pick one, or ask chat to “revise !GRADE to score clarity.”</p>
-      </header>
-      <div class="settings-card">
-        <div class="prompt-library-head"><div><h4>Your saved commands</h4><p class="field-help">Click any command below to edit or refine it.</p></div><button type="button" class="button button-primary" id="prompt-new">+ New command</button></div>
-        <div id="prompt-library"><label for="prompt-search" class="visually-hidden">Search prompt commands</label><input id="prompt-search" type="search" placeholder="Search commands by tag or text…" autocomplete="off"><div id="prompt-list"></div></div>
-        <form id="prompt-editor" hidden>
-          <label for="prompt-tag">Command tag</label><input id="prompt-tag" placeholder="!GRADE" required maxlength="33" spellcheck="false" autocomplete="off">
-          <label for="prompt-body">Instructions</label><textarea id="prompt-body" rows="7" maxlength="6000" required></textarea>
-          <details id="prompt-revision"><summary>Revise with Venice</summary>
-            <label for="prompt-request">What should change?</label><textarea id="prompt-request" rows="2" maxlength="2000" placeholder="Give each criterion a score out of five."></textarea>
-            <button type="button" id="prompt-propose" class="button button-secondary">Draft revision</button>
-            <div id="prompt-proposal" hidden><label for="prompt-proposed">Suggested instructions</label><textarea id="prompt-proposed" rows="5" maxlength="6000"></textarea><button type="button" id="prompt-accept" class="button button-secondary">Use revision</button></div>
+      <div id="settings-section-privacy" class="settings-subsection">
+        <div class="privacy-hero" role="status">
+          <div class="privacy-hero-head">
+            <span class="zdr-badge zdr-local">ZERO TELEMETRY</span>
+            <strong>No analytics, no crash beacons, no phone-home</strong>
+          </div>
+          <p class="field-help">G0DC0D3 ships with zero telemetry endpoints, never fingerprints local CLI auth files, and forcibly disables vendor CLI telemetry env vars (<code>DO_NOT_TRACK</code>, <code>OTEL_SDK_DISABLED</code>, <code>DISABLE_TELEMETRY</code>).</p>
+        </div>
+        <section class="settings-card security-profile-card" id="security-profile-card">
+          <div class="permission-gate-header">
+            <div>
+              <h4>Security Posture &amp; Lockdown Mode</h4>
+              <p class="field-help">1-click OPSEC presets bundling ZDR enforcement, secret scrubbing, permission gates, Rules-of-Engagement scope, and ephemeral burn-bag controls for red teams, bug bounty &amp; IR.</p>
+            </div>
+            <span class="meta-chip" id="security-profile-badge">Standard</span>
+          </div>
+          <div class="security-profiles-grid" role="group" aria-label="Security posture presets">
+            <button type="button" class="security-profile-btn" data-security-profile="standard" aria-pressed="true">
+              <strong>Standard</strong>
+              <span>ZDR request routing &amp; secret scrubbing on. Everyday coding and chat.</span>
+            </button>
+            <button type="button" class="security-profile-btn is-hardened" data-security-profile="hardened" aria-pressed="false">
+              <strong>⛨ Hardened (Red Team / Bounty)</strong>
+              <span>Locks Strict ZDR + secret scrubbing + Ask Shell gate + Ephemeral engagement (no disk memory/learning).</span>
+            </button>
+            <button type="button" class="security-profile-btn is-lockdown" data-security-profile="lockdown" aria-pressed="false">
+              <strong>⛨ Airgap Lockdown</strong>
+              <span>Zero cloud egress (local models only) + Ask Every Action gate + Ephemeral engagement.</span>
+            </button>
+          </div>
+          <div class="setting-row"><label for="privacy-ephemeral-session">Ephemeral Engagement ("Burn Bag")<small>Pauses cross-session memory saves and local outcome learning so sensitive engagement artifacts stay strictly scoped.</small></label><input type="checkbox" role="switch" class="toggle" id="privacy-ephemeral-session" data-privacy-toggle="ephemeralSession"></div>
+          <div class="scope-guard-block">
+            <div class="scope-guard-head">
+              <h5>Rules-of-Engagement Target Scope (Optional)</h5>
+              <span class="meta-chip" id="privacy-scope-badge">Unrestricted</span>
+            </div>
+            <p class="field-help">Mechanically enforced before every <code>web.fetch</code> and <code>browser.open</code> call. Comma- or newline-separated hostnames or <code>*.domain</code> wildcards.</p>
+            <div class="scope-fields-grid">
+              <label class="field-label" for="privacy-scope-allow">In-scope allowlist <span class="optional">blank = allow public hosts</span><input id="privacy-scope-allow" type="text" placeholder="e.g. *.target-bounty.com, staging.app.io, localhost" autocomplete="off" spellcheck="false"></label>
+              <label class="field-label" for="privacy-scope-deny">Out-of-scope denylist <span class="optional">always blocked</span><input id="privacy-scope-deny" type="text" placeholder="e.g. prod.target-bounty.com, billing.*" autocomplete="off" spellcheck="false"></label>
+            </div>
+            <div class="burn-bag-row">
+              <button type="button" class="button button-secondary" id="privacy-scope-save">Save target scope</button>
+              <button type="button" class="button button-quiet burn-bag-btn" id="privacy-burn-btn" title="Clear outbound audit log, local learning, learned refusal signatures, and close ephemeral browser sessions">Burn session data</button>
+            </div>
+          </div>
+        </section>
+        <section class="settings-card privacy-controls-section">
+          <div class="settings-card-head">
+            <h4>Zero Data Retention (ZDR) &amp; Airgap Controls</h4>
+            <p>Control where prompts are allowed to travel and whether API keys or secrets are scrubbed first.</p>
+          </div>
+          <div class="setting-row"><label for="privacy-zdr-routing">ZDR request routing<small>Ask providers not to log or train on prompts (OpenRouter <code>provider.zdr=true</code> + <code>data_collection="deny"</code>, OpenAI <code>store=false</code>).</small></label><input type="checkbox" role="switch" class="toggle" id="privacy-zdr-routing" data-privacy-toggle="zdrRouting"></div>
+          <div class="setting-row"><label for="privacy-strict-zdr">Strict ZDR Gate<small>Block sending or falling back to providers without verified ZDR (sets <code>allow_fallbacks=false</code> on OpenRouter).</small></label><input type="checkbox" role="switch" class="toggle" id="privacy-strict-zdr" data-privacy-toggle="strictZdr"></div>
+          <div class="setting-row"><label for="privacy-local-only">Local-only airgap mode<small>Only allow loopback/LAN local models (Ollama, LM Studio, llama.cpp, vLLM, MLX, TGI) and pause cloud catalog refreshes.</small></label><input type="checkbox" role="switch" class="toggle" id="privacy-local-only" data-privacy-toggle="localOnly"></div>
+          <div class="setting-row"><label for="privacy-redact-secrets">Outbound secret redaction<small>Automatically scrub recognized API keys and tokens before cloud requests (best effort — always review sensitive files).</small></label><input type="checkbox" role="switch" class="toggle" id="privacy-redact-secrets" data-privacy-toggle="redactOutboundSecrets"></div>
+          <details class="settings-disclosure">
+            <summary>Provider ZDR posture &amp; live outbound network audit</summary>
+            <div id="privacy-providers-list" class="privacy-providers-list"></div>
+            <div class="section-header-inline">
+              <div>
+                <h4>Live outbound network audit</h4>
+                <p class="field-help">In-memory log of every inference host &amp; ZDR flag sent this session. Never written to disk.</p>
+              </div>
+              <button type="button" class="button button-quiet" id="privacy-audit-clear">Clear log</button>
+            </div>
+            <div id="privacy-audit-list" class="privacy-audit-list"></div>
           </details>
-          <div class="prompt-actions"><button type="submit" class="button button-primary">Save command</button><button type="button" class="button button-quiet" id="prompt-back">Back to list</button><button type="button" class="button button-quiet" id="prompt-delete">Delete</button></div>
-        </form>
+        </section>
       </div>
     </section>
 
     <section id="settings-pane-schedules" role="tabpanel" aria-labelledby="settings-tab-schedules" hidden>
       <header class="settings-pane-head">
-        <h3>Schedules &amp; Cron Jobs</h3>
-        <p>Run recurring or one-shot <strong>GODMODƎ</strong> prompts and <strong>GODCODƎ</strong> repository sweeps automatically in your local timezone. Unattended jobs default to the <strong>Safe</strong> permission gate and honor active Privacy / Lockdown rules.</p>
+        <h3>Schedules &amp; Autonomous Runs</h3>
+        <p>Launch multi-hour <strong>North Star AutoResearch</strong> hill-climbs or recurring <strong>GODMODƎ</strong> / <strong>GODCODƎ</strong> scheduled crons in your local timezone.</p>
       </header>
+      <div id="northstar-runs-anchor"></div>
       <div class="settings-card">
         <div class="settings-card-head">
           <div>
@@ -506,11 +523,11 @@ document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" clas
             <label class="sched-field">
               <span>Permission Gate</span>
               <select id="sched-preset">
-                <option value="safe" selected>Safe (Recommended)</option>
-                <option value="read_only">Read-only (Deny writes &amp; shell)</option>
-                <option value="dontAsk">Headless Safe (Auto-deny shell/delete)</option>
-                <option value="default">Ask Everything</option>
-                <option value="acceptEdits">Accept Edits</option>
+                <option value="safe" selected>Ask Shell &amp; Deletes (Default)</option>
+                <option value="read_only">Read-Only (Deny writes &amp; shell)</option>
+                <option value="dontAsk">Headless CI (Auto-deny shell/delete)</option>
+                <option value="default">Ask Every Action</option>
+                <option value="acceptEdits">Auto-Edit · Ask Commands</option>
               </select>
             </label>
           </div>
@@ -532,11 +549,12 @@ document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" clas
       </div>
     </section>
 
-    <section id="settings-pane-system" role="tabpanel" aria-labelledby="settings-tab-system" hidden>
+    <section id="settings-pane-developer" role="tabpanel" aria-labelledby="settings-tab-developer" hidden>
       <header class="settings-pane-head">
-        <h3>System Prompts, Tool Schemas &amp; Prefill Lab</h3>
-        <p>Full wire-level transparency: inspect or customize every instruction, tool definition, and prefill sent to models. You don’t need to change anything here for everyday use.</p>
+        <h3>Developer Lab &amp; Diagnostics</h3>
+        <p>Wire-level prompt &amp; tool schema transparency, prefill experiments, config export, storage resets, and offline harness diagnostics.</p>
       </header>
+      <div id="settings-section-system" class="settings-subsection">
       <div class="transparency-hero">
         <div class="transparency-hero-top">
           <div>
@@ -646,12 +664,74 @@ document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" clas
           <pre id="wire-tools-preview" class="wire-pre" tabindex="0"></pre>
         </details>
       </div>
+      </div>
+      <div id="settings-section-advanced" class="settings-subsection">
+        <div class="settings-card">
+          <div class="settings-card-head">
+            <h4>Workspace &amp; Config Backup</h4>
+            <p>Export or import zero-secret preferences JSON (never includes API keys or chats), or reset layout widths.</p>
+          </div>
+          <div class="setting-row"><div><h3>Export / Import preferences JSON</h3><p>Download a backup file, import from JSON, or copy to clipboard (theme, QoL, and default recovery policy).</p></div><div class="setting-row-controls"><button type="button" class="button button-secondary" id="qol-export-prefs">Export JSON</button><button type="button" class="button button-secondary" id="qol-import-prefs">Import JSON</button><button type="button" class="button button-quiet" id="qol-copy-prefs">Copy</button><input type="file" id="qol-import-file" accept=".json,application/json" hidden></div></div>
+          <div class="setting-row"><div><h3>Reset panel sizes &amp; splitters</h3><p>Restore sidebar, preview canvas, file tree, inspector, and composer heights to default widths.</p></div><button type="button" class="button button-secondary" id="qol-reset-layout">Reset layout</button></div>
+          <div class="setting-row"><div><h3>Clear recent models</h3><p>Remove your recently picked model shortcuts from the quick model switcher.</p></div><button type="button" class="button button-quiet" id="qol-clear-recent">Clear recents</button></div>
+        </div>
+
+        <div class="settings-two-col">
+          <section class="settings-card">
+            <div class="settings-card-head">
+              <h4>Local learning</h4>
+              <p>On-device outcome history used to rank fallback models.</p>
+            </div>
+            <div id="learning-content"></div>
+            <div class="settings-card-foot"><button class="button button-quiet" id="learning-reset" type="button">Reset learning</button></div>
+          </section>
+          <section class="settings-card">
+            <div class="settings-card-head">
+              <h4>Saved drafts</h4>
+              <p>Unfinished messages are cached locally on this device for 7 days.</p>
+            </div>
+            <div class="settings-card-foot"><button type="button" class="button button-quiet" id="drafts-clear">Clear drafts</button></div>
+          </section>
+        </div>
+
+        <section class="settings-card">
+          <div class="setting-row settings-row-bare">
+            <div>
+              <h3>Harness Diagnostics</h3>
+              <p>Run offline scripted fault-injection self-tests against the local controller and fixture suite. Live models are not called.</p>
+            </div>
+            <button type="button" class="button button-secondary" id="benchmark-open">Open Harness Diagnostics</button>
+          </div>
+        </section>
+
+        <section class="settings-card">
+          <div class="settings-card-head">
+            <h4>Sandbox Benchmark Fixtures (Examples)</h4>
+            <p>Built-in intentionally buggy Node.js exercises paired with independent verification probes for testing GODCODƎ without touching your own repositories.</p>
+          </div>
+          <details class="settings-disclosure" id="advanced-fixtures-disclosure">
+            <summary>Browse built-in fixtures (<span id="advanced-fixtures-count">0</span>)</summary>
+            <div class="fixture-list advanced-fixture-list" id="fixture-list"></div>
+          </details>
+          <div class="settings-card-foot">
+            <button type="button" class="button button-secondary" id="welcome-create">New fixture task…</button>
+          </div>
+        </section>
+
+        <section class="settings-card" id="effective-prompt-section">
+          <div class="settings-card-head">
+            <h4>Active task prompt &amp; tools snapshot</h4>
+            <p>Read-only preview for the selected conversation (known credentials are redacted).</p>
+          </div>
+          <pre id="effective-prompt" tabindex="0" role="region" aria-label="Effective task prompt and tool schemas"></pre>
+        </section>
+      </div>
     </section>
 
     <section id="settings-pane-memory" role="tabpanel" aria-labelledby="settings-tab-memory" hidden>
       <header class="settings-pane-head">
         <h3>Instructions, Memory &amp; Skills</h3>
-        <p>Set always-on global rules, teach the assistant facts to remember across chats, and save reusable <code>/slash</code> workflows.</p>
+        <p>Set always-on global rules, teach the assistant facts to remember across chats, and manage reusable <code>/skills</code> and <code>!prompt</code> commands.</p>
       </header>
       <section class="settings-card personal-rules-section">
         <div class="settings-card-head">
@@ -717,153 +797,22 @@ document.body.insertAdjacentHTML('beforeend', `<dialog id="settings-dialog" clas
           </form>
         </details>
       </section>
-    </section>
-
-    <section id="settings-pane-privacy" role="tabpanel" aria-labelledby="settings-tab-privacy" hidden>
-      <header class="settings-pane-head">
-        <h3>Privacy &amp; Data Retention</h3>
-        <p>Keep your prompts private, enforce Zero Data Retention (ZDR) with cloud providers, or lock inference strictly to local models on this device.</p>
-      </header>
-      <div class="privacy-hero" role="status">
-        <div class="privacy-hero-head">
-          <span class="zdr-badge zdr-local">ZERO TELEMETRY</span>
-          <strong>No analytics, no crash beacons, no phone-home</strong>
+      <div id="settings-section-prompts" class="settings-subsection">
+        <div class="settings-card">
+          <div class="prompt-library-head"><div><h4>Prompt Commands (<code>!shortcuts</code>)</h4><p class="field-help">Save reusable <code>!tags</code> so you never re-type favorite instructions. Type <code>!</code> in chat to trigger.</p></div><button type="button" class="button button-primary" id="prompt-new">+ New command</button></div>
+          <div id="prompt-library"><label for="prompt-search" class="visually-hidden">Search prompt commands</label><input id="prompt-search" type="search" placeholder="Search commands by tag or text…" autocomplete="off"><div id="prompt-list"></div></div>
+          <form id="prompt-editor" hidden>
+            <label for="prompt-tag">Command tag</label><input id="prompt-tag" placeholder="!GRADE" required maxlength="33" spellcheck="false" autocomplete="off">
+            <label for="prompt-body">Instructions</label><textarea id="prompt-body" rows="7" maxlength="6000" required></textarea>
+            <details id="prompt-revision"><summary>Revise with Venice</summary>
+              <label for="prompt-request">What should change?</label><textarea id="prompt-request" rows="2" maxlength="2000" placeholder="Give each criterion a score out of five."></textarea>
+              <button type="button" id="prompt-propose" class="button button-secondary">Draft revision</button>
+              <div id="prompt-proposal" hidden><label for="prompt-proposed">Suggested instructions</label><textarea id="prompt-proposed" rows="5" maxlength="6000"></textarea><button type="button" id="prompt-accept" class="button button-secondary">Use revision</button></div>
+            </details>
+            <div class="prompt-actions"><button type="submit" class="button button-primary">Save command</button><button type="button" class="button button-quiet" id="prompt-back">Back to list</button><button type="button" class="button button-quiet" id="prompt-delete">Delete</button></div>
+          </form>
         </div>
-        <p class="field-help">G0DC0D3 ships with zero telemetry endpoints, never fingerprints local CLI auth files, and forcibly disables vendor CLI telemetry env vars (<code>DO_NOT_TRACK</code>, <code>OTEL_SDK_DISABLED</code>, <code>DISABLE_TELEMETRY</code>).</p>
       </div>
-      <section class="settings-card security-profile-card" id="security-profile-card">
-        <div class="permission-gate-header">
-          <div>
-            <h4>Security Posture &amp; Lockdown Mode</h4>
-            <p class="field-help">1-click OPSEC presets bundling ZDR enforcement, secret scrubbing, permission gates, Rules-of-Engagement scope, and ephemeral burn-bag controls for red teams, bug bounty &amp; IR.</p>
-          </div>
-          <span class="meta-chip" id="security-profile-badge">Standard</span>
-        </div>
-        <div class="security-profiles-grid" role="group" aria-label="Security posture presets">
-          <button type="button" class="security-profile-btn" data-security-profile="standard" aria-pressed="true">
-            <strong>Standard</strong>
-            <span>ZDR request routing &amp; secret scrubbing on. Everyday coding and chat.</span>
-          </button>
-          <button type="button" class="security-profile-btn is-hardened" data-security-profile="hardened" aria-pressed="false">
-            <strong>⛨ Hardened (Red Team / Bounty)</strong>
-            <span>Locks Strict ZDR + secret scrubbing + Safe gate + Ephemeral engagement (no disk memory/learning).</span>
-          </button>
-          <button type="button" class="security-profile-btn is-lockdown" data-security-profile="lockdown" aria-pressed="false">
-            <strong>⛨ Airgap Lockdown</strong>
-            <span>Zero cloud egress (local models only) + Ask Everything gate + Ephemeral engagement.</span>
-          </button>
-        </div>
-        <div class="setting-row"><label for="privacy-ephemeral-session">Ephemeral Engagement ("Burn Bag")<small>Pauses cross-session memory saves and local outcome learning so sensitive engagement artifacts stay strictly scoped.</small></label><input type="checkbox" role="switch" class="toggle" id="privacy-ephemeral-session" data-privacy-toggle="ephemeralSession"></div>
-        <div class="scope-guard-block">
-          <div class="scope-guard-head">
-            <h5>Rules-of-Engagement Target Scope (Optional)</h5>
-            <span class="meta-chip" id="privacy-scope-badge">Unrestricted</span>
-          </div>
-          <p class="field-help">Mechanically enforced before every <code>web.fetch</code> and <code>browser.open</code> call. Comma- or newline-separated hostnames or <code>*.domain</code> wildcards.</p>
-          <div class="scope-fields-grid">
-            <label class="field-label" for="privacy-scope-allow">In-scope allowlist <span class="optional">blank = allow public hosts</span><input id="privacy-scope-allow" type="text" placeholder="e.g. *.target-bounty.com, staging.app.io, localhost" autocomplete="off" spellcheck="false"></label>
-            <label class="field-label" for="privacy-scope-deny">Out-of-scope denylist <span class="optional">always blocked</span><input id="privacy-scope-deny" type="text" placeholder="e.g. prod.target-bounty.com, billing.*" autocomplete="off" spellcheck="false"></label>
-          </div>
-          <div class="burn-bag-row">
-            <button type="button" class="button button-secondary" id="privacy-scope-save">Save target scope</button>
-            <button type="button" class="button button-quiet burn-bag-btn" id="privacy-burn-btn" title="Clear outbound audit log, local learning, learned refusal signatures, and close ephemeral browser sessions">Burn session data</button>
-          </div>
-        </div>
-      </section>
-      <section class="settings-card privacy-controls-section">
-        <div class="settings-card-head">
-          <h4>Zero Data Retention (ZDR) &amp; Airgap Controls</h4>
-          <p>Control where prompts are allowed to travel and whether API keys or secrets are scrubbed first.</p>
-        </div>
-        <div class="setting-row"><label for="privacy-zdr-routing">ZDR request routing<small>Ask providers not to log or train on prompts (OpenRouter <code>provider.zdr=true</code> + <code>data_collection="deny"</code>, OpenAI <code>store=false</code>).</small></label><input type="checkbox" role="switch" class="toggle" id="privacy-zdr-routing" data-privacy-toggle="zdrRouting"></div>
-        <div class="setting-row"><label for="privacy-strict-zdr">Strict ZDR Gate<small>Block sending or falling back to providers without verified ZDR (sets <code>allow_fallbacks=false</code> on OpenRouter).</small></label><input type="checkbox" role="switch" class="toggle" id="privacy-strict-zdr" data-privacy-toggle="strictZdr"></div>
-        <div class="setting-row"><label for="privacy-local-only">Local-only airgap mode<small>Only allow loopback/LAN local models (Ollama, LM Studio, llama.cpp, vLLM, MLX, TGI) and pause cloud catalog refreshes.</small></label><input type="checkbox" role="switch" class="toggle" id="privacy-local-only" data-privacy-toggle="localOnly"></div>
-        <div class="setting-row"><label for="privacy-redact-secrets">Outbound secret redaction<small>Automatically scrub recognized API keys and tokens before cloud requests (best effort — always review sensitive files).</small></label><input type="checkbox" role="switch" class="toggle" id="privacy-redact-secrets" data-privacy-toggle="redactOutboundSecrets"></div>
-      </section>
-      <section class="settings-card">
-        <div class="settings-card-head">
-          <h4>Provider ZDR posture</h4>
-          <p>Honest retention status per configured model — never claims ZDR where retention depends on vendor terms.</p>
-        </div>
-        <div id="privacy-providers-list" class="privacy-providers-list"></div>
-      </section>
-      <section class="settings-card">
-        <div class="section-header-inline">
-          <div>
-            <h4>Live outbound network audit</h4>
-            <p class="field-help">In-memory log of every inference host &amp; ZDR flag sent this session. Never written to disk.</p>
-          </div>
-          <button type="button" class="button button-quiet" id="privacy-audit-clear">Clear log</button>
-        </div>
-        <div id="privacy-audit-list" class="privacy-audit-list"></div>
-      </section>
-    </section>
-
-    <section id="settings-pane-advanced" role="tabpanel" aria-labelledby="settings-tab-advanced" hidden>
-      <header class="settings-pane-head">
-        <h3>Diagnostics &amp; Storage</h3>
-        <p>Config export/import, local storage resets, offline fault-injection diagnostics, and sandbox fixtures.</p>
-      </header>
-
-      <div class="settings-card">
-        <div class="settings-card-head">
-          <h4>Workspace &amp; Config Backup</h4>
-          <p>Export or import zero-secret preferences JSON (never includes API keys or chats), or reset layout widths.</p>
-        </div>
-        <div class="setting-row"><div><h3>Export / Import preferences JSON</h3><p>Download a backup file, import from JSON, or copy to clipboard (theme, QoL, and default recovery policy).</p></div><div class="setting-row-controls"><button type="button" class="button button-secondary" id="qol-export-prefs">Export JSON</button><button type="button" class="button button-secondary" id="qol-import-prefs">Import JSON</button><button type="button" class="button button-quiet" id="qol-copy-prefs">Copy</button><input type="file" id="qol-import-file" accept=".json,application/json" hidden></div></div>
-        <div class="setting-row"><div><h3>Reset panel sizes &amp; splitters</h3><p>Restore sidebar, preview canvas, file tree, inspector, and composer heights to default widths.</p></div><button type="button" class="button button-secondary" id="qol-reset-layout">Reset layout</button></div>
-        <div class="setting-row"><div><h3>Clear recent models</h3><p>Remove your recently picked model shortcuts from the quick model switcher.</p></div><button type="button" class="button button-quiet" id="qol-clear-recent">Clear recents</button></div>
-      </div>
-
-      <div class="settings-two-col">
-        <section class="settings-card">
-          <div class="settings-card-head">
-            <h4>Local learning</h4>
-            <p>On-device outcome history used to rank fallback models.</p>
-          </div>
-          <div id="learning-content"></div>
-          <div class="settings-card-foot"><button class="button button-quiet" id="learning-reset" type="button">Reset learning</button></div>
-        </section>
-        <section class="settings-card">
-          <div class="settings-card-head">
-            <h4>Saved drafts</h4>
-            <p>Unfinished messages are cached locally on this device for 7 days.</p>
-          </div>
-          <div class="settings-card-foot"><button type="button" class="button button-quiet" id="drafts-clear">Clear drafts</button></div>
-        </section>
-      </div>
-
-      <section class="settings-card">
-        <div class="setting-row settings-row-bare">
-          <div>
-            <h3>Harness Diagnostics</h3>
-            <p>Run offline scripted fault-injection self-tests against the local controller and fixture suite. Live models are not called.</p>
-          </div>
-          <button type="button" class="button button-secondary" id="benchmark-open">Open Harness Diagnostics</button>
-        </div>
-      </section>
-
-      <section class="settings-card">
-        <div class="settings-card-head">
-          <h4>Sandbox Benchmark Fixtures (Examples)</h4>
-          <p>Built-in intentionally buggy Node.js exercises paired with independent verification probes for testing GODCODƎ without touching your own repositories.</p>
-        </div>
-        <details class="settings-disclosure" id="advanced-fixtures-disclosure">
-          <summary>Browse built-in fixtures (<span id="advanced-fixtures-count">0</span>)</summary>
-          <div class="fixture-list advanced-fixture-list" id="fixture-list"></div>
-        </details>
-        <div class="settings-card-foot">
-          <button type="button" class="button button-secondary" id="welcome-create">New fixture task…</button>
-        </div>
-      </section>
-
-      <section class="settings-card" id="effective-prompt-section">
-        <div class="settings-card-head">
-          <h4>Active task prompt &amp; tools snapshot</h4>
-          <p>Read-only preview for the selected conversation (known credentials are redacted).</p>
-        </div>
-        <pre id="effective-prompt" tabindex="0" role="region" aria-label="Effective task prompt and tool schemas"></pre>
-      </section>
     </section>
   </div>
   <footer class="settings-footer"><p class="form-feedback" id="settings-feedback" role="status">Changes save automatically.</p></footer>
@@ -889,11 +838,10 @@ $('#model-controls').hidden = false;
   const atCard = document.createElement('section');
   atCard.id = 'autotune-card';
   atCard.className = 'settings-card autotune-card';
-  atCard.dataset.modelSubtab = 'routing';
   atCard.innerHTML = `<div class="settings-card-head autotune-card-head">
     <div>
       <h4>HyperTuner Hyperparameter Layer <span class="acp-proto-badge">Empirical Bayes</span></h4>
-      <p>Passively learns optimal sampling archetypes (temperature, top_p, min_p, penalties) per model × task domain × reasoning effort from real verification, Arena, Overseer, and user outcomes. Never overrides manual Model Controls sliders.</p>
+      <p>Passively learns optimal sampling archetypes (temperature, top_p, min_p, penalties) per model × task domain × reasoning effort from real verification, Conclave, Overseer, and user outcomes. Never overrides manual Model Controls sliders.</p>
     </div>
     <button type="button" class="button button-secondary" id="autotune-reset-btn">Reset learned</button>
   </div>
@@ -904,19 +852,31 @@ $('#model-controls').hidden = false;
   </div>
   <p id="autotune-summary" class="field-help">Loading HyperTuner telemetry…</p>
   <div id="autotune-learned-list" class="autotune-learned-list"></div>`;
-  $('#model-controls')?.append(atCard);
+  $('#settings-pane-autonomy')?.append(atCard);
+  for (const autonomyId of ['#ultra-router-section', '#model-groups-section', '#race-options', '#overseer-section']) {
+    const node = $(autonomyId);
+    if (node) {
+      node.removeAttribute('data-model-subtab');
+      node.classList.remove('model-subtab-hidden');
+      $('#settings-pane-autonomy')?.append(node);
+    }
+  }
 }
 
 let autoTuneState = null;
+let autoTuneReqSeq = 0;
 async function loadAutoTuneSettings() {
   const sumEl = $('#autotune-summary');
   const listEl = $('#autotune-learned-list');
   if (!sumEl || !listEl) return;
+  const seq = ++autoTuneReqSeq;
   try {
     const data = await api('/api/hypertuner');
+    if (seq !== autoTuneReqSeq) return;
     autoTuneState = data;
     renderAutoTuneCard(data);
   } catch (err) {
+    if (seq !== autoTuneReqSeq) return;
     sumEl.textContent = `Could not load HyperTuner: ${err?.message || 'error'}`;
   }
 }
@@ -932,28 +892,45 @@ function renderAutoTuneCard(data) {
   });
   const obs = Number(data.totalObservations || 0);
   const rows = Array.isArray(data.learned) ? data.learned : [];
+  const pinsObj = data.pins && typeof data.pins === 'object' ? data.pins : {};
+  const profilesList = Array.isArray(data.profiles) ? data.profiles : [];
+  const profileById = new Map(profilesList.map(p => [p.id, p]));
   const resetBtn = $('#autotune-reset-btn');
-  if (resetBtn) resetBtn.disabled = obs === 0 && rows.length === 0 && !Object.keys(data.pins || {}).length;
+  if (resetBtn) resetBtn.disabled = obs === 0 && rows.length === 0 && !Object.keys(pinsObj).length;
   const modeDesc = data.mode === 'off'
     ? 'Disabled — models use their provider defaults or manual sliders.'
     : data.mode === 'active'
       ? `Active Thompson Sampling · ${obs} recorded outcome${obs === 1 ? '' : 's'}.`
       : `Passive Conservative mode (≤10% safe adjacent exploration) · ${obs} recorded outcome${obs === 1 ? '' : 's'}.`;
   sumEl.textContent = modeDesc;
-  if (!rows.length) {
+
+  const visibleRows = rows.slice(0, 12);
+  const visiblePinKeys = new Set(visibleRows.map(r => `${r.modelKey}::${r.domain}`));
+  const orphanPins = Object.entries(pinsObj)
+    .filter(([k]) => !visiblePinKeys.has(k) && k.includes('::'))
+    .map(([k, profileId]) => {
+      const idx = k.lastIndexOf('::');
+      return { modelKey: k.slice(0, idx), domain: k.slice(idx + 2), effort: 'all', observations: 0, winRatePct: 0, pinnedProfile: profileId, bestLabel: profileById.get(profileId)?.label || profileId, bestParams: profileById.get(profileId)?.params || {} };
+    });
+  const displayRows = [...visibleRows, ...orphanPins];
+
+  if (!displayRows.length) {
     listEl.innerHTML = '<p class="field-help autotune-empty">No learned model × domain cells yet — HyperTuner observes passively on cold start and adapts automatically as tasks verify and complete.</p>';
     return;
   }
-  const profileOpts = (Array.isArray(data.profiles) ? data.profiles : []).map(p => `<option value="${escapeHTML(p.id)}">${escapeHTML(p.label)}</option>`).join('');
-  listEl.innerHTML = `<div class="autotune-table">${rows.slice(0, 12).map(r => {
-    const tVal = r.bestParams?.temperature !== undefined ? `T=${r.bestParams.temperature}` : 'default';
+  const profileOpts = profilesList.map(p => `<option value="${escapeHTML(p.id)}">${escapeHTML(p.label)}</option>`).join('');
+  listEl.innerHTML = `<div class="autotune-table">${displayRows.map(r => {
+    const pinnedMeta = r.pinnedProfile ? profileById.get(r.pinnedProfile) : null;
+    const shownLabel = pinnedMeta ? `Pinned: ${pinnedMeta.label}` : r.bestLabel;
+    const shownTemp = pinnedMeta?.params?.temperature ?? r.bestParams?.temperature;
+    const tVal = shownTemp !== undefined ? `T=${shownTemp}` : 'default';
     return `<div class="autotune-row">
       <div class="autotune-row-main">
         <strong>${escapeHTML(r.modelKey)}</strong>
         <span class="autotune-domain-pill">${escapeHTML(r.domain)} · ${escapeHTML(r.effort)}</span>
       </div>
       <div class="autotune-row-meta">
-        <span class="autotune-profile-pill">${escapeHTML(r.bestLabel)} (${escapeHTML(tVal)})</span>
+        <span class="autotune-profile-pill">${escapeHTML(shownLabel)} (${escapeHTML(tVal)})</span>
         <span class="autotune-stat">${escapeHTML(String(r.winRatePct))}% · ${escapeHTML(String(r.observations))}n</span>
         <select class="autotune-pin-select" data-at-model="${escapeHTML(r.modelKey)}" data-at-domain="${escapeHTML(r.domain)}" title="Pin a fixed sampling archetype for this model &amp; domain" aria-label="Pin sampling profile for ${escapeHTML(r.modelKey)} ${escapeHTML(r.domain)}">
           <option value="">Pin: Auto</option>${profileOpts}
@@ -962,18 +939,22 @@ function renderAutoTuneCard(data) {
     </div>`;
   }).join('')}</div>`;
   listEl.querySelectorAll('.autotune-pin-select').forEach((sel, idx) => {
-    const row = rows[idx];
+    const row = displayRows[idx];
     if (row?.pinnedProfile) sel.value = row.pinnedProfile;
     sel.addEventListener('change', async () => {
       const val = sel.value;
       const body = val
         ? { pin: { modelKey: sel.dataset.atModel, domain: sel.dataset.atDomain, profileId: val } }
         : { unpin: { modelKey: sel.dataset.atModel, domain: sel.dataset.atDomain } };
+      const seq = ++autoTuneReqSeq;
       sel.disabled = true;
       try {
-        renderAutoTuneCard(await api('/api/hypertuner', { method: 'PATCH', body: JSON.stringify(body) }));
+        const updated = await api('/api/hypertuner', { method: 'PATCH', body: JSON.stringify(body) });
+        if (seq !== autoTuneReqSeq) return;
+        renderAutoTuneCard(updated);
         settingsFeedback(val ? `Pinned ${val} profile for ${sel.dataset.atModel} (${sel.dataset.atDomain}).` : `Restored HyperTuner Auto selection for ${sel.dataset.atModel} (${sel.dataset.atDomain}).`);
       } catch (err) {
+        if (seq !== autoTuneReqSeq) return;
         settingsFeedback(err?.message || 'Could not update HyperTuner pin.', true);
         if (autoTuneState) renderAutoTuneCard(autoTuneState);
       } finally {
@@ -986,11 +967,16 @@ $$('.autotune-mode-btn').forEach(btn => {
   btn.addEventListener('click', async () => {
     const mode = btn.dataset.autotuneMode;
     const allModeBtns = $$('.autotune-mode-btn');
+    const seq = ++autoTuneReqSeq;
     allModeBtns.forEach(b => { b.disabled = true; });
     try {
-      renderAutoTuneCard(await api('/api/hypertuner', { method: 'PATCH', body: JSON.stringify({ mode }) }));
+      const updated = await api('/api/hypertuner', { method: 'PATCH', body: JSON.stringify({ mode }) });
+      if (seq !== autoTuneReqSeq) return;
+      renderAutoTuneCard(updated);
       settingsFeedback(`HyperTuner set to ${mode}.`);
+      updateSettingsNavBadges();
     } catch (err) {
+      if (seq !== autoTuneReqSeq) return;
       settingsFeedback(err?.message || 'Could not update HyperTuner mode.', true);
       if (autoTuneState) renderAutoTuneCard(autoTuneState);
     } finally {
@@ -1007,11 +993,15 @@ $('#autotune-reset-btn')?.addEventListener('click', async () => {
   });
   if (!ok) return;
   const resetBtn = $('#autotune-reset-btn');
+  const seq = ++autoTuneReqSeq;
   if (resetBtn) resetBtn.disabled = true;
   try {
-    renderAutoTuneCard(await api('/api/hypertuner', { method: 'DELETE', body: '{}' }));
+    const updated = await api('/api/hypertuner', { method: 'DELETE', body: '{}' });
+    if (seq !== autoTuneReqSeq) return;
+    renderAutoTuneCard(updated);
     settingsFeedback('HyperTuner learned profiles reset.');
   } catch (err) {
+    if (seq !== autoTuneReqSeq) return;
     settingsFeedback(err?.message || 'Could not reset HyperTuner.', true);
     if (resetBtn) resetBtn.disabled = false;
   }
@@ -1135,12 +1125,12 @@ function rulesSignature(rules) {
 }
 
 const PERMISSION_PRESET_LABELS = Object.freeze({
-  permissive: 'Permissive',
-  auto: 'Auto (AI Judge)',
-  acceptEdits: 'Accept Edits',
-  safe: 'Safe Guardrails',
-  default: 'Ask Everything',
-  dontAsk: 'Don’t Ask (CI)',
+  permissive: 'Autonomous',
+  auto: 'AI Screened',
+  acceptEdits: 'Auto-Edit',
+  safe: 'Ask Shell & Deletes',
+  default: 'Ask Every Action',
+  dontAsk: 'Headless CI',
 });
 
 function detectPermissionPreset(rules) {
@@ -1596,8 +1586,69 @@ async function loadHooksSettings() {
 }
 
 let modelsSubtab = 'connections';
+let unifiedCatalogProvider = 'all';
+const CATALOG_PROVIDERS = [
+  { id: 'openrouter', label: 'OpenRouter', browserId: 'openrouter-browser', filterId: 'openrouter-filter' },
+  { id: 'openai', label: 'OpenAI', browserId: 'openai-browser', filterId: 'openai-filter' },
+  { id: 'anthropic', label: 'Anthropic', browserId: 'anthropic-browser', filterId: 'anthropic-filter' },
+  { id: 'xai', label: 'xAI', browserId: 'xai-browser', filterId: 'xai-filter' },
+  { id: 'gemini', label: 'Gemini', browserId: 'gemini-browser', filterId: 'gemini-filter' },
+  { id: 'meta', label: 'Meta AI', browserId: 'meta-browser', filterId: 'meta-filter' },
+  { id: 'venice', label: 'Venice', browserId: 'venice-browser', filterId: null },
+];
+function syncUnifiedCatalogBar() {
+  const bar = $('#unified-catalog-bar');
+  const pillsEl = $('#unified-catalog-pills');
+  if (!bar || !pillsEl) return;
+  const isCatalog = modelsSubtab === 'catalog';
+  const connected = CATALOG_PROVIDERS.filter(p => {
+    const el = $(`#${p.browserId}`);
+    return el && !el.hidden && !el.classList.contains('hidden');
+  });
+  bar.classList.toggle('hidden', !isCatalog || connected.length === 0);
+  if (!isCatalog || !connected.length) return;
+  if (unifiedCatalogProvider !== 'all' && !connected.some(p => p.id === unifiedCatalogProvider)) {
+    unifiedCatalogProvider = 'all';
+  }
+  const pills = [
+    `<button type="button" class="transparency-cat-pill${unifiedCatalogProvider === 'all' ? ' active' : ''}" data-unified-cat="all">All (${connected.length})</button>`,
+    ...connected.map(p => `<button type="button" class="transparency-cat-pill${unifiedCatalogProvider === p.id ? ' active' : ''}" data-unified-cat="${p.id}">${escapeHTML(p.label)}</button>`)
+  ].join('');
+  if (pillsEl.dataset.lastHtml !== pills) {
+    pillsEl.dataset.lastHtml = pills;
+    pillsEl.innerHTML = pills;
+  }
+  for (const p of CATALOG_PROVIDERS) {
+    const el = $(`#${p.browserId}`);
+    if (!el) continue;
+    const hideByFilter = isCatalog && unifiedCatalogProvider !== 'all' && unifiedCatalogProvider !== p.id;
+    el.classList.toggle('catalog-provider-filtered', hideByFilter);
+  }
+}
+$('#unified-catalog-pills')?.addEventListener('click', event => {
+  const btn = event.target.closest('[data-unified-cat]');
+  if (!btn) return;
+  unifiedCatalogProvider = btn.dataset.unifiedCat || 'all';
+  syncUnifiedCatalogBar();
+});
+$('#unified-catalog-search')?.addEventListener('input', event => {
+  const q = event.target.value || '';
+  for (const p of CATALOG_PROVIDERS) {
+    if (!p.filterId) continue;
+    const input = $(`#${p.filterId}`);
+    if (!input) continue;
+    if (input.value !== q) {
+      input.value = q;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  }
+});
 function selectModelsSubtab(subtab) {
-  modelsSubtab = ['connections', 'catalog', 'routing', 'overseer'].includes(subtab) ? subtab : 'connections';
+  if (subtab === 'routing' || subtab === 'overseer') {
+    void selectSettingsPane('autonomy', { scrollTo: subtab === 'overseer' ? '#overseer-section' : '#ultra-router-section' });
+    return;
+  }
+  modelsSubtab = ['connections', 'catalog'].includes(subtab) ? subtab : 'connections';
   $$('[role="tab"][data-models-subtab]').forEach(btn => {
     const active = btn.dataset.modelsSubtab === modelsSubtab;
     btn.classList.toggle('active', active);
@@ -1607,6 +1658,7 @@ function selectModelsSubtab(subtab) {
     el.classList.toggle('model-subtab-hidden', el.dataset.modelSubtab !== modelsSubtab);
   });
   if (modelsSubtab === 'connections') refreshAcpStatus();
+  syncUnifiedCatalogBar();
   let emptyEl = $('#models-catalog-empty');
   if (modelsSubtab === 'catalog') {
     const visibleCatalogCards = $$('#model-controls > [data-model-subtab="catalog"]').filter(el => !el.hidden && !el.classList.contains('hidden') && !el.classList.contains('model-subtab-hidden'));
@@ -1638,28 +1690,26 @@ function updateSettingsNavBadges() {
   setBadge('settings-badge-models', liveCount > 0 ? String(liveCount) : '0', liveCount > 0 ? 'is-ok' : 'is-warn');
   const task = settingsTask();
   const view = RecoveryUI.presentation(task, Date.now(), newConversationProviders());
-  setBadge('settings-badge-recovery', view.enabled ? 'ON' : 'OFF', view.enabled ? 'is-accent' : '');
+  const htMode = String(autoTuneState?.mode || state.autotune?.mode || 'passive').toLowerCase();
+  setBadge('settings-badge-autonomy', view.enabled ? (htMode === 'active' ? 'ON · HT' : 'ON') : 'OFF', view.enabled ? 'is-accent' : '');
   const { rules } = activePermissionRulesForScope();
   const preset = detectPermissionPreset(rules);
-  setBadge('settings-badge-tools', preset === 'permissive' ? 'Auto' : preset === 'auto' ? 'AI' : preset === 'safe' ? 'Safe' : preset === 'acceptEdits' ? 'Edits' : preset === 'dontAsk' ? 'CI' : 'Ask');
   const ps = state.privacy?.settings;
-  if (ps) {
-    const badgeTxt = ps.securityProfile === 'lockdown' ? 'Lockdown'
-      : ps.securityProfile === 'hardened' ? 'Hardened'
-      : ps.localOnly ? 'Airgap'
-      : ps.strictZdr ? 'Strict'
-      : ps.zdrRouting !== false ? 'ZDR' : '';
-    setBadge('settings-badge-privacy', badgeTxt, ps.securityProfile === 'lockdown' || ps.securityProfile === 'hardened' || ps.localOnly || ps.strictZdr ? 'is-ok' : '');
-  }
+  const privTag = ps?.securityProfile === 'lockdown' ? 'Lockdown'
+    : ps?.securityProfile === 'hardened' ? 'Hardened'
+    : ps?.localOnly ? 'Airgap' : '';
+  const permTag = preset === 'permissive' ? 'Auto' : preset === 'auto' ? 'AI' : preset === 'safe' ? 'Ask Shell' : preset === 'acceptEdits' ? 'Edit' : preset === 'dontAsk' ? 'CI' : 'Ask All';
+  setBadge('settings-badge-tools', privTag || permTag, privTag ? 'is-ok' : '');
   const ov = transparencyState?.overrideCount;
   const ovTotal = (ov?.prompts || 0) + (ov?.tools || 0) + (ov?.disabledTools || 0) + (ov?.injectionsActive ? 1 : 0);
-  setBadge('settings-badge-system', ovTotal > 0 ? 'Custom' : '', ovTotal > 0 ? 'is-accent' : '');
+  setBadge('settings-badge-developer', ovTotal > 0 ? 'Custom' : '', ovTotal > 0 ? 'is-accent' : '');
   const schedEnabled = Number(state.schedulesSummary?.enabled || 0);
-  setBadge('settings-badge-schedules', schedEnabled > 0 ? String(schedEnabled) : '', schedEnabled > 0 ? 'is-ok' : '');
+  const nsRunning = Number(state.northStarSummary?.running || 0);
+  const runBadge = nsRunning > 0 ? `${nsRunning} live` : schedEnabled > 0 ? String(schedEnabled) : '';
+  setBadge('settings-badge-schedules', runBadge, nsRunning > 0 ? 'is-accent' : schedEnabled > 0 ? 'is-ok' : '');
   if (window.G0DAlerts) {
     const alertTxt = window.G0DAlerts.statusBadgeText();
-    const alertCls = alertTxt === 'Muted' ? 'is-warn' : (alertTxt === 'On' || alertTxt === 'Notify') ? 'is-ok' : '';
-    setBadge('settings-badge-notifications', alertTxt, alertCls);
+    setBadge('settings-badge-general', alertTxt === 'Muted' ? 'Muted' : '', alertTxt === 'Muted' ? 'is-warn' : '');
   }
 }
 
@@ -1702,7 +1752,7 @@ function renderSettingsSearchResults(rawQuery) {
   for (const tab of SETTINGS_TABS) {
     const paneEl = $(`#settings-pane-${tab.id}`);
     if (!paneEl) continue;
-    const candidates = [...paneEl.querySelectorAll('.settings-card, .setting-row, .shortcut-row, .transparency-card')];
+    const candidates = [...paneEl.querySelectorAll('.settings-card, .setting-row, .shortcut-row, .transparency-card, .settings-limits label, .settings-field-block')];
     for (const el of candidates) {
       if (el.hidden || el.classList.contains('hidden') || el.closest('[hidden]:not([role="tabpanel"])')) continue;
       if (el.classList.contains('settings-card') && el.querySelector('.setting-row')) {
@@ -1755,6 +1805,16 @@ function renderSettingsSearchResults(rawQuery) {
 }
 
 async function selectSettingsPane(pane, options = {}) {
+  let scrollTarget = options.scrollTo || null;
+  if (pane === 'models' && (options.subtab === 'routing' || options.subtab === 'overseer')) {
+    scrollTarget = options.subtab === 'overseer' ? '#overseer-section' : '#ultra-router-section';
+    pane = 'autonomy';
+  }
+  if (Object.hasOwn(SETTINGS_TAB_ALIASES, pane)) {
+    const alias = SETTINGS_TAB_ALIASES[pane];
+    pane = alias.pane;
+    if (!scrollTarget) scrollTarget = alias.scrollTo;
+  }
   if (!SETTINGS_TABS.some(t => t.id === pane)) pane = 'general';
   const searchInput = $('#settings-global-search');
   if (searchInput && searchInput.value) { searchInput.value = ''; renderSettingsSearchResults(''); }
@@ -1762,31 +1822,60 @@ async function selectSettingsPane(pane, options = {}) {
   $$('[data-settings-tab]').forEach(button => { const active = button.dataset.settingsTab === pane; button.setAttribute('aria-selected', String(active)); button.tabIndex = active ? 0 : -1; });
   $$('#settings-dialog [role="tabpanel"]').forEach(panel => panel.hidden = panel.id !== `settings-pane-${pane}`);
   $('.settings-body').scrollTop = 0;
-  const scopedPanes = new Set(['general', 'models', 'recovery', 'tools', 'advanced']);
-  $('.settings-context')?.classList.toggle('is-muted', !scopedPanes.has(pane));
-  const feedback = { notifications: 'Optional sounds & notifications save locally on this device — zero telemetry.', shortcuts: 'Press ? anytime outside Settings to view keyboard shortcuts.', recovery: 'GODMODƎ recovery, retry limits, and continuation controls save automatically.', prompts: 'Saved on this device for every chat.', schedules: 'Scheduled jobs run locally in your timezone and respect Privacy & Permission Gates.', system: 'Local prompt transparency — overrides apply on this device to live non-fixture chats.', memory: 'Personal instructions, memories, and /skills save locally on this device.', privacy: 'Zero telemetry. ZDR & privacy controls apply immediately.', models: 'Switch between Connections, Catalog, Routing, and Overseer above.', tools: settingsTask() ? 'Permissions save automatically. Save checks after editing.' : 'Permissions and checks apply to individual tasks.' };
+  const scopedPanes = new Set(['models', 'autonomy', 'tools']);
+  const ctxBar = $('#settings-context-bar');
+  if (ctxBar) {
+    ctxBar.classList.toggle('hidden', !scopedPanes.has(pane));
+    ctxBar.classList.toggle('is-muted', !scopedPanes.has(pane));
+  }
+  const feedback = {
+    general: 'Appearance, workflow, sounds, and updates save locally on this device.',
+    models: 'Connect keys, CLI subscriptions, and local stacks, or search your unified catalog.',
+    autonomy: 'GODMODƎ recovery, HyperTuner, Ultra-Plinian routing, Conclave, and Overseer.',
+    memory: 'Personal rules, cross-session memory, /skills, and !prompt commands save locally.',
+    schedules: 'Scheduled crons and North Star autonomous runs execute locally in your timezone.',
+    tools: settingsTask() ? 'Permissions & privacy apply immediately. Save checks after editing.' : 'Zero telemetry. Configure permission gates, ZDR, and airgap rules.',
+    developer: 'Wire-level prompt/tool transparency, prefills, backups, and offline diagnostics.',
+  };
   settingsFeedback(feedback[pane] || 'Changes save automatically.');
-  if (pane === 'notifications') { window.G0DAlerts?.refreshNativePermission?.(); renderAlertsSettings(); }
-  if (pane === 'prompts') { try { await loadPromptLibrary(); } catch (error) { settingsFeedback(error.message, true); } }
-  if (pane === 'schedules') { try { await loadSchedulesSettings(); } catch (error) { settingsFeedback(error.message, true); } }
-  if (pane === 'system') {
+  if (pane === 'general') { window.G0DAlerts?.refreshNativePermission?.(); renderAlertsSettings(); }
+  if (pane === 'autonomy') {
+    await Promise.all([
+      loadAutoTuneSettings(),
+      typeof loadModelGroups === 'function' ? loadModelGroups() : Promise.resolve(),
+      typeof loadOverseer === 'function' ? loadOverseer() : Promise.resolve(),
+      typeof loadUltraRouter === 'function' ? loadUltraRouter() : Promise.resolve(),
+      loadVeniceCatalog(),
+    ]);
+  }
+  if (pane === 'schedules') {
+    try { await loadSchedulesSettings(); } catch (error) { settingsFeedback(error.message, true); }
+    if (typeof window.G0DNorthStar?.refresh === 'function') window.G0DNorthStar.refresh().catch(() => {});
+  }
+  if (pane === 'developer') {
     if (options.subtab) selectTransparencySubtab(options.subtab);
-    await loadTransparencySettings();
+    await Promise.all([
+      loadTransparencySettings(),
+      loadLearning().catch(() => {}),
+      settingsTaskId ? api(`/api/tasks/${encodeURIComponent(settingsTaskId)}/prompt`).then(prompt => { setText('#effective-prompt', pretty({ ...prompt, tools: state.tools })); }).catch(() => {}) : Promise.resolve(),
+    ]);
   }
   if (pane === 'models') {
     if (options.subtab) selectModelsSubtab(options.subtab);
     else selectModelsSubtab(modelsSubtab);
     renderModelSettings();
-    await Promise.all([loadModelConnections(), refreshAcpStatus({ force: true }), loadAutoTuneSettings(), loadVeniceCatalog(), typeof loadOpenRouterCatalog === 'function' ? loadOpenRouterCatalog() : Promise.resolve(), ...(typeof loadDirectProviderCatalog === 'function' ? ['openai', 'anthropic', 'xai', 'gemini', 'meta'].map(p => loadDirectProviderCatalog(p)) : []), typeof loadServices === 'function' ? loadServices() : Promise.resolve(), typeof loadModelGroups === 'function' ? loadModelGroups() : Promise.resolve(), typeof loadOverseer === 'function' ? loadOverseer() : Promise.resolve(), typeof loadUltraRouter === 'function' ? loadUltraRouter() : Promise.resolve()]);
+    await Promise.all([loadModelConnections(), refreshAcpStatus({ force: true }), loadVeniceCatalog(), typeof loadOpenRouterCatalog === 'function' ? loadOpenRouterCatalog() : Promise.resolve(), ...(typeof loadDirectProviderCatalog === 'function' ? ['openai', 'anthropic', 'xai', 'gemini', 'meta'].map(p => loadDirectProviderCatalog(p)) : []), typeof loadServices === 'function' ? loadServices() : Promise.resolve()]);
     selectModelsSubtab(modelsSubtab);
   }
-  if (pane === 'tools') { await Promise.all([loadPermissionsSettings(), loadHooksSettings(), loadBrowserSettings()]); }
-  if (pane === 'memory') { await Promise.all([loadMemorySettings(options.query), loadSkillsSettings(), loadTransparencySettings().then(renderPersonalInstructionsFromTransparency)]); }
-  if (pane === 'privacy') { await loadPrivacySettings(); }
-  if (pane === 'advanced') {
-    try { await loadLearning(); if (settingsTaskId) { const id = settingsTaskId; const prompt = await api(`/api/tasks/${encodeURIComponent(id)}/prompt`); if (settingsTaskId === id) setText('#effective-prompt', pretty({ ...prompt, tools: state.tools })); } } catch (error) { settingsFeedback(error.message, true); }
-  }
+  if (pane === 'tools') { await Promise.all([loadPermissionsSettings(), loadHooksSettings(), loadBrowserSettings(), loadPrivacySettings()]); }
+  if (pane === 'memory') { await Promise.all([loadMemorySettings(options.query), loadSkillsSettings(), loadPromptLibrary().catch(() => {}), loadTransparencySettings().then(renderPersonalInstructionsFromTransparency)]); }
   updateSettingsNavBadges();
+  if (scrollTarget) {
+    const targetEl = $(scrollTarget);
+    if (targetEl) {
+      requestAnimationFrame(() => targetEl.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+    }
+  }
 }
 async function openSettings(pane = 'general', options = {}) {
   if (typeof pane !== 'string') pane = 'general';
@@ -1796,6 +1885,9 @@ async function openSettings(pane = 'general', options = {}) {
   settingsTaskId = currentTask && currentTask.status !== 'cancelled' ? currentTask.id : null;
   delete $('#race-options').dataset.scope;
   settingsFeedback('Changes save automatically.');
+  if ($('#settings-app-version') && state?.version) {
+    $('#settings-app-version').textContent = 'v' + String(state.version).replace(/^v/i, '');
+  }
   renderSettingsValues();
   if (!$('#settings-dialog').open) $('#settings-dialog').showModal();
   await selectSettingsPane(pane, options);
@@ -1884,6 +1976,11 @@ $('#settings-dialog').addEventListener('click', async event => {
     if (hit) {
       await selectSettingsPane(hit.tabId, hit.subtab ? { subtab: hit.subtab } : {});
       if (hit.targetEl) {
+        let ancestor = hit.targetEl.parentElement;
+        while (ancestor && ancestor !== $('#settings-dialog')) {
+          if (ancestor.tagName === 'DETAILS') ancestor.open = true;
+          ancestor = ancestor.parentElement;
+        }
         hit.targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
         hit.targetEl.classList.remove('settings-jump-pulse');
         void hit.targetEl.offsetWidth;
@@ -2211,7 +2308,7 @@ $('#alerts-pack-grid')?.addEventListener('click', event => {
   window.G0DAlerts.playSound('completed', { force: true, packOverride: pack });
   settingsFeedback(`Sound pack set to ${btn.querySelector('strong')?.textContent || pack}.`);
 });
-$('#settings-pane-notifications')?.addEventListener('click', async event => {
+$('#settings-section-notifications')?.addEventListener('click', async event => {
   const preview = event.target.closest('[data-alert-preview]');
   if (preview && window.G0DAlerts) {
     const kind = preview.dataset.alertPreview;
@@ -2367,7 +2464,24 @@ function renderRaceOptions(task) {
   const first = models.some(m => m.id === preferred) ? preferred : (RecoveryUI.recommendedBackup(models, null) || models[0]?.id);
   const second = RecoveryUI.recommendedBackup(models, first) || models.find(m => m.id !== first)?.id || '';
   const third = models.find(m => m.id !== first && m.id !== second)?.id || '';
-  const judge = models.find(m => /glm-5-3-flash|gemini-4-neon|claude-sonnet/i.test(m.id))?.id || second || first;
+  const judgeTiers = [
+    /gemini[-_.]?4(?:[._-]0)?[-_.]?neon|\bneon[-_.]?4\b/i,
+    /claude[-_.]?(?:opus[-_.]?[45]|(?:4|5)(?:[-_.]?\d)?[-_.]?opus)/i,
+    /(?:openai[-_.]?)?gpt[-_.]?(?:6(?:[._-]?[12])?[-_.]?(?:astra|sol|luna|terra)|5(?:[._-]?[456])(?!.*(?:mini|nano)))/i,
+    /claude[-_.]?(?:sonnet[-_.]?[45]|(?:4|5)(?:[-_.]?\d)?[-_.]?sonnet)/i,
+    /abliterat(?:ion|ed)[-_.]?(?:abliterated[-_.]?)?(?:model[-_.]?)?large/i,
+    /hermes[-_.]?4[-_.]?405b|deepseek[-_.]?v4(?!.*flash)|grok[-_.]?4|qwen[-_.]?3[-_.]?[67][-_.]?plus/i,
+  ];
+  const writerSet = new Set([first, second, third].filter(Boolean));
+  const pickDefaultJudge = (list) => {
+    for (const pat of judgeTiers) {
+      const hit = list.find(m => pat.test(`${m.id} ${m.model || ''} ${m.label || ''}`));
+      if (hit) return hit.id;
+    }
+    return null;
+  };
+  const independentModels = models.filter(m => !writerSet.has(m.id));
+  const judge = pickDefaultJudge(independentModels) || pickDefaultJudge(models) || independentModels[0]?.id || second || first;
   const saved = config
     ? [config.models?.[0] || '', config.models?.[1] || '', config.models?.[2] || '', config.models?.[3] || '', config.judge || '']
     : [first || '', second || '', third || '', '', judge || ''];
@@ -2682,7 +2796,7 @@ async function resetTransparencyAction(payload, okMsg) {
   }
 }
 
-$('#settings-pane-system')?.addEventListener('click', async event => {
+$('#settings-section-system')?.addEventListener('click', async event => {
   const sub = event.target.closest('[data-trans-subtab]');
   if (sub) { selectTransparencySubtab(sub.dataset.transSubtab); return; }
   const cat = event.target.closest('[data-trans-cat]');
@@ -2738,7 +2852,7 @@ $('#settings-pane-system')?.addEventListener('click', async event => {
   }
 });
 
-$('#settings-pane-system')?.addEventListener('change', async event => {
+$('#settings-section-system')?.addEventListener('change', async event => {
   const toolToggle = event.target.closest('[data-tool-enabled]');
   if (toolToggle) {
     const name = toolToggle.dataset.toolEnabled;
@@ -2949,7 +3063,7 @@ function renderSchedulesList() {
         <span class="meta-chip">${escapeHTML(job.humanLabel || '')}</span>
         <span class="meta-chip">Next: ${escapeHTML(job.enabled ? formatScheduleTime(job.nextRunAt) : 'Paused')}</span>
         <span class="meta-chip">Model: ${escapeHTML(providerLabel(job.providerIds?.[0]))}</span>
-        <span class="meta-chip">Gate: ${escapeHTML(job.permissionPreset || 'safe')}</span>
+        <span class="meta-chip">Gate: ${escapeHTML(PERMISSION_PRESET_LABELS[job.permissionPreset || 'safe'] || job.permissionPreset || 'Ask Shell')}</span>
         ${lastChip}
         ${job.lastTaskId ? `<button type="button" class="button button-quiet sched-open-task" data-sched-open-task="${escapeHTML(job.lastTaskId)}">Open thread →</button>` : ''}
       </div>
@@ -3161,4 +3275,84 @@ $('#sched-list')?.addEventListener('click', async event => {
       await loadSchedulesSettings();
     } catch (error) { settingsFeedback(error.message, true); }
   }
+});
+
+let updateCheckBusy = false;
+function renderUpdateResult(result, errorMessage = '') {
+  const box = $('#settings-update-result');
+  const summary = $('#settings-update-summary');
+  const verChip = $('#settings-app-version');
+  if (verChip && (result?.currentVersion || state?.version)) {
+    verChip.textContent = 'v' + String(result?.currentVersion || state.version).replace(/^v/i, '');
+  }
+  if (!box) return;
+  if (errorMessage) {
+    box.className = 'update-status-card is-error';
+    box.innerHTML = `<div class="update-status-head"><span class="update-status-badge is-error">Check unavailable</span></div><p class="update-status-detail">${escapeHTML(errorMessage)}</p>`;
+    if (summary) summary.textContent = errorMessage;
+    return;
+  }
+  if (!result) {
+    box.className = 'update-status-card hidden';
+    box.innerHTML = '';
+    return;
+  }
+  const pubDate = result.publishedAt ? new Date(result.publishedAt).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '';
+  const safeReleaseUrl = typeof result.releaseUrl === 'string' && /^https:\/\//i.test(result.releaseUrl) ? result.releaseUrl : 'https://github.com/elder-plinius/G0DC0D3/releases';
+  const safeSiteUrl = typeof result.siteUrl === 'string' && /^https:\/\//i.test(result.siteUrl) ? result.siteUrl : 'https://godcode.gg';
+  const safeAssetUrl = typeof result.downloadAsset?.url === 'string' && /^https:\/\//i.test(result.downloadAsset.url) ? result.downloadAsset.url : '';
+  if (result.updateAvailable) {
+    box.className = 'update-status-card is-available';
+    const downloadLink = safeAssetUrl
+      ? `<a class="button button-primary" href="${escapeHTML(safeAssetUrl)}" target="_blank" rel="noopener noreferrer">Download ${escapeHTML(result.downloadAsset.name)}</a>`
+      : '';
+    const notesBlock = result.notesPreview ? `<pre class="update-notes-preview">${escapeHTML(result.notesPreview)}</pre>` : '';
+    box.innerHTML = `<div class="update-status-head"><span class="update-status-badge is-available">Update available</span><strong>v${escapeHTML(result.currentVersion)} → ${escapeHTML(result.tagName || ('v' + result.latestVersion))}</strong>${pubDate ? `<span class="update-status-date">Released ${escapeHTML(pubDate)}</span>` : ''}</div>${notesBlock}<div class="update-links">${downloadLink}<a class="button button-secondary" href="${escapeHTML(safeReleaseUrl)}" target="_blank" rel="noopener noreferrer">View release notes</a><a class="button button-quiet" href="${escapeHTML(safeSiteUrl)}" target="_blank" rel="noopener noreferrer">godcode.gg</a></div>`;
+    if (summary) summary.textContent = `Version ${result.latestVersion} is available (you are on v${result.currentVersion}).`;
+  } else {
+    const isAhead = result.status === 'ahead';
+    box.className = 'update-status-card is-current';
+    box.innerHTML = `<div class="update-status-head"><span class="update-status-badge is-current">${isAhead ? 'Development build' : 'Up to date'}</span><strong>v${escapeHTML(result.currentVersion)}</strong>${pubDate ? `<span class="update-status-date">Latest release: ${escapeHTML(result.tagName || ('v' + result.latestVersion))} (${escapeHTML(pubDate)})</span>` : ''}</div><div class="update-links"><a class="button button-quiet" href="${escapeHTML(safeReleaseUrl)}" target="_blank" rel="noopener noreferrer">GitHub Releases</a><a class="button button-quiet" href="${escapeHTML(safeSiteUrl)}" target="_blank" rel="noopener noreferrer">godcode.gg</a></div>`;
+    if (summary) summary.textContent = isAhead
+      ? `Running newer local build v${result.currentVersion} (latest public release: v${result.latestVersion}).`
+      : `You are running the latest release (v${result.currentVersion}).`;
+  }
+}
+
+async function checkForUpdates({ openSettings: shouldOpenSettings = false } = {}) {
+  if (shouldOpenSettings) {
+    await openSettings('general');
+    $('#settings-updates-card')?.scrollIntoView({ block: 'nearest' });
+  }
+  if (updateCheckBusy) return;
+  updateCheckBusy = true;
+  const btn = $('#settings-check-updates');
+  if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
+  const summary = $('#settings-update-summary');
+  if (summary) summary.textContent = 'Checking GitHub Releases (no telemetry sent)…';
+  try {
+    const result = await api('/api/updates/check', { method: 'POST', body: '{}' });
+    renderUpdateResult(result);
+    if (result.updateAvailable) {
+      toast(`Update available: ${result.tagName || ('v' + result.latestVersion)} (current v${result.currentVersion})`);
+    } else if (shouldOpenSettings) {
+      toast(`G0DM0D3 v${result.currentVersion} is up to date.`);
+    }
+    return result;
+  } catch (error) {
+    const msg = error?.message || 'Could not check for updates.';
+    renderUpdateResult(null, msg);
+    toast(msg);
+    return null;
+  } finally {
+    updateCheckBusy = false;
+    if (btn) { btn.disabled = false; btn.textContent = 'Check for updates'; }
+  }
+}
+window.checkForUpdates = checkForUpdates;
+$('#settings-check-updates')?.addEventListener('click', () => void checkForUpdates({ openSettings: false }));
+$('#settings-open-shortcuts-modal')?.addEventListener('click', () => {
+  $('#settings-dialog')?.close();
+  const dlg = $('#shortcuts-dialog');
+  if (dlg && !dlg.open) dlg.showModal();
 });

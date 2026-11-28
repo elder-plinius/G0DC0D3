@@ -14,7 +14,7 @@ import { Broker, snapshotWorkspace, sha256, taskTools, conversationWithoutChecks
 import { BrowserPool, DEFAULT_BROWSER_SETTINGS, normalizeBrowserSettings, findChromiumBinary } from './browser-env.mjs';
 import { validateTool } from './tool-schema.mjs';
 import { diagnoseIncident, detectRefusal, rankCandidates, providerIdentity, candidateEligibility, requestProfile, providerTier } from './routing.mjs';
-import { learningContext, inferModelFamily, bestStrategyForFamily, extractDeclineSignature, providerObservedStats } from './learning.mjs';
+import { learningContext, inferModelFamily, bestStrategyForFamily, extractDeclineSignature, providerObservedStats, buildConclaveLeaderboard, eloRankTier, providerDomainStats } from './learning.mjs';
 import {
   AUTOTUNE_MODES,
   PROFILE_BY_ID,
@@ -961,7 +961,7 @@ export class Runtime {
           to: d.to || d.providerId || null,
           reason: d.reason || d.level || 'GODMODƎ recovery'
         });
-      } else if (ev.type === 'race.dispatched' || ev.type === 'race.result' || (ev.type === 'model.response' && d.scorecard)) {
+      } else if (ev.type === 'race.dispatched' || ev.type === 'race.result' || ev.type === 'race.crowned' || (ev.type === 'model.response' && d.scorecard)) {
         raceEvents.push(ev);
       }
     }
@@ -1031,6 +1031,7 @@ export class Runtime {
       });
       const judgeResult = relevantResults.find(e => e.data?.stage === 'grade');
       const judgeDispatched = raceEvents.some(e => e.type === 'race.dispatched' && e.data?.stage === 'grade' && (!raceId || e.data?.raceId === raceId));
+      const latestCrown = [...raceEvents].reverse().find(e => e.type === 'race.crowned' && (!raceId || !e.data?.raceId || e.data.raceId === raceId));
       arena = {
         raceId,
         status: latestScorecard ? 'completed' : judgeDispatched ? 'grading' : (latestDispatch && active.has(task.status) ? 'drafting' : 'ready'),
@@ -1041,6 +1042,7 @@ export class Runtime {
           status: latestScorecard ? 'completed' : judgeResult ? judgeResult.data.status : (judgeDispatched ? 'grading' : 'waiting')
         } : null,
         winnerId: latestScorecard?.winnerId || null,
+        crownedWinnerId: latestCrown?.data?.winnerId || null,
         note: latestScorecard?.note || null
       };
     }
@@ -1337,6 +1339,7 @@ export class Runtime {
   async snapshotTask(id) { return taskSnapshot(this.getTask(id).workspace); }
   _memoriesForTask(task) {
     if (!task || task.fixtureId || task.crewMember) return [];
+    if (this.getPrivacy().settings?.ephemeralSession === true) return [];
     try { return this.memory.relevantForTask(task, { limit: 6, maxChars: 1800 }); }
     catch { return []; }
   }
@@ -1383,7 +1386,7 @@ export class Runtime {
   }
   _effectivePermissionRules(task) {
     if (Array.isArray(task.permissionRules)) return task.permissionRules;
-    if (task.fixtureId || task.crewMember) return [];
+    if (task.fixtureId) return [];
     const globalRules = this.store.getLocalState('permissionRules', [...DEFAULT_SAFE_PRESET]);
     return Array.isArray(globalRules) ? globalRules : [...DEFAULT_SAFE_PRESET];
   }
@@ -1447,7 +1450,7 @@ export class Runtime {
   updateAutoTune({ mode, pin, unpin } = {}) {
     const state = this._getAutoTuneRaw();
     if (mode !== undefined) {
-      if (!AUTOTUNE_MODES.includes(mode)) throw fault('INVALID_AUTOTUNE', `Invalid AutoTune mode "${mode}". Choose off, passive, or active.`);
+      if (!AUTOTUNE_MODES.includes(mode)) throw fault('INVALID_AUTOTUNE', `Invalid HyperTuner mode "${mode}". Choose off, passive, or active.`);
       state.mode = mode;
     }
     if (pin && typeof pin === 'object' && pin.modelKey && pin.domain && PROFILE_BY_ID.has(pin.profileId)) {
@@ -1470,6 +1473,7 @@ export class Runtime {
     return summarizeAutoTuneState(fresh);
   }
   _recordAutoTuneSignal(taskId, signal) {
+    if (this.getPrivacy().settings.ephemeralSession) return;
     const last = this._lastAutoTune.get(taskId);
     if (!last?.profileId) return;
     const state = this._getAutoTuneRaw();
@@ -1483,6 +1487,9 @@ export class Runtime {
       signal,
     });
     this.store.setLocalState('autotuneState', next);
+    if (['clean_completion', 'verification_pass', 'user_refusal'].includes(signal) || this._lastAutoTune.size > 200) {
+      this._lastAutoTune.delete(taskId);
+    }
   }
   _abortTaskSidecars(id) {
     const set = this._sidecars.get(id);
@@ -1679,16 +1686,29 @@ export class Runtime {
         const [message, ...rest] = current.deferredMessages || [];
         if (!message) break;
         const followup = { ...message, appliedAt: new Date().toISOString(), contractVersion: current.contractVersion + 1 };
+        const pendingRoute = this._resolvePendingProviders(current);
+        const baseForNext = pendingRoute
+          ? {
+              ...current,
+              providers: pendingRoute,
+              providerId: pendingRoute[0],
+              providerIndex: 0,
+              routing: { primaryId: pendingRoute[0], cooldowns: {}, primaryReturnUsed: false, contributions: {} },
+              pendingProviders: null,
+            }
+          : current;
         const proposed = {
-          ...withFollowups(current, [...(current.followups || []), followup]),
+          ...withFollowups(baseForNext, [...(current.followups || []), followup]),
           deferredMessages: rest,
+          pendingProviders: null,
           status: 'queued',
           ...(Array.isArray(message.attachments) && message.attachments.length ? { attachments: message.attachments } : {}),
         };
         const deferredProvider = this.selectedProvider(proposed.providerId, proposed.workspaceKind);
         buildContext({ task: proposed, provider: deferredProvider, history: this.getRecentEvents(id), totalHistoryCount: current.eventSeq + 2, files: snapshot.files, snapshotHash: snapshot.snapshotHash, learning: this.getLearning(), memories: this._memoriesForTask(proposed), transparency: current.fixtureId ? null : this.getTransparencyConfig() });
-        this.store.updateTask(id, () => proposed, 'user.messages.applied', { ids: [message.id], contractVersion: proposed.contractVersion, source: 'owner' });
+        this.store.updateTask(id, () => proposed, 'user.messages.applied', { ids: [message.id], contractVersion: proposed.contractVersion, source: 'owner', ...(pendingRoute ? { providerId: pendingRoute[0], providers: pendingRoute } : {}) });
       } while (!controller.signal.aborted);
+      this._promotePendingProviders(id);
       const finalTask = this.getTask(id);
       if (finalTask?.status === 'completed') {
         try { this.autoLearnFromTask(id); } catch {}
@@ -1696,8 +1716,11 @@ export class Runtime {
       return finalTask;
     })().catch(cause => {
       const current = this.getTask(id);
-      if (active.has(current.status) || (current.status === 'completed' && current.deferredMessages?.length)) return this.store.updateTask(id, value => { value.status = 'failed'; value.blocker = { code: cause.code || 'RUNTIME_ERROR', message: cause.message }; return value; }, 'task.status', { status: 'failed', error: cause.message });
-      return current;
+      if (active.has(current.status) || (current.status === 'completed' && current.deferredMessages?.length)) {
+        const failed = this.store.updateTask(id, value => { value.status = 'failed'; value.blocker = { code: cause.code || 'RUNTIME_ERROR', message: cause.message }; return value; }, 'task.status', { status: 'failed', error: cause.message });
+        return this._promotePendingProviders(id) || failed;
+      }
+      return this._promotePendingProviders(id) || current;
     }).finally(() => {
       if (this.runs.get(id) === entry) this.runs.delete(id);
       this._liveTurn.delete(id);
@@ -1843,7 +1866,7 @@ export class Runtime {
       const isFreshRecovery = Boolean(prevAt && Number(task.recoveries || 0) > Number(prevAt.recoveries || 0));
       const autoTunePick = selectAutoTuneParams(this._getAutoTuneRaw(), {
         provider,
-        objective: task.objective || '',
+        objective: task.followups?.at(-1)?.message || task.routing?.originalObjective || task.objective || '',
         effort: task.effort || 'medium',
         manualGeneration: task.generation || {},
         contextKind: isFreshRecovery ? 'retry' : 'normal',
@@ -1900,7 +1923,7 @@ export class Runtime {
           break;
         } catch (cause) {
           const wasPreempted = this._turnPreempted.delete(id);
-          if ((cause?.code === 'STEER_PREEMPTED' || wasPreempted) && this._current(id, epoch, controller.signal) && this.getTask(id).pendingMessages?.length) {
+          if ((cause?.code === 'STEER_PREEMPTED' || wasPreempted) && this._current(id, epoch, controller.signal)) {
             turnPreemptedBySteer = true;
             turnError = null;
             break;
@@ -2041,7 +2064,9 @@ export class Runtime {
           ? 'Venice reached its output limit. The partial reply is saved — send "continue" to keep generating.'
           : 'Provider reached its output limit after auto-continuations. The partial reply is saved — send "continue" to keep generating.',
       });
-      if (response.type === 'message' && !provider.directChat && response.finish !== 'refusal' && task.crewMember?.role !== 'challenger' && !task.planMode && !conversationWithoutChecks(task)) {
+      const hasNativeFileEdits = this.getEvents(id).some(e => e.type === 'tool.completed' && (e.data?.name === 'repo.write' || e.data?.name === 'repo.patch'));
+      const allowTextFallbackExtract = !provider.capabilities?.nativeTools || (provider.tier === 'local' && !hasNativeFileEdits);
+      if (response.type === 'message' && allowTextFallbackExtract && !hasNativeFileEdits && !provider.directChat && response.finish !== 'refusal' && task.crewMember?.role !== 'challenger' && !task.planMode && !conversationWithoutChecks(task)) {
         const extracted = extractFileWrites(response.text || '');
         if (extracted.length > 0) {
           response = { ...response, type: 'tool', calls: extracted.map((file, i) => ({
@@ -2162,7 +2187,8 @@ export class Runtime {
             if (canSpawnBatch) {
               try {
                 for (const call of spawnBatch) this._emitStream(id, { type: 'tool.start', name: call.name, callId: call.id, args: streamArgsFor(call) });
-                const results = await Promise.all(spawnBatch.map(call => this._executeAgentSpawn(id, epoch, call, controller.signal)));
+                const settledResults = await Promise.allSettled(spawnBatch.map(call => this._executeAgentSpawn(id, epoch, call, controller.signal)));
+                const results = settledResults.map(r => r.status === 'fulfilled' ? r.value : { ok: false, error: { code: r.reason?.code || 'SUBAGENT_ERROR', message: r.reason?.message || 'Subagent spawn failed.' } });
                 let spawnFatal = null;
                 for (let j = 0; j < spawnBatch.length; j++) {
                   const call = spawnBatch[j], result = results[j];
@@ -2520,15 +2546,27 @@ export class Runtime {
                       const regCount = (pTask.routing?.regressionCount || 0) + 1;
                       const bestSnapshot = pTask.routing?.bestSnapshot;
                       if (regCount >= 2 && bestSnapshot?.length > 0) {
+                        const keepPaths = new Set(bestSnapshot.map(f => f.path));
+                        try {
+                          const curSnap = await taskSnapshot(pTask.workspace);
+                          for (const f of curSnap.files) {
+                            if (!keepPaths.has(f.path)) {
+                              const stray = await scopedPath(pTask.workspace, f.path, { writing: true }).catch(() => null);
+                              if (stray) await fs.unlink(stray).catch(() => {});
+                            }
+                          }
+                        } catch {}
                         for (const file of bestSnapshot) {
                           if (typeof file.content !== 'string') continue;
                           const target = await scopedPath(pTask.workspace, file.path, { writing: true });
                           await fs.mkdir(dirname(target), { recursive: true });
                           await fs.writeFile(target, file.content);
                         }
+                        const restoredSnap = await taskSnapshot(pTask.workspace).catch(() => null);
                         const rollbackFrom = pTask.providerId;
                         this.store.updateTask(id, current => {
                           current.verification = null;
+                          if (restoredSnap?.snapshotHash) current.lastSnapshotHash = restoredSnap.snapshotHash;
                           current.routing.regressionCount = 0;
                           current.routing.lastRollbackCall = current.calls;
                           current.routing.rollbackCount = (current.routing.rollbackCount || 0) + 1;
@@ -2662,15 +2700,27 @@ export class Runtime {
                       const regCount = (qTask.routing?.regressionCount || 0) + 1;
                       const bestSnapshot = qTask.routing?.bestSnapshot;
                       if (bestSnapshot?.length > 0) {
+                        const keepPaths = new Set(bestSnapshot.map(f => f.path));
+                        try {
+                          const curSnap = await taskSnapshot(qTask.workspace);
+                          for (const f of curSnap.files) {
+                            if (!keepPaths.has(f.path)) {
+                              const stray = await scopedPath(qTask.workspace, f.path, { writing: true }).catch(() => null);
+                              if (stray) await fs.unlink(stray).catch(() => {});
+                            }
+                          }
+                        } catch {}
                         for (const file of bestSnapshot) {
                           if (typeof file.content !== 'string') continue;
                           const target = await scopedPath(qTask.workspace, file.path, { writing: true });
                           await fs.mkdir(dirname(target), { recursive: true });
                           await fs.writeFile(target, file.content);
                         }
+                        const restoredSnap = await taskSnapshot(qTask.workspace).catch(() => null);
                         const rollbackFrom = qTask.providerId;
                         this.store.updateTask(id, current => {
                           current.verification = null;
+                          if (restoredSnap?.snapshotHash) current.lastSnapshotHash = restoredSnap.snapshotHash;
                           current.routing.regressionCount = 0;
                           current.routing.lastRollbackCall = current.calls;
                           current.routing.rollbackCount = (current.routing.rollbackCount || 0) + 1;
@@ -2891,6 +2941,29 @@ export class Runtime {
     return this.getTask(id);
   }
   _current(id, epoch, signal) { const task = this.getTask(id); return !signal?.aborted && task.epoch === epoch && active.has(task.status) && this.crew.workerCurrent(task); }
+  _resolvePendingProviders(task) {
+    const raw = Array.isArray(task?.pendingProviders) ? task.pendingProviders : [];
+    if (!raw.length) return null;
+    const valid = [...new Set(raw)].filter(pid => typeof pid === 'string' && Boolean(this.selectedProvider(pid, task.workspaceKind)));
+    return valid.length ? valid : null;
+  }
+  _promotePendingProviders(id) {
+    const current = this.getTask(id);
+    if (!current || !Array.isArray(current.pendingProviders) || !current.pendingProviders.length) return null;
+    if (active.has(current.status) || current.status === 'cancelled' || this.broker.locks.has(id)) return null;
+    const selected = this._resolvePendingProviders(current);
+    if (!selected) {
+      return this.store.updateTask(id, value => { value.pendingProviders = null; return value; }, 'providers.queued', { to: null, cleared: true, reason: 'unavailable' });
+    }
+    return this.store.updateTask(id, value => {
+      value.providers = selected;
+      value.providerId = selected[0];
+      value.providerIndex = 0;
+      value.routing = { primaryId: selected[0], cooldowns: {}, primaryReturnUsed: false, contributions: {} };
+      value.pendingProviders = null;
+      return value;
+    }, 'providers.updated', { from: current.providers, to: selected, providerId: selected[0], source: 'owner', promotedFromQueue: true });
+  }
   _applyPending(id, snapshot) {
     const task = this.getTask(id), messages = task.pendingMessages || [];
     if (!messages.length) return task;
@@ -2898,15 +2971,27 @@ export class Runtime {
     const appliedAt = new Date().toISOString();
     const additions = messages.map((message, index) => ({ ...message, appliedAt, contractVersion: (task.contractVersion || 1) + index + 1 }));
     const queuedAttachments = additions.flatMap(m => (Array.isArray(m.attachments) ? m.attachments : [])).slice(-4);
+    const pendingRoute = this._resolvePendingProviders(task);
+    const baseTask = pendingRoute
+      ? {
+          ...task,
+          providers: pendingRoute,
+          providerId: pendingRoute[0],
+          providerIndex: 0,
+          routing: { primaryId: pendingRoute[0], cooldowns: {}, primaryReturnUsed: false, contributions: {} },
+          pendingProviders: null,
+        }
+      : task;
     const proposed = {
-      ...withFollowups(task, [...(task.followups || []), ...additions]),
+      ...withFollowups(baseTask, [...(task.followups || []), ...additions]),
       pendingMessages: [],
+      ...(pendingRoute ? { pendingProviders: null } : {}),
       ...(queuedAttachments.length ? { attachments: queuedAttachments } : {}),
     };
     // Preflight the complete new contract before atomically consuming the queue.
     const pendingProvider = this.selectedProvider(proposed.providerId, proposed.workspaceKind);
     buildContext({ task: { ...proposed, calls: proposed.calls + 1, version: task.version + 2, eventSeq: task.eventSeq + 2 }, provider: pendingProvider, history: this.getRecentEvents(id), totalHistoryCount: task.eventSeq + 2, files: snapshot.files, snapshotHash: snapshot.snapshotHash, learning: this.getLearning(), memories: this._memoriesForTask(proposed) });
-    return this.store.updateTask(id, () => proposed, 'user.messages.applied', { ids: additions.map(message => message.id), contractVersion: proposed.contractVersion, source: 'owner' });
+    return this.store.updateTask(id, () => proposed, 'user.messages.applied', { ids: additions.map(message => message.id), contractVersion: proposed.contractVersion, source: 'owner', ...(pendingRoute ? { providerId: pendingRoute[0], providers: pendingRoute } : {}) });
   }
   _status(id, epoch, status, blocker = null) {
     if (this.getTask(id).epoch !== epoch) return this.getTask(id);
@@ -2957,7 +3042,8 @@ export class Runtime {
     }
     const { privacy, onOutbound, extraSecrets } = this.outboundOptions();
     const timeout = new Promise((_, reject) => { timer = setTimeout(() => { child.abort(); reject(fault('PROVIDER_TIMEOUT', `Provider exceeded ${timeoutMs} ms.`)); }, timeoutMs); });
-    const turnPromise = Promise.resolve().then(() => provider.turn(context, { signal: child.signal, turnTimeoutMs: timeoutMs, privacy, onOutbound, extraSecrets, ...(profile ? { requestProfile: profile } : {}), ...(onDelta ? { onDelta } : {}) }));
+    const safeOnDelta = onDelta ? (delta => { if (!child.signal.aborted) onDelta(delta); }) : undefined;
+    const turnPromise = Promise.resolve().then(() => provider.turn(context, { signal: child.signal, turnTimeoutMs: timeoutMs, privacy, onOutbound, extraSecrets, ...(profile ? { requestProfile: profile } : {}), ...(safeOnDelta ? { onDelta: safeOnDelta } : {}) }));
     turnPromise.catch(() => {});
     try { return await Promise.race([turnPromise, stopped, timeout]); }
     finally {
@@ -3333,7 +3419,7 @@ export class Runtime {
       let overseerRecommendedId = null;
       let overseerReframed = false;
       if (['content_restriction', 'refusal', 'stalled', 'verification'].includes(diagnosis.category)) {
-        const overseer = this._resolveOverseer();
+        const overseer = this._resolveOverseerForWorker(task.providerId, { allowSameModel: true });
         const consultKey = `${fingerprint}:${diagnosis.category}`;
         if (overseer && overseer.settings.autoUnblockStuck && !task.routing?.overseerConsulted?.[consultKey]) {
           const previewRankings = rankCandidates({ task, providers: this._privacyFilteredProviders(), learning: task.policy.learning !== false ? this.getLearning() : null, diagnosis, requiredTools: this._requiredTools(task), fingerprint });
@@ -3367,7 +3453,10 @@ export class Runtime {
               current.routing.overseerConsulted ||= {};
               current.routing.overseerConsulted[consultKey] = true;
               if (!current.routing.originalObjective) current.routing.originalObjective = current.objective;
-              if (advice.reframedObjective) current.objective = advice.reframedObjective;
+              if (advice.reframedObjective) {
+                current.objective = advice.reframedObjective;
+                current.routing.reframePass = (current.routing.reframePass || 0) + 1;
+              }
               if (advice.guidance) current.routing.overseerGuidance = advice.guidance;
               if (advice.recommendedEffort) current.effort = normalizeEffort(advice.recommendedEffort);
               current.routing.lastRecoveryStrategy = { modelFamily: inferModelFamily(current.providerId), strategy: advice.strategy };
@@ -3539,10 +3628,10 @@ export class Runtime {
             return this.store.updateTask(id, current => {
               current.routing.cooldowns ||= {};
               delete current.routing.cooldowns[current.providerId];
-              if (retryResult.reframed) current.objective = retryResult.objective;
+              if (!overseerReframed && retryResult.reframed) current.objective = retryResult.objective;
               current.stallSignature = null; current.stallTurns = 0;
               return current;
-            }, 'routing.reframe_retry', { providerId: task.providerId, pass: currentPass, level: retryResult.level, diagnosis: diagnosis.category, reason: 'No alternate fallback available; retrying with reframed objective.' });
+            }, 'routing.reframe_retry', { providerId: task.providerId, pass: currentPass, level: overseerReframed ? 'overseer' : retryResult.level, diagnosis: diagnosis.category, reason: 'No alternate fallback available; retrying with reframed objective.' });
           }
         }
         // Single-provider escape: if the task only has one provider and it has
@@ -3569,6 +3658,7 @@ export class Runtime {
       }
       return this.store.updateTask(id, current => {
         current.providerId = next.id; current.providerIndex = current.providers.indexOf(next.id);
+        if (next.nextStrategy) current.strategy = next.nextStrategy;
         current.routing.excursion = { providerId: next.id, from: task.providerId, category: diagnosis.category, startedCall: current.calls, snapshotHash: current.lastSnapshotHash, ...(escalated ? { escalated: true, fromTier, toTier } : {}) };
         current.stallSignature = null; current.stallTurns = 0;
         return current;
@@ -3910,6 +4000,81 @@ export class Runtime {
       return computeXpLevel(null);
     }
   }
+  getConclaveLeaderboard() {
+    return buildConclaveLeaderboard(this.getLearning(), this.providers);
+  }
+  crownRaceWinner(id, { winnerId = '', raceId = null } = {}) {
+    if (this.closed) throw fault('RUNTIME_CLOSED', 'Runtime is closed.');
+    const task = this.getTask(id);
+    const cleanWinner = String(winnerId || '').trim();
+    if (!cleanWinner) throw fault('INVALID_CROWN', 'Choose a contender to crown.');
+    const events = this.getEvents(id);
+    const targetEv = [...events].reverse().find(e =>
+      e.type === 'model.response'
+      && e.data?.scorecard
+      && (!raceId || e.data.scorecard.raceId === raceId)
+    );
+    const sc = targetEv?.data?.scorecard || null;
+    if (!sc) throw fault('RACE_NOT_FOUND', 'No Conclave race scorecard found for this conversation.');
+    const contenderIds = [...new Set([
+      ...(Array.isArray(sc.grades) ? sc.grades.map(g => g.providerId) : []),
+      ...(Array.isArray(sc.outcomes) ? sc.outcomes.map(o => o.providerId) : []),
+      sc.winnerId,
+    ].filter(Boolean))];
+    if (!contenderIds.includes(cleanWinner)) {
+      throw fault('INVALID_CROWN', 'That model was not a contender in this Conclave race.');
+    }
+    const domain = sc.domain || task.routing?.domain || 'fast_general';
+    const priorCrowns = events.filter(e => e.type === 'race.crowned' && (!sc.raceId || e.data?.raceId === sc.raceId));
+    const latestCrown = priorCrowns.at(-1) || null;
+    const beforeStats = providerDomainStats(this.getLearning(), domain, cleanWinner);
+    const eloBefore = beforeStats?.elo ?? 1500;
+    if (latestCrown?.data?.winnerId === cleanWinner) {
+      return {
+        ok: true,
+        alreadyCrowned: true,
+        raceId: sc.raceId || null,
+        winnerId: cleanWinner,
+        previousWinnerId: sc.winnerId || null,
+        domain,
+        eloBefore,
+        eloAfter: eloBefore,
+        delta: 0,
+        tier: eloRankTier(eloBefore),
+        source: 'owner',
+      };
+    }
+    const isEphemeral = this.getPrivacy().settings?.ephemeralSession === true;
+    const alreadyScoredElo = priorCrowns.length > 0;
+    const opponents = contenderIds.filter(pid => pid !== cleanWinner);
+    if (!isEphemeral && !alreadyScoredElo) {
+      if (opponents.length) {
+        for (const opponentId of opponents) {
+          this.store.recordDomainOutcome({ domain, providerId: cleanWinner, opponentId, outcome: 'race_win', margin: 4 });
+        }
+      } else {
+        this.store.recordDomainOutcome({ domain, providerId: cleanWinner, outcome: 'prefer' });
+      }
+    }
+    const afterStats = providerDomainStats(this.getLearning(), domain, cleanWinner);
+    const eloAfter = afterStats?.elo ?? eloBefore;
+    const delta = eloAfter - eloBefore;
+    const tier = eloRankTier(eloAfter);
+    const payload = {
+      raceId: sc.raceId || null,
+      winnerId: cleanWinner,
+      previousWinnerId: sc.winnerId || null,
+      domain,
+      eloBefore,
+      eloAfter,
+      delta,
+      tier,
+      source: 'owner',
+    };
+    this.store.appendEvent(id, 'race.crowned', payload);
+    this._emitStream(id, { type: 'race.crowned', ...payload });
+    return { ok: true, ...payload };
+  }
   getConclaveFormations() {
     const savedRaw = this.store.getLocalState('conclave_formations', []);
     const saved = Array.isArray(savedRaw) ? savedRaw : [];
@@ -4240,6 +4405,7 @@ export class Runtime {
           tasksPurged += 1;
         } catch {}
       }
+      this.store.shredAndCompact();
     }
     return {
       burned: true,
@@ -4794,6 +4960,8 @@ export class Runtime {
     const lock = new Promise(resolve => { release = resolve; });
     this.broker.locks.set(id, lock);
     try {
+      this._abortTaskSidecars(id);
+      await Promise.all([...new Set(this.providers.values())].map(p => p?.dropTaskSession?.(id).catch(() => {})));
       const rewind = await gitRewind(task.workspace, hasHash ? { hash: opts.hash.trim() } : (opts.steps === undefined ? 1 : opts.steps));
       const snapshot = await taskSnapshot(task.workspace);
       const updated = this.store.updateTask(id, current => {
@@ -4834,6 +5002,9 @@ export class Runtime {
 
     // Parallel sidecar interjection: runs concurrently in the same thread without interrupting the main agent!
     if (mode === 'parallel' && (isRunning || this.crew.busy(id))) {
+      if (task.status === 'cancelled' || (isRunning && terminal.has(task.status))) {
+        throw fault('TASK_TERMINAL', 'This task cannot receive parallel instructions.');
+      }
       const sidecar = await this.runParallelSidecar(id, message, validAttachments);
       return { task: this.getTask(id), queued: false, parallel: true, workerId: sidecar.workerId };
     }
@@ -4994,7 +5165,18 @@ export class Runtime {
     const followup = { id: messageId || randomUUID(), message, createdAt: new Date().toISOString(), contractVersion: (task.contractVersion || 1) + 1 };
     const followups = [...(task.followups || []), followup];
     checkMessageLimit(followups);
-    const proposed = { ...withFollowups(task, followups), attachments: validAttachments, epoch: task.epoch + 1, status: 'queued' };
+    const pendingRoute = this._resolvePendingProviders(task);
+    const baseTask = pendingRoute
+      ? {
+          ...task,
+          providers: pendingRoute,
+          providerId: pendingRoute[0],
+          providerIndex: 0,
+          routing: { primaryId: pendingRoute[0], cooldowns: {}, primaryReturnUsed: false, contributions: {} },
+          pendingProviders: null,
+        }
+      : task;
+    const proposed = { ...withFollowups(baseTask, followups), pendingProviders: null, attachments: validAttachments, epoch: task.epoch + 1, status: 'queued' };
     const snapshot = await taskSnapshot(task.workspace);
     if (this.closed) throw fault('RUNTIME_CLOSED', 'Runtime is closed.');
     // Reject a contract that cannot fit before persisting or dispatching it.
@@ -5017,17 +5199,30 @@ export class Runtime {
     if (this.closed) throw fault('RUNTIME_CLOSED', 'Runtime is closed.');
     this.crew.assertIdle(id);
     const task = this.getTask(id);
-    if (active.has(task.status)) throw fault('TASK_ACTIVE', 'Pause the task before changing its providers.');
-    if (this.runs.has(id) || this.broker.locks.has(id)) throw fault('RUN_DRAINING', 'Workspace work is still settling; retry provider selection shortly.');
+    if (this.broker.locks.has(id)) throw fault('RUN_DRAINING', 'Workspace work is still settling; retry provider selection shortly.');
+    const isActive = active.has(task.status) || this.runs.has(id);
     const answered = task.workspaceKind === 'conversation' && task.status === 'completed' && task.completionKind === 'answered';
-    if (!answered && !['queued', 'paused', 'blocked', 'waiting_input', 'paused_budget', 'failed'].includes(task.status)) throw fault('TASK_TERMINAL', 'Providers can only change on an unfinished, idle task or an answered conversation.');
+    if (!isActive && !answered && !['queued', 'paused', 'blocked', 'waiting_input', 'paused_budget', 'failed'].includes(task.status)) throw fault('TASK_TERMINAL', 'Providers can only change on an unfinished, idle task or an answered conversation.');
     this.validateCatalogRoute(providerIds, task.workspaceKind);
     if (!Array.isArray(providerIds) || providerIds.length < 1 || providerIds.length > 10 || providerIds.some(providerId => typeof providerId !== 'string' || !this.selectedProvider(providerId, task.workspaceKind))) throw fault('INVALID_PROVIDER', 'Select 1–10 configured provider IDs.');
     if (task.workspaceKind === 'conversation' && providerIds.some(providerId => { const provider = this.selectedProvider(providerId, task.workspaceKind); return !provider.kind || provider.kind === 'scripted' || provider.available === false; })) throw fault('LIVE_PROVIDER_REQUIRED', 'Conversations require configured live models.');
-    for (const id of providerIds) parametersFor(this.selectedProvider(id, task.workspaceKind), task.generation);
+    for (const pid of providerIds) parametersFor(this.selectedProvider(pid, task.workspaceKind), task.generation);
     const selected = [...new Set(providerIds)];
+    if (isActive) {
+      const sameAsCurrent = selected[0] === task.providerId
+        && Array.isArray(task.providers)
+        && selected.length === task.providers.length
+        && selected.every((pid, idx) => pid === task.providers[idx]);
+      return this.store.updateTask(id, current => {
+        current.pendingProviders = sameAsCurrent ? null : selected;
+        return current;
+      }, 'providers.queued', sameAsCurrent
+        ? { from: task.providers, to: null, providerId: task.providerId, cleared: true, source: 'owner' }
+        : { from: task.providers, to: selected, providerId: selected[0], source: 'owner' });
+    }
     return this.store.updateTask(id, current => {
       current.providers = selected; current.providerId = selected[0]; current.providerIndex = 0;
+      current.pendingProviders = null;
       current.routing = { primaryId: selected[0], cooldowns: {}, primaryReturnUsed: false, contributions: {} };
       current.epoch += 1; current.blocker = null;
       current.status = answered ? 'completed' : current.status === 'queued' ? 'queued' : 'paused';
@@ -5118,8 +5313,8 @@ export class Runtime {
       }
       try {
         const decision = routeUltraPlinian({
-          prompt: job.prompt,
-          providers: filtered,
+          objective: job.prompt,
+          candidates: liveFiltered,
           learning: this.getLearning(),
           settings: this.getRouterSettings(),
           privacy,

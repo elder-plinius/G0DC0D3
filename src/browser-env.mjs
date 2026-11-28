@@ -451,6 +451,8 @@ class CdpSession {
       });
     });
 
+    this.debugPort = debugPort;
+
     // Discover page target WebSocket on loopback DevTools server
     const targetsRes = await fetch(`http://127.0.0.1:${debugPort}/json/list`, { signal: AbortSignal.timeout(5000) });
     if (!targetsRes.ok) throw fault('BROWSER_LAUNCH_FAILED', `DevTools target list returned HTTP ${targetsRes.status}.`);
@@ -632,9 +634,14 @@ class CdpSession {
     if (/^https?:/i.test(reqUrl)) {
       try {
         await assertBrowserUrlDnsAllowed(reqUrl, this.activeOutboundOpts);
-        const reqIsLoopback = isLoopbackHost(new URL(reqUrl).hostname);
+        const parsedReq = new URL(reqUrl);
+        const reqIsLoopback = isLoopbackHost(parsedReq.hostname);
         if (reqIsLoopback) {
-          if (isMainFrameDoc) {
+          const reqPort = Number(parsedReq.port || (parsedReq.protocol === 'https:' ? 443 : 80));
+          if (this.debugPort && reqPort === this.debugPort) {
+            allowed = false;
+            blockedErr = fault('SSRF_BLOCKED', 'Blocked browser request targeting Chromium DevTools debug port.');
+          } else if (isMainFrameDoc) {
             const allowLoopbackNav = this.explicitLoopbackNavPending || this.topLevelIsLoopback;
             if (!allowLoopbackNav) {
               allowed = false;
@@ -691,8 +698,15 @@ class CdpSession {
         this.pending.delete(id);
         reject(fault('BROWSER_TIMEOUT', `Browser command ${method} timed out after ${timeoutMs}ms.`));
       }, timeoutMs);
+      timer.unref?.();
       this.pending.set(id, { resolve, reject, timer });
-      this.ws.send(JSON.stringify({ id, method, params }));
+      try {
+        this.ws.send(JSON.stringify({ id, method, params }));
+      } catch (err) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(fault('BROWSER_CLOSED', err?.message || 'Contained browser socket write failed.'));
+      }
     });
   }
 
@@ -703,11 +717,13 @@ class CdpSession {
 
   async waitForLoad(timeoutMs = 15000) {
     const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
+    while (Date.now() < deadline && !this.closed && !this.disconnected) {
       try {
         const r = await this.send('Runtime.evaluate', { expression: 'document.readyState', returnByValue: true }, 3000);
         if (r?.result?.value === 'complete' || r?.result?.value === 'interactive') return;
-      } catch {}
+      } catch (err) {
+        if (this.closed || this.disconnected || err?.code === 'BROWSER_CLOSED') return;
+      }
       await this.wait(100);
     }
   }
@@ -1066,10 +1082,16 @@ class CdpSession {
 
   async close({ preserveProfile = false } = {}) {
     if (this.cleanupPromise) return this.cleanupPromise;
-    await this.stopScreencast().catch(() => {});
+    const stopP = this.stopScreencast().catch(() => {});
     this.closed = true;
     this.disconnected = true;
+    for (const [, entry] of this.pending) {
+      clearTimeout(entry.timer);
+      try { entry.reject(fault('BROWSER_CLOSED', 'Contained browser session closed.')); } catch {}
+    }
+    this.pending.clear();
     this.cleanupPromise = (async () => {
+      await Promise.race([stopP, new Promise(r => setTimeout(r, 800))]);
       try { this.ws?.close(); } catch {}
       this.ws = null;
       const proc = this.proc;
@@ -1124,7 +1146,7 @@ export class BrowserPool {
   _serialize(taskId, fn) {
     const prev = this.transitions.get(taskId) || Promise.resolve();
     const next = prev.catch(() => {}).then(fn);
-    const wrapped = next.finally(() => {
+    const wrapped = next.then(() => {}, () => {}).finally(() => {
       if (this.transitions.get(taskId) === wrapped) this.transitions.delete(taskId);
     });
     this.transitions.set(taskId, wrapped);
@@ -1150,6 +1172,7 @@ export class BrowserPool {
   _reapIdle() {
     const now = Date.now();
     for (const [taskId, session] of this.sessions) {
+      if (this.takeoverGates.get(taskId)?.active) continue;
       if (now - session.lastUsedAt > IDLE_TTL_MS) {
         this.closeSession(taskId).catch(() => {});
       }
@@ -1280,8 +1303,12 @@ export class BrowserPool {
     if (want) {
       if (!existing?.active) {
         let resolve;
-        const promise = new Promise(r => { resolve = r; });
-        this.takeoverGates.set(taskId, { active: true, promise, resolve });
+        let reject;
+        const promise = new Promise((r, j) => { resolve = r; reject = j; });
+        promise.catch(() => {});
+        this.takeoverGates.set(taskId, { active: true, promise, resolve, reject });
+        const sess = this.sessions.get(taskId);
+        if (sess) sess.touch();
       }
     } else if (existing) {
       existing.active = false;
@@ -1403,12 +1430,18 @@ export class BrowserPool {
     const desktop = desktopEval?.result?.value || {};
     const shot = await session.captureScreenshot().catch(() => null);
 
-    // Responsive check at mobile 390x844
-    await session.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true }).catch(() => {});
-    await new Promise(r => setTimeout(r, 150));
-    const mobileEval = await session.send('Runtime.evaluate', { expression: probeExpr, returnByValue: true }, 4000);
-    const mobile = mobileEval?.result?.value || {};
-    await session.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false }).catch(() => {});
+    // Responsive check at mobile 390x844 (always restore viewport in finally)
+    let mobile = {};
+    try {
+      await session.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true }).catch(() => {});
+      await new Promise(r => setTimeout(r, 150));
+      const mobileEval = await session.send('Runtime.evaluate', { expression: probeExpr, returnByValue: true }, 4000);
+      mobile = mobileEval?.result?.value || {};
+    } finally {
+      const vpW = session.viewport?.width || 1280;
+      const vpH = session.viewport?.height || 800;
+      await session.send('Emulation.setDeviceMetricsOverride', { width: vpW, height: vpH, deviceScaleFactor: 1, mobile: false }).catch(() => {});
+    }
 
     const consoleErrors = (session.consoleLogs || []).filter(l => l.level === 'error' || l.level === 'network');
     const checks = [
@@ -1547,16 +1580,17 @@ export class BrowserPool {
 
   async snapshot(taskId, args, { signal = null } = {}) {
     await this._waitIfTakeover(taskId, signal);
-    await this._waitTransition(taskId);
-    const session = this.sessions.get(taskId);
-    if (!this._isLive(session)) throw fault('BROWSER_NOT_OPEN', 'No contained browser session is open for this task. Call browser.open first.');
-    session.touch();
-    const snap = await session.snapshot(args);
-    return {
-      ok: true,
-      ...snap,
-      ...(session.screenshotSeq ? { screenshotUrl: `/api/tasks/${encodeURIComponent(taskId)}/browser/screenshot?v=${session.screenshotSeq}` } : {}),
-    };
+    return this._serialize(taskId, async () => {
+      const session = this.sessions.get(taskId);
+      if (!this._isLive(session)) throw fault('BROWSER_NOT_OPEN', 'No contained browser session is open for this task. Call browser.open first.');
+      session.touch();
+      const snap = await session.snapshot(args);
+      return {
+        ok: true,
+        ...snap,
+        ...(session.screenshotSeq ? { screenshotUrl: `/api/tasks/${encodeURIComponent(taskId)}/browser/screenshot?v=${session.screenshotSeq}` } : {}),
+      };
+    });
   }
 
   async act(taskId, args, outboundOpts, { signal = null } = {}) {
@@ -1569,19 +1603,20 @@ export class BrowserPool {
 
   async screenshot(taskId, args, { signal = null } = {}) {
     await this._waitIfTakeover(taskId, signal);
-    await this._waitTransition(taskId);
-    const session = this.sessions.get(taskId);
-    if (!this._isLive(session)) throw fault('BROWSER_NOT_OPEN', 'No contained browser session is open for this task. Call browser.open first.');
-    session.touch();
-    const shot = await session.captureScreenshot(args);
-    return {
-      ok: true,
-      url: session.lastUrl,
-      title: session.lastTitle,
-      viewport: session.viewport,
-      screenshotUrl: shot.screenshotUrl,
-      bytes: shot.bytes,
-    };
+    return this._serialize(taskId, async () => {
+      const session = this.sessions.get(taskId);
+      if (!this._isLive(session)) throw fault('BROWSER_NOT_OPEN', 'No contained browser session is open for this task. Call browser.open first.');
+      session.touch();
+      const shot = await session.captureScreenshot(args);
+      return {
+        ok: true,
+        url: session.lastUrl,
+        title: session.lastTitle,
+        viewport: session.viewport,
+        screenshotUrl: shot.screenshotUrl,
+        bytes: shot.bytes,
+      };
+    });
   }
 
   async evaluate(taskId, args, { signal = null } = {}) {
@@ -1598,7 +1633,7 @@ export class BrowserPool {
       if (gate) {
         gate.active = false;
         this.takeoverGates.delete(taskId);
-        try { gate.resolve?.(); } catch {}
+        try { (gate.reject || gate.resolve)?.(fault('BROWSER_CLOSED', 'Contained browser session closed during Human Takeover.')); } catch {}
       }
       if (resetPreferences) {
         this.sessionVisibleOverrides.delete(taskId);
